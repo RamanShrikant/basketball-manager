@@ -1262,6 +1262,18 @@ function getPlayerIdentity(player = {}) {
   return `name:${normalizeTeamName(playerNameOf(player))}`;
 }
 
+function isProtectedMegaBuyerVeteranPartnerForExecution(player = {}) {
+  const age = finiteNumber(player?.age ?? player?.playerAge, 27);
+  const ovr = finiteNumber(player?.overall ?? player?.ovr ?? player?.rating, 0);
+  return age >= 34 && ovr >= 84;
+}
+
+function findProtectedMegaBuyerVeteranPartner(items = []) {
+  return (Array.isArray(items) ? items : []).find(
+    (item) => item?.type === "player" && item.player && isProtectedMegaBuyerVeteranPartnerForExecution(item.player)
+  ) || null;
+}
+
 function sameTradePlayer(a = {}, b = {}) {
   const aid = getPlayerIdentity(a);
   const bid = getPlayerIdentity(b);
@@ -1863,7 +1875,7 @@ function validateRosterLimitsForTrade({ leagueData, userTeam, cpuTeam, userItems
   };
 }
 
-function validateTradeForExecution({ leagueData, userTeam, cpuTeam, userItems, cpuItems, evaluation, userDrivenRules = false, inOffseason = null }) {
+function validateTradeForExecution({ leagueData, userTeam, cpuTeam, userItems, cpuItems, evaluation, userDrivenRules = false, cpuSettingsRules = false, currentDate = "", inOffseason = null }) {
   if (!hasAcceptedEvaluation(evaluation)) {
     return { ok: false, reason: "CPU must accept the proposal before it can be submitted." };
   }
@@ -1913,7 +1925,19 @@ function validateTradeForExecution({ leagueData, userTeam, cpuTeam, userItems, c
     if (!userRuleValidation.ok) return userRuleValidation;
   }
 
-  if (!userDrivenRules) {
+  if (!userDrivenRules && cpuSettingsRules) {
+    const cpuRuleValidation = validateCpuTradeFullSettingsGate({
+      leagueData,
+      userTeam,
+      cpuTeam,
+      userItems,
+      cpuItems,
+      currentDate,
+    });
+    if (!cpuRuleValidation.ok) return cpuRuleValidation;
+  }
+
+  if (!userDrivenRules && !cpuSettingsRules) {
   const userFinancial = evaluateTradeFinancialLegality({
     team: userTeam,
     leagueData,
@@ -2177,10 +2201,10 @@ function reasonFromTeamView(teamName = "", view = {}, fallback = "") {
   return `${teamName} accepted because ${reason.charAt(0).toLowerCase()}${reason.slice(1)}`;
 }
 
-function executeAcceptedTradeOnLeague({ leagueData, userTeamName, cpuTeamName, userItems, cpuItems, evaluation, userDrivenRules = false, inOffseason = null }) {
+function executeAcceptedTradeOnLeague({ leagueData, userTeamName, cpuTeamName, userItems, cpuItems, evaluation, userDrivenRules = false, cpuSettingsRules = false, currentDate = "", inOffseason = null }) {
   const userTeam = findTeamInLeague(leagueData, userTeamName);
   const cpuTeam = findTeamInLeague(leagueData, cpuTeamName);
-  const validation = validateTradeForExecution({ leagueData, userTeam, cpuTeam, userItems, cpuItems, evaluation, userDrivenRules, inOffseason });
+  const validation = validateTradeForExecution({ leagueData, userTeam, cpuTeam, userItems, cpuItems, evaluation, userDrivenRules, cpuSettingsRules, currentDate, inOffseason });
   if (!validation.ok) return validation;
 
   const nextLeague = cloneLeagueForTrade(leagueData);
@@ -2395,6 +2419,154 @@ const CPU_STEPIEN_ONLY_SETTINGS = {
   newlyDraftedRookie: false,
   recentlyExtended: false,
 };
+
+const CPU_PLAYER_RESTRICTION_RULE_KEYS = [
+  "recentlyAcquired",
+  "recentlySigned",
+  "newlyDraftedRookie",
+  "recentlyExtended",
+];
+
+function cpuRuleSettingsWithoutDeadline(settings = {}) {
+  return {
+    ...settings,
+    tradeDeadline: false,
+  };
+}
+
+function cpuPlayerRestrictionOnlySettings(settings = {}) {
+  return {
+    tradeDeadline: false,
+    salaryMatching: false,
+    firstApron: false,
+    secondApron: false,
+    hardCapApronCeiling: false,
+    stepienRule: false,
+    recentlyAcquired: settings.recentlyAcquired !== false,
+    recentlySigned: settings.recentlySigned !== false,
+    newlyDraftedRookie: settings.newlyDraftedRookie !== false,
+    recentlyExtended: settings.recentlyExtended !== false,
+  };
+}
+
+function leagueDataWithCpuTradeDate(leagueData = {}, currentDate = "") {
+  if (!currentDate) return leagueData;
+  return {
+    ...(leagueData || {}),
+    __userTradeRules: {
+      ...((leagueData || {}).__userTradeRules || {}),
+      currentDate,
+    },
+  };
+}
+
+function cpuTradeRuleStaleCode(code = "cpu_trade_rule") {
+  const normalized = String(code || "cpu_trade_rule").toLowerCase();
+  if (normalized.includes("salary") || normalized.includes("apron") || normalized.includes("hard_cap")) return `cpu_financial_${normalized}`;
+  if (normalized.includes("stepien")) return "cpu_stepien_rule";
+  if (normalized.includes("recently_acquired")) return "cpu_recently_acquired";
+  if (normalized.includes("recently_signed")) return "cpu_recently_signed";
+  if (normalized.includes("newly_drafted")) return "cpu_newly_drafted_rookie";
+  if (normalized.includes("recently_extended")) return "cpu_recently_extended";
+  return `cpu_trade_rule_${normalized}`;
+}
+
+function hasCpuPlayerRestrictionToggles(settings = {}) {
+  return CPU_PLAYER_RESTRICTION_RULE_KEYS.some((key) => settings?.[key] !== false);
+}
+
+function playerOnlyTradeItems(items = []) {
+  return (Array.isArray(items) ? items : []).filter((item) => item?.type === "player" && item.player);
+}
+
+function validateCpuTradePlayerRestrictionGate({
+  leagueData,
+  fromTeamName = "",
+  toTeamName = "",
+  fromItems = [],
+  toItems = [],
+  currentDate = "",
+  tradeContext = null,
+} = {}) {
+  const active = getUserTradeRuleSettings(leagueData);
+  if (!hasCpuPlayerRestrictionToggles(active)) return { ok: true };
+
+  const settings = cpuPlayerRestrictionOnlySettings(active);
+  const datedLeagueData = leagueDataWithCpuTradeDate(leagueData, currentDate);
+  const fromPlayers = playerOnlyTradeItems(fromItems);
+  const toPlayers = playerOnlyTradeItems(toItems);
+
+  if (fromPlayers.length) {
+    const fromValidation = validateUserTradeAssetPackage({
+      leagueData: datedLeagueData,
+      teamName: fromTeamName,
+      outgoingItems: fromPlayers,
+      incomingItems: [],
+      settings,
+      context: tradeContext,
+    });
+    if (!fromValidation.ok) {
+      return {
+        ...fromValidation,
+        staleCode: cpuTradeRuleStaleCode(fromValidation.code || "player_restriction"),
+      };
+    }
+  }
+
+  if (toPlayers.length) {
+    const toValidation = validateUserTradeAssetPackage({
+      leagueData: datedLeagueData,
+      teamName: toTeamName,
+      outgoingItems: toPlayers,
+      incomingItems: [],
+      settings,
+      context: tradeContext,
+    });
+    if (!toValidation.ok) {
+      return {
+        ...toValidation,
+        staleCode: cpuTradeRuleStaleCode(toValidation.code || "player_restriction"),
+      };
+    }
+  }
+
+  return { ok: true };
+}
+
+function validateCpuTradeFullSettingsGate({
+  leagueData,
+  userTeam,
+  cpuTeam,
+  userItems = [],
+  cpuItems = [],
+  currentDate = "",
+  context = null,
+} = {}) {
+  const active = cpuRuleSettingsWithoutDeadline(getUserTradeRuleSettings(leagueData));
+  const datedLeagueData = leagueDataWithCpuTradeDate(leagueData, currentDate);
+  const tradeContext = context || getOffseasonTradeContext(datedLeagueData);
+  const result = validateUserTradeRules({
+    leagueData: datedLeagueData,
+    userTeam,
+    cpuTeam,
+    userTeamName: userTeam?.name || userTeam?.teamName || "",
+    cpuTeamName: cpuTeam?.name || cpuTeam?.teamName || "",
+    userItems,
+    cpuItems,
+    includeDeadline: false,
+    includeFinancial: true,
+    settings: active,
+    context: tradeContext,
+  });
+  if (!result.ok) {
+    return {
+      ...result,
+      staleCode: cpuTradeRuleStaleCode(result.code || "settings_rule"),
+      reason: result.reason || result.message || "CPU trade violates an enabled trade setting.",
+    };
+  }
+  return result;
+}
 
 function cpuPickKey(item = {}) {
   const pick = item?.pick || item || {};
@@ -2875,6 +3047,7 @@ export function validateCpuTradeCandidateOnLeague({
   tradeDeadlineDate = "",
   inOffseason = false,
   recordsByTeam = null,
+  settingsValidationPhase = "admission",
 } = {}) {
   const timingValidation = cpuTradeTimingValidation({ currentDate, tradeDeadlineDate, inOffseason });
   if (!timingValidation.ok) return timingValidation;
@@ -2920,7 +3093,25 @@ export function validateCpuTradeCandidateOnLeague({
   // sim crawl as soon as the CPU trade market opened.
   const fromItems = resolvedFrom.items;
   const toItems = resolvedTo.items;
-  const fromCooldownBlock = findRecentCpuAcquisitionBlock({
+  const activeCpuTradeSettings = getUserTradeRuleSettings(evaluationLeagueData);
+  const cpuTradeRuleContext = getOffseasonTradeContext(evaluationLeagueData);
+  const playerRestrictionValidation = validateCpuTradePlayerRestrictionGate({
+    leagueData: evaluationLeagueData,
+    fromTeamName,
+    toTeamName,
+    fromItems,
+    toItems,
+    currentDate,
+    tradeContext: cpuTradeRuleContext,
+  });
+  if (!playerRestrictionValidation.ok) {
+    return {
+      ...playerRestrictionValidation,
+      staleCode: playerRestrictionValidation.staleCode || cpuTradeRuleStaleCode(playerRestrictionValidation.code || "player_restriction"),
+    };
+  }
+
+  const fromCooldownBlock = activeCpuTradeSettings.recentlyAcquired === false ? null : findRecentCpuAcquisitionBlock({
     leagueData: evaluationLeagueData,
     teamName: fromTeamName,
     outgoingItems: fromItems,
@@ -2935,7 +3126,7 @@ export function validateCpuTradeCandidateOnLeague({
     };
   }
 
-  const toCooldownBlock = findRecentCpuAcquisitionBlock({
+  const toCooldownBlock = activeCpuTradeSettings.recentlyAcquired === false ? null : findRecentCpuAcquisitionBlock({
     leagueData: evaluationLeagueData,
     teamName: toTeamName,
     outgoingItems: toItems,
@@ -3046,6 +3237,8 @@ export function validateCpuTradeCandidateOnLeague({
     userItems: fromItems,
     cpuItems: toItems,
     evaluation: combinedEvaluation,
+    cpuSettingsRules: settingsValidationPhase === "execution",
+    currentDate,
     inOffseason,
   });
 
@@ -3125,6 +3318,15 @@ export function executeCpuMegaTradeCandidateOnLeagueLoose({
 
   let fromItems = resolvedFrom.items;
   let toItems = resolvedTo.items;
+  const protectedBuyerPartner = findProtectedMegaBuyerVeteranPartner(toItems);
+  if (protectedBuyerPartner) {
+    const playerName = playerNameOf(protectedBuyerPartner.player) || "another aging star";
+    return {
+      ok: false,
+      reason: `Mega trade buyer blocked: ${toTeamName} should not trade ${playerName} away as the headline salary in a 90+ star swing.`,
+      staleCode: "mega_buyer_veteran_partner_protected",
+    };
+  }
   const stepienRepair = repairCpuTradeStepienPackages({ leagueData: evaluationLeagueData, fromTeamName, toTeamName, fromItems, toItems });
   if (!stepienRepair.ok) {
     return {
@@ -3190,6 +3392,8 @@ export function executeCpuMegaTradeCandidateOnLeagueLoose({
     userItems: fromItems,
     cpuItems: toItems,
     evaluation,
+    cpuSettingsRules: true,
+    currentDate,
     inOffseason,
   });
   if (!executionValidation.ok) {
@@ -3208,6 +3412,8 @@ export function executeCpuMegaTradeCandidateOnLeagueLoose({
     userItems: fromItems,
     cpuItems: toItems,
     evaluation,
+    cpuSettingsRules: true,
+    currentDate,
     inOffseason,
   });
   if (!execution.ok) {
@@ -3283,6 +3489,7 @@ export function executeCpuTradeCandidateOnLeague({
     tradeDeadlineDate,
     inOffseason,
     recordsByTeam,
+    settingsValidationPhase: "execution",
   });
 
   if (!validation.ok) return validation;
@@ -3302,6 +3509,8 @@ export function executeCpuTradeCandidateOnLeague({
     userItems: fromItems,
     cpuItems: toItems,
     evaluation: validation.evaluation,
+    cpuSettingsRules: true,
+    currentDate,
     inOffseason,
   });
 

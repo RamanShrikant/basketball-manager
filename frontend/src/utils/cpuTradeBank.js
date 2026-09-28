@@ -28,9 +28,10 @@ import {
   recordCpuTradeTrace,
   recordCpuTradeValidation,
 } from "./cpuTradeTelemetry.js";
+import { getUserTradeRuleSettings } from "./userTradeRules.js";
 
 export const CPU_TRADE_BANK_FIELD = "cpuTradeBankState";
-export const CPU_TRADE_BANK_VERSION = 12;
+export const CPU_TRADE_BANK_VERSION = 13;
 export const CPU_TRADE_BANK_TEST_CONFIG_KEY = "bm_cpu_trade_bank_test_config_v1";
 
 const TARGET_MIN = CPU_TRADE_CONTINUOUS_MIN_TARGET;
@@ -41,6 +42,17 @@ const FIRST_EXECUTION_DAY = 1;
 const MAX_GENERATION_CANDIDATES_PER_PASS = 120;
 const MAX_EXACT_EVALUATIONS_PER_PASS = 72;
 const MAX_SAME_STATE_VALIDATION_CACHE = 512;
+const CPU_TRADE_SETTINGS_FINGERPRINT_KEYS = [
+  "salaryMatching",
+  "firstApron",
+  "secondApron",
+  "hardCapApronCeiling",
+  "stepienRule",
+  "recentlyAcquired",
+  "recentlySigned",
+  "newlyDraftedRookie",
+  "recentlyExtended",
+];
 const MEGA_TRADE_FIRST_DAY = 45;
 // The bonus mega trade is planned quietly during the season and executed with
 // timing variance before the deadline.  It must never become a deadline-day
@@ -327,6 +339,13 @@ function leagueTeamFingerprint(leagueData = {}) {
     .join("|");
 }
 
+function cpuTradeSettingsFingerprint(leagueData = {}) {
+  const settings = getUserTradeRuleSettings(leagueData);
+  return CPU_TRADE_SETTINGS_FINGERPRINT_KEYS
+    .map((key) => `${key}:${settings?.[key] === false ? "0" : "1"}`)
+    .join("|");
+}
+
 function makeStats(existing = {}) {
   return {
     generationPasses: finiteNumber(existing.generationPasses, 0),
@@ -604,6 +623,7 @@ function createBankState(leagueData, context, testConfig = {}) {
     seed,
     testSeed: testConfig?.seed ? String(testConfig.seed) : "",
     leagueTeamFingerprint: leagueTeamFingerprint(leagueData),
+    settingsFingerprint: cpuTradeSettingsFingerprint(leagueData),
     baseTargetTrades,
     targetTrades,
     minimumTrades,
@@ -630,6 +650,7 @@ function createBankState(leagueData, context, testConfig = {}) {
 function normalizeBankState(existing, leagueData, context, testConfig = {}) {
   const seasonYear = getSeasonYear(leagueData, context);
   const fingerprint = leagueTeamFingerprint(leagueData);
+  const settingsFingerprint = cpuTradeSettingsFingerprint(leagueData);
   const requestedTestSeed = testConfig?.seed ? String(testConfig.seed) : "";
   const shouldReset =
     !existing ||
@@ -637,6 +658,7 @@ function normalizeBankState(existing, leagueData, context, testConfig = {}) {
     Number(existing.version) !== CPU_TRADE_BANK_VERSION ||
     Number(existing.seasonYear) !== seasonYear ||
     String(existing?.testSeed || "") !== requestedTestSeed ||
+    String(existing?.settingsFingerprint || "") !== settingsFingerprint ||
     (existing.leagueTeamFingerprint && existing.leagueTeamFingerprint !== fingerprint);
 
   if (shouldReset) {
@@ -649,7 +671,9 @@ function normalizeBankState(existing, leagueData, context, testConfig = {}) {
           ? "new_season"
           : String(existing?.testSeed || "") !== requestedTestSeed
             ? "test_seed_changed"
-            : "schema_or_league_changed",
+            : String(existing?.settingsFingerprint || "") !== settingsFingerprint
+              ? "trade_settings_changed"
+              : "schema_or_league_changed",
     };
   }
 
@@ -664,6 +688,7 @@ function normalizeBankState(existing, leagueData, context, testConfig = {}) {
     typeof existing.stats !== "object" ||
     !Number.isFinite(Number(existing.baseTargetTrades)) ||
     existing.leagueTeamFingerprint !== fingerprint ||
+    existing.settingsFingerprint !== settingsFingerprint ||
     Number(existing.completedTrades) !== completedTrades;
   const state = {
     ...existing,
@@ -675,6 +700,7 @@ function normalizeBankState(existing, leagueData, context, testConfig = {}) {
       : [],
     stats: makeStats(existing.stats),
     leagueTeamFingerprint: fingerprint,
+    settingsFingerprint,
     completedTrades,
   };
 
@@ -1626,6 +1652,15 @@ function isProtectedBuyerCore(player = {}, buyerTeam = {}) {
   return false;
 }
 
+function isProtectedMegaBuyerVeteranPartner(player = {}) {
+  const age = playerAge(player);
+  const ovr = playerOvr(player);
+  // Tiny mega-trade-only direction guard: a contender buying a 90+ aging star
+  // should not use another aging star as the salary headline. That keeps rare
+  // mega swings aimed at pairing stars instead of swapping old stars.
+  return age >= 34 && ovr >= 84;
+}
+
 function activeFirstPicksForTeam(leagueData = {}, teamName = "", limit = 4) {
   const seasonYear = getSeasonYear(leagueData, {});
   const teamNames = getAllTeams(leagueData).map((team) => teamNameOf(team)).filter(Boolean);
@@ -1727,7 +1762,7 @@ function buildFastMegaBuyers(leagueData = {}, context = {}, sellerName = "", dir
 function buildBuyerSalaryCombos(leagueData = {}, buyerTeam = {}, targetSalary = 0) {
   const teamName = teamNameOf(buyerTeam);
   const candidates = (buyerTeam?.players || [])
-    .filter((player) => !isProtectedBuyerCore(player, buyerTeam))
+    .filter((player) => !isProtectedBuyerCore(player, buyerTeam) && !isProtectedMegaBuyerVeteranPartner(player))
     .map((player) => ({
       player,
       salary: getMegaPlayerSalary(player, leagueData),
@@ -1835,6 +1870,7 @@ function buildFastMegaCandidates(leagueData = {}, context = {}, state = {}, opti
           debug: {
             megaTrade: true,
             fastMegaDeadlineRecipe: true,
+            protectedBuyerVeteranPartnerGuard: true,
             targetPlayer: playerDisplayName(targetRow.player),
             targetOvr,
             targetAge: playerAge(targetRow.player),
@@ -3342,6 +3378,7 @@ export function buildCpuTradeBankSummary(leagueData = {}) {
     active: true,
     version: state.version,
     seasonYear: state.seasonYear,
+    settingsFingerprint: state.settingsFingerprint || "",
     targetTrades: state.targetTrades,
     minimumTrades: getCpuTradeMinimumTarget(state),
     maximumGenerationPasses: finiteNumber(state.maximumGenerationPasses, 0),
