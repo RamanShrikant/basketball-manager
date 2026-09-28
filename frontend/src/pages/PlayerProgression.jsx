@@ -3432,11 +3432,9 @@ export default function PlayerProgression() {
             </div>
 
             <div className="flex shrink-0 items-center gap-5 pb-3">
-              <div className="grid grid-cols-4 gap-2 text-center text-xs">
+              <div className="grid grid-cols-2 gap-2 text-center text-xs">
                 {[
                   ["OVR", featured.overall, deltaFor(featured, "overall")],
-                  ["OFF", featured.offRating, deltaFor(featured, "offRating")],
-                  ["DEF", featured.defRating, deltaFor(featured, "defRating")],
                   ["POT", featured.potential, deltaFor(featured, "potential")],
                 ].map(([label, value, delta]) => (
                   <div key={label} className="min-w-[62px] rounded-lg border border-white/10 bg-black/30 px-2 py-1.5">
@@ -3450,7 +3448,7 @@ export default function PlayerProgression() {
         )}
 
         <div className={`${styles.tablePanel} bmTableScroller min-h-0 flex-1 overflow-auto rounded-xl border border-neutral-700 bg-neutral-950`}>
-          <div className="min-w-[1300px]">
+          <div className="min-w-[1140px]">
             <table className="w-full border-collapse text-center">
               <thead className="sticky top-0 z-20 bg-neutral-800 text-xs font-black uppercase tracking-wide text-gray-300">
                 <tr>
@@ -3460,8 +3458,6 @@ export default function PlayerProgression() {
                     { key: "pos", label: "Pos" },
                     { key: "age", label: "Age" },
                     { key: "overall", label: "OVR" },
-                    { key: "offRating", label: "OFF" },
-                    { key: "defRating", label: "DEF" },
                     { key: "stamina", label: "STAM" },
                     { key: "potential", label: "POT" },
                     ...attrColumns,
@@ -3493,7 +3489,7 @@ export default function PlayerProgression() {
                       <td className="px-3 py-1.5">{logo ? <img src={logo} alt={p.team} className="mx-auto h-5 w-5 object-contain" /> : <span className="text-neutral-500">FA</span>}</td>
                       <td className="px-3 py-1.5">{p.pos}</td>
                       <td className="px-3 py-1.5"><span>{p.age}</span><DeltaBadge d={deltaFor(p, "age")} /></td>
-                      {["overall", "offRating", "defRating", "stamina"].map((k) => (
+                      {["overall", "stamina"].map((k) => (
                         <td key={k} className="px-3 py-1.5" onDoubleClick={handleCellDoubleClick}>
                           <span>{showLetters ? toLetter(p[k]) : p[k]}</span><DeltaBadge d={deltaFor(p, k)} />
                         </td>

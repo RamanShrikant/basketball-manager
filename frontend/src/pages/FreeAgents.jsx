@@ -3336,7 +3336,7 @@ updateOffseasonState({
 
 <div className="w-full flex flex-1 min-h-0 justify-center transition-opacity duration-300 ease-in-out mt-[-1px]">
   <div className={`${styles.tableViewport} bmTableScroller w-full max-w-7xl min-h-0 overflow-auto rounded-b-xl border border-neutral-700 border-t-0 bg-neutral-900`}>
-    <div className="min-w-[1580px] w-max">
+    <div className="min-w-[1400px] w-max">
             <table className="w-full border-collapse text-center">
               <thead className="sticky top-0 z-20 bg-neutral-800 text-gray-300 text-[13px] font-semibold">
                 <tr>
@@ -3346,9 +3346,7 @@ updateOffseasonState({
                     { key: "affordable", label: "AFFORD" },
                     { key: "expectedSalary", label: "EXP" },
                     { key: "age", label: "AGE" },
-                    { key: "overall", label: "OVR" },
-                    { key: "offRating", label: "OFF" },
-                    { key: "defRating", label: "DEF" },
+                    { key: "overall", label: "OVR" },
                     { key: "stamina", label: "STAM" },
                     { key: "potential", label: "POT" },
                     ...attrColumns].map((col) => (
@@ -3445,15 +3443,7 @@ updateOffseasonState({
 
                     <td className="py-2 px-3" onDoubleClick={handleCellDoubleClick}>
                       {showLetters ? toLetter(p.overall) : p.overall}
-                    </td>
-
-                    <td className="py-2 px-3" onDoubleClick={handleCellDoubleClick}>
-                      {showLetters ? toLetter(p.offRating) : p.offRating}
-                    </td>
-
-                    <td className="py-2 px-3" onDoubleClick={handleCellDoubleClick}>
-                      {showLetters ? toLetter(p.defRating) : p.defRating}
-                    </td>
+                    </td>
 
                     <td className="py-2 px-3" onDoubleClick={handleCellDoubleClick}>
                       {showLetters ? toLetter(p.stamina) : p.stamina}

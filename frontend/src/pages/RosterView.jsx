@@ -1486,7 +1486,7 @@ export default function RosterView() {
       {/* Table */}
       <div className={`${styles.rosterTableRegion} w-full flex flex-1 min-h-0 items-start justify-center transition-opacity duration-300 ease-in-out mt-[-1px]`}>
         <div className={`${styles.tablePanel} ${styles.rosterScroller} bmTableScroller w-full max-w-7xl min-h-0 overflow-auto rounded-b-xl`}>
-          <div className="min-w-[1390px] w-max">
+          <div className="min-w-[1215px] w-max">
             <table className="w-full border-collapse text-center">
               <thead className="sticky top-0 z-20 bg-neutral-800 text-gray-300 text-[13px] font-semibold">
                 <tr>
@@ -1496,8 +1496,6 @@ export default function RosterView() {
                     { key: "pos", label: "POS" },
                     { key: "age", label: "AGE" },
                     { key: "overall", label: "OVR" },
-                    { key: "offRating", label: "OFF" },
-                    { key: "defRating", label: "DEF" },
                     { key: "stamina", label: "STAM" },
                     { key: "potential", label: "POT" },
                     ...attrColumns,
@@ -1584,12 +1582,6 @@ export default function RosterView() {
                       <td className="py-1.5 px-3 font-bold">{p.age}</td>
                       <td className="py-1.5 px-3" onDoubleClick={handleCellDoubleClick}>
                         {showLetters ? toLetter(p.overall) : p.overall}
-                      </td>
-                      <td className="py-1.5 px-3" onDoubleClick={handleCellDoubleClick}>
-                        {showLetters ? toLetter(p.offRating) : p.offRating}
-                      </td>
-                      <td className="py-1.5 px-3" onDoubleClick={handleCellDoubleClick}>
-                        {showLetters ? toLetter(p.defRating) : p.defRating}
                       </td>
                       <td className="py-1.5 px-3" onDoubleClick={handleCellDoubleClick}>
                         {showLetters ? toLetter(p.stamina) : p.stamina}

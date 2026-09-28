@@ -560,7 +560,7 @@ export default function TradePlayerSelect() {
 
         <div className="mt-[-1px] flex min-h-0 flex-1 w-full justify-center transition-opacity duration-300 ease-in-out">
           <div className={`${styles.tablePanel} bmTableScroller h-full min-h-0 w-full overflow-auto`}>
-            <table className="w-full min-w-[1020px] border-collapse text-center">
+            <table className="w-full min-w-[860px] border-collapse text-center">
               <thead className="sticky top-0 z-10 bg-neutral-800 text-[13px] font-semibold text-gray-300">
                 <tr>
                   {[
@@ -570,9 +570,7 @@ export default function TradePlayerSelect() {
                     { key: "salary", label: "SALARY" },
                     { key: "yearsRemaining", label: "YRS" },
                     { key: "overall", label: "OVR" },
-                    { key: "potential", label: "POT" },
-                    { key: "offRating", label: "OFF" },
-                    { key: "defRating", label: "DEF" },
+                    { key: "potential", label: "POT" },
                     { key: "stamina", label: "STAM" },
                   ].map((col) => (
                     <th
@@ -656,9 +654,7 @@ export default function TradePlayerSelect() {
                       <td className="py-2 px-3 font-black text-white">{formatMoney(getPlayerSalary(p, leagueData))}</td>
                       <td className="py-2 px-3 font-black text-white">{getContractYearsRemaining(p, leagueData) || "-"}</td>
                       <td className="py-2 px-3">{p.overall ?? "-"}</td>
-                      <td className="py-2 px-3">{p.potential ?? "-"}</td>
-                      <td className="py-2 px-3">{p.offRating ?? "-"}</td>
-                      <td className="py-2 px-3">{p.defRating ?? "-"}</td>
+                      <td className="py-2 px-3">{p.potential ?? "-"}</td>
                       <td className="py-2 px-3">{p.stamina ?? "-"}</td>
                     </tr>
                   );

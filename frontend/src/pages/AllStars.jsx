@@ -54,21 +54,14 @@ function fmt(value) {
   return Number.isInteger(n) ? String(n) : n.toFixed(1).replace(/\.0$/, "");
 }
 
-function PlayerRow({ player, index, lookup, variant = "page" }) {
+function PlayerRow({ player, index, lookup }) {
   const info = getRosterInfo(player, lookup);
-  const modal = variant === "modal";
 
   return (
-    <div
-      className={
-        modal
-          ? "grid h-[34px] grid-cols-[18px_24px_minmax(0,1fr)_42px_82px] items-center gap-1.5 rounded-md border border-white/[0.08] bg-neutral-800/88 px-2"
-          : "grid h-[32px] grid-cols-[22px_26px_minmax(0,1fr)_46px_122px] items-center gap-2 rounded-md border border-white/[0.08] bg-neutral-800/88 px-2"
-      }
-    >
-      <span className="text-center text-[10px] font-black text-neutral-500">{index + 1}</span>
+    <div className="grid min-h-[44px] grid-cols-[26px_34px_minmax(220px,1fr)_58px_118px] items-center gap-2 rounded-lg border border-white/[0.08] bg-neutral-800/88 px-2.5 py-1.5">
+      <span className="text-center text-[11px] font-black text-neutral-500">{index + 1}</span>
 
-      <div className="flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-full bg-neutral-950 ring-1 ring-white/10">
+      <div className="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-full bg-neutral-950 ring-1 ring-white/10">
         <RuntimePlayerPortrait
           player={info}
           teamName={player.team || ""}
@@ -79,19 +72,21 @@ function PlayerRow({ player, index, lookup, variant = "page" }) {
         />
       </div>
 
-      <div className="min-w-0">
-        <div className="flex min-w-0 items-center gap-1">
-          {info.teamLogo ? <img src={info.teamLogo} alt="" className="h-3.5 w-3.5 shrink-0 object-contain" /> : null}
-          <span className="truncate text-[12px] font-black leading-tight text-white" title={player.player}>{player.player}</span>
+      <div className="min-w-0 pr-1">
+        <div className="flex min-w-0 items-center gap-2">
+          {info.teamLogo ? <img src={info.teamLogo} alt="" className="h-4 w-4 shrink-0 object-contain" /> : null}
+          <span className="bmAllStarsPlayerName min-w-0 whitespace-normal break-words text-[14px] font-black leading-tight text-white" title={player.player}>
+            {player.player}
+          </span>
         </div>
       </div>
 
-      <div className="rounded border border-orange-500/25 bg-orange-500/10 px-1 py-0.5 text-center leading-none">
+      <div className="rounded border border-orange-500/25 bg-orange-500/10 px-1.5 py-1 text-center leading-none">
         <div className="text-[7px] font-black uppercase tracking-wide text-neutral-400">OVR</div>
-        <div className="text-[13px] font-black text-orange-400">{info.overall ?? "--"}</div>
+        <div className="text-[15px] font-black text-orange-400">{info.overall ?? "--"}</div>
       </div>
 
-      <div className="text-right text-[9px] font-bold leading-[1.05] text-neutral-300">
+      <div className="min-w-[112px] text-right text-[10px] font-bold leading-[1.15] text-neutral-300">
         <div>{fmt(player.ppg)} PPG</div>
         <div>{fmt(player.rpg)} RPG • {fmt(player.apg)} APG</div>
       </div>
@@ -99,77 +94,54 @@ function PlayerRow({ player, index, lookup, variant = "page" }) {
   );
 }
 
-function Section({ title, players, lookup, variant = "page" }) {
+function Section({ title, players, lookup }) {
   return (
-    <div className="min-h-0">
-      <h4 className="mb-1 text-[11px] font-black uppercase tracking-wide text-orange-400">{title}</h4>
-      <div className="space-y-1">
+    <section className="min-w-0">
+      <h4 className="mb-1.5 text-[12px] font-black uppercase tracking-wide text-orange-400">{title}</h4>
+      <div className="space-y-1.5">
         {(players || []).map((player, index) => (
-          <PlayerRow key={title + "_" + player.player + "_" + player.team + "_" + index} player={player} index={index} lookup={lookup} variant={variant} />
+          <PlayerRow key={title + "_" + player.player + "_" + player.team + "_" + index} player={player} index={index} lookup={lookup} />
         ))}
       </div>
-    </div>
+    </section>
   );
 }
 
-function ConferencePageCard({ title, data, lookup }) {
+function ConferenceAllStarCard({ title, data, lookup }) {
   return (
-    <div className="rounded-xl border border-white/15 bg-neutral-950/80 p-3">
-      <h3 className="mb-2 text-lg font-black leading-none text-white">{title}</h3>
-      <div className="space-y-3">
-        <Section title="Starters" players={data?.starters || []} lookup={lookup} variant="page" />
-        <Section title="Reserves" players={data?.reserves || []} lookup={lookup} variant="page" />
+    <div className="min-w-0 rounded-2xl border border-white/15 bg-neutral-950/80 p-3.5 shadow-xl shadow-black/25">
+      <h3 className="mb-3 text-[21px] font-black leading-none text-white">{title}</h3>
+      <div className="space-y-4">
+        <Section title="Starters" players={data?.starters || []} lookup={lookup} />
+        <Section title="Reserves" players={data?.reserves || []} lookup={lookup} />
       </div>
     </div>
   );
 }
 
-function GroupCard({ eyebrow, title, players, lookup }) {
+function AllStarsBoard({ data, lookup }) {
   return (
-    <div className="rounded-xl border border-white/15 bg-neutral-950/80 p-2.5">
-      <div className="mb-2 flex items-baseline justify-between gap-2">
-        <h3 className="truncate text-[15px] font-black leading-none text-white">{title}</h3>
-        <span className="shrink-0 text-[10px] font-black uppercase tracking-wide text-orange-400">{eyebrow}</span>
-      </div>
-      <Section title="" players={players || []} lookup={lookup} variant="modal" />
+    <div className="bmAllStarsReadableBoard grid items-start gap-3 xl:grid-cols-2">
+      <ConferenceAllStarCard title="Eastern Conference" data={data.east} lookup={lookup} />
+      <ConferenceAllStarCard title="Western Conference" data={data.west} lookup={lookup} />
     </div>
   );
 }
 
-function AllStarsPageBoard({ data, lookup }) {
-  return (
-    <div className="grid items-start gap-3 lg:grid-cols-2">
-      <ConferencePageCard title="Eastern Conference" data={data.east} lookup={lookup} />
-      <ConferencePageCard title="Western Conference" data={data.west} lookup={lookup} />
-    </div>
-  );
-}
-
-function AllStarsModalBoard({ data, lookup }) {
-  return (
-    <div className="grid items-start gap-3 xl:grid-cols-4 lg:grid-cols-2">
-      <GroupCard eyebrow="East" title="Starters" players={data.east?.starters || []} lookup={lookup} />
-      <GroupCard eyebrow="East" title="Reserves" players={data.east?.reserves || []} lookup={lookup} />
-      <GroupCard eyebrow="West" title="Starters" players={data.west?.starters || []} lookup={lookup} />
-      <GroupCard eyebrow="West" title="Reserves" players={data.west?.reserves || []} lookup={lookup} />
-    </div>
-  );
-}
-
-export function AllStarsContent({ data, leagueData, variant = "modal" }) {
+export function AllStarsContent({ data, leagueData }) {
   const lookup = useMemo(() => buildRosterLookupFromLeague(leagueData), [leagueData]);
 
   if (!data) return null;
 
   return (
     <div className="min-h-0">
-      <div className="mb-2 shrink-0">
+      <div className="mb-3 shrink-0">
         <h2 className="text-2xl font-black leading-none text-orange-400">All-Star Teams</h2>
         <p className="mt-1 text-xs font-semibold text-neutral-300">{data.season} • Cutoff: {data.cutoff_date || "Midseason"}</p>
         <p className="mt-0.5 text-xs text-neutral-400">Eastern and Western Conference starters and reserves.</p>
       </div>
 
-      {variant === "page" ? <AllStarsPageBoard data={data} lookup={lookup} /> : <AllStarsModalBoard data={data} lookup={lookup} />}
+      <AllStarsBoard data={data} lookup={lookup} />
     </div>
   );
 }
@@ -183,14 +155,16 @@ export default function AllStars({ open, data, onClose, closeLabel = "Close" }) 
     <>
       <style>{"@keyframes bmModalBackdropIn { from { opacity: 0; } to { opacity: 1; } } @keyframes bmModalLiftIn { from { opacity: 0; transform: translateY(10px) scale(0.985); } to { opacity: 1; transform: translateY(0) scale(1); } } .bmModalFade { animation: bmModalBackdropIn 220ms ease-out both; } .bmModalLift { animation: bmModalLiftIn 260ms cubic-bezier(0.22, 1, 0.36, 1) both; will-change: opacity, transform; } @media (prefers-reduced-motion: reduce) { .bmModalFade, .bmModalLift { animation: none; } }"}</style>
 
-      <div className="bmModalFade fixed inset-0 z-[240] flex items-center justify-center bg-black/80 p-3 backdrop-blur-md" onClick={onClose}>
-        <div className="bmModalLift w-full max-w-[1660px] overflow-hidden rounded-2xl border border-white/20 bg-neutral-900 p-4 text-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
-          <div className="mb-2 flex shrink-0 justify-end">
+      <div className="bmModalFade fixed inset-0 z-[240] flex items-center justify-center bg-black/82 p-3 backdrop-blur-md" onClick={onClose}>
+        <div className="bmModalLift flex max-h-[94vh] w-[min(1680px,98vw)] flex-col overflow-hidden rounded-2xl border border-white/20 bg-neutral-900 text-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
+          <div className="flex shrink-0 justify-end border-b border-white/10 bg-neutral-900/95 px-4 py-3">
             <button className="rounded-lg bg-neutral-700 px-4 py-2 text-sm font-semibold text-white hover:bg-neutral-600" onClick={onClose}>
               {closeLabel}
             </button>
           </div>
-          <AllStarsContent data={data} leagueData={leagueData} variant="modal" />
+          <div className="min-h-0 overflow-y-auto p-4">
+            <AllStarsContent data={data} leagueData={leagueData} />
+          </div>
         </div>
       </div>
     </>,

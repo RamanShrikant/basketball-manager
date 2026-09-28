@@ -575,15 +575,7 @@ const handleAutoRebuild = () => {
                     <div className="flex justify-between gap-4">
                     <span className="text-gray-400">OVR</span>
                     <span className="text-orange-400">{formatExactRating(teamRatings.exactOverall)}</span>
-                    </div>
-                    <div className="flex justify-between gap-4 mt-1">
-                    <span className="text-gray-400">OFF</span>
-                    <span className="text-orange-400">{formatExactRating(teamRatings.exactOff)}</span>
-                    </div>
-                    <div className="flex justify-between gap-4 mt-1">
-                    <span className="text-gray-400">DEF</span>
-                    <span className="text-orange-400">{formatExactRating(teamRatings.exactDef)}</span>
-                    </div>
+                    </div>
                 </div>
                 </div>
             </div>

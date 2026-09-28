@@ -9495,19 +9495,7 @@ return (
 
             <span className="text-gray-200">
               {headerInfo.confRank ? `${ordinal(headerInfo.confRank)} in ${headerInfo.conf}` : `-- in ${headerInfo.conf || "--"}`}
-            </span>
-
-            <span className="text-gray-400">&bull;</span>
-
-            <span className="text-gray-200">
-              Off Rank {headerInfo.offRank ? `#${headerInfo.offRank}` : "--"}
-            </span>
-
-            <span className="text-gray-400">&bull;</span>
-
-            <span className="text-gray-200">
-              Def Rank {headerInfo.defRank ? `#${headerInfo.defRank}` : "--"}
-            </span>
+            </span>
           </div>
         </div>
 
