@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+﻿import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import { getUserTradeDeadlineStatus } from "../utils/userTradeRules.js";
@@ -302,7 +302,7 @@ function TradeContextDetailModal({ detail, team, leagueData, teamNames, onClose 
             className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/10 bg-black/35 text-sm font-black text-neutral-400 transition hover:border-orange-400/30 hover:bg-orange-500/10 hover:text-white"
             aria-label="Close"
           >
-            ×
+            Ã—
           </button>
         </div>
 
@@ -521,7 +521,7 @@ function buildCapOutlook(team, leagueData) {
   const secondApron = safeNumber(rules?.secondApron, 0);
 
   if (!payroll) {
-    return { primary: "—", secondary: "Payroll data unavailable", payroll: 0 };
+    return { primary: "â€”", secondary: "Payroll data unavailable", payroll: 0 };
   }
   if (cap && payroll <= cap) {
     return { primary: `${formatTradeMoney(cap - payroll)} cap room`, secondary: `Payroll ${formatTradeMoney(payroll)}`, payroll };
@@ -689,9 +689,9 @@ function standingLabel(standing) {
   if (!standing) return "";
   const record = `${standing.wins}-${standing.losses}`;
   const rank = ordinalStanding(standing.rank);
-  if (standing.games <= 0) return standing.conference ? `Preseason • ${standing.conference}` : "Preseason";
-  if (rank && standing.conference) return `${record} • ${standing.conference} • ${rank}`;
-  if (standing.conference) return `${record} • ${standing.conference}`;
+  if (standing.games <= 0) return standing.conference ? `Preseason â€¢ ${standing.conference}` : "Preseason";
+  if (rank && standing.conference) return `${record} â€¢ ${standing.conference} â€¢ ${rank}`;
+  if (standing.conference) return `${record} â€¢ ${standing.conference}`;
   return record;
 }
 
@@ -753,7 +753,7 @@ function formatHistoryTiming(entry = {}) {
   if (Number.isFinite(day) && day > 0) parts.push(`Day ${day}`);
   const date = formatFeedDate(entry);
   if (date && date !== "Live") parts.push(date);
-  return parts.length ? parts.join(" • ") : "Trade logged";
+  return parts.length ? parts.join(" â€¢ ") : "Trade logged";
 }
 
 function buildEmptyDeskItems() {
@@ -783,14 +783,14 @@ function assetMeta(asset = {}) {
     if (Number.isFinite(Number(asset.age)) && Number(asset.age) > 0) bits.push(`Age ${asset.age}`);
     if (Number.isFinite(Number(asset.overall)) && Number(asset.overall) > 0) bits.push(`OVR ${asset.overall}`);
     if (Number.isFinite(Number(asset.potential)) && Number(asset.potential) > 0) bits.push(`POT ${asset.potential}`);
-    return bits.join(" • ");
+    return bits.join(" â€¢ ");
   }
 
   if (asset?.type === "pick") {
     const bits = [];
     if (asset.protection) bits.push(asset.protection);
     if (asset.originalTeam) bits.push(`via ${asset.originalTeam}`);
-    return bits.join(" • ");
+    return bits.join(" â€¢ ");
   }
 
   return asset?.meta || "";
@@ -1095,7 +1095,7 @@ export default function Trades() {
                   aria-controls="trade-center-player-search-results"
                 />
                 {playerSearchQuery && (
-                  <button type="button" onClick={() => { setPlayerSearchQuery(""); setPlayerSearchOpen(false); }} className="text-[11px] font-black text-neutral-500 hover:text-white" aria-label="Clear player search">×</button>
+                  <button type="button" onClick={() => { setPlayerSearchQuery(""); setPlayerSearchOpen(false); }} className="text-[11px] font-black text-neutral-500 hover:text-white" aria-label="Clear player search">Ã—</button>
                 )}
               </label>
 
@@ -1121,7 +1121,7 @@ export default function Trades() {
                         <span className="min-w-0 flex-1">
                           <span className="block truncate text-[12px] font-black text-white">{name}</span>
                           <span className="mt-0.5 block truncate text-[10px] font-semibold text-neutral-500">
-                            {result.player?.pos || result.player?.position || "—"}{result.teamName ? ` • ${result.teamName}` : ""}
+                            {result.player?.pos || result.player?.position || "â€”"}{result.teamName ? ` â€¢ ${result.teamName}` : ""}
                           </span>
                         </span>
                         <span className="shrink-0 rounded-lg border border-orange-400/20 bg-orange-500/10 px-2 py-1 text-[11px] font-black text-orange-200">{playerOverall(result.player)}</span>
@@ -1140,7 +1140,7 @@ export default function Trades() {
               <div className="flex min-h-0 flex-1 flex-col p-4 lg:p-5">
                 <div className="flex items-center gap-3">
                   <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-orange-400/20 bg-orange-500/10 text-orange-400">
-                    <span className="text-lg font-black">◎</span>
+                    <span className="text-lg font-black">â—Ž</span>
                   </div>
                   <div>
                     <div className="text-[15px] font-black uppercase tracking-[0.11em] text-white">Team Context</div>
@@ -1155,7 +1155,7 @@ export default function Trades() {
                     className="group flex min-w-0 cursor-pointer items-center gap-3 rounded-xl border border-white/[0.09] bg-[#171b21] px-3.5 py-3.5 text-left shadow-[0_10px_22px_rgba(0,0,0,0.16),inset_0_1px_0_rgba(255,255,255,0.03)] transition hover:-translate-y-px hover:border-orange-400/35 hover:bg-[#1b2027] hover:shadow-[0_14px_28px_rgba(0,0,0,0.22),inset_0_1px_0_rgba(255,255,255,0.04)]"
                   >
                     <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-orange-400/15 bg-orange-500/[0.08] text-orange-300">
-                      <span className="text-lg">◉</span>
+                      <span className="text-lg">â—‰</span>
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="text-[11px] font-bold text-neutral-300">Cap Outlook</div>
@@ -1165,7 +1165,7 @@ export default function Trades() {
                         <span className="shrink-0 text-orange-300/75">Salary Table</span>
                       </div>
                     </div>
-                    <span className="text-neutral-600 transition group-hover:translate-x-0.5 group-hover:text-orange-300">›</span>
+                    <span className="text-neutral-600 transition group-hover:translate-x-0.5 group-hover:text-orange-300">â€º</span>
                   </button>
 
                   <button
@@ -1174,7 +1174,7 @@ export default function Trades() {
                     className="group flex min-w-0 cursor-pointer items-center gap-3 rounded-xl border border-white/[0.09] bg-[#171b21] px-3.5 py-3.5 text-left shadow-[0_10px_22px_rgba(0,0,0,0.16),inset_0_1px_0_rgba(255,255,255,0.03)] transition hover:-translate-y-px hover:border-orange-400/35 hover:bg-[#1b2027] hover:shadow-[0_14px_28px_rgba(0,0,0,0.22),inset_0_1px_0_rgba(255,255,255,0.04)]"
                   >
                     <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-orange-400/15 bg-orange-500/[0.08] text-orange-300">
-                      <span className="text-lg">▤</span>
+                      <span className="text-lg">â–¤</span>
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="text-[11px] font-bold text-neutral-300">Expiring Contracts</div>
@@ -1184,13 +1184,13 @@ export default function Trades() {
                         <span className="shrink-0 text-orange-300/75">Contracts</span>
                       </div>
                     </div>
-                    <span className="text-neutral-600 transition group-hover:translate-x-0.5 group-hover:text-orange-300">›</span>
+                    <span className="text-neutral-600 transition group-hover:translate-x-0.5 group-hover:text-orange-300">â€º</span>
                   </button>
                 </div>
 
                 <div className="mt-3 rounded-[16px] bg-[#101217] p-3.5 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.055)]">
                   <div className="flex items-center gap-2.5">
-                    <span className="text-[19px] text-orange-400">♙</span>
+                    <span className="text-[19px] text-orange-400">â™™</span>
                     <div>
                       <div className="text-[13.5px] font-black uppercase tracking-[0.095em] text-white">Position Depth</div>
                       <div className="mt-0.5 text-[10.5px] font-semibold text-neutral-400">Players under contract by position.</div>
@@ -1203,7 +1203,7 @@ export default function Trades() {
                       const fillPercent = Math.min(100, Math.max(12, (row.count / Math.max(1, row.target)) * 100));
                       return (
                         <button key={row.key} type="button" onClick={() => setContextDetail({ type: "position", key: row.key, label: row.label })} className="group relative min-w-0 cursor-pointer rounded-xl border border-white/[0.07] bg-[#15181d] px-2.5 py-2.5 text-left shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] transition hover:-translate-y-px hover:border-orange-400/35 hover:bg-[#191b20]" aria-label={`View ${row.label} players`}>
-                          <span className="absolute right-2 top-1.5 text-[12px] font-black text-neutral-600 transition group-hover:translate-x-0.5 group-hover:text-orange-300">›</span>
+                          <span className="absolute right-2 top-1.5 text-[12px] font-black text-neutral-600 transition group-hover:translate-x-0.5 group-hover:text-orange-300">â€º</span>
                           <div className="text-[10.5px] font-black uppercase tracking-[0.1em] text-neutral-400">{row.key}</div>
                           <div className={`mt-1 text-[20px] font-black leading-none ${shortageClass}`}>{row.count}<span className="ml-0.5 text-[11px] text-neutral-500">/{row.target}</span></div>
                           <div className="mt-2.5 h-1 overflow-hidden rounded-full bg-white/[0.08]"><div className={`h-full rounded-full ${fillClass}`} style={{ width: `${fillPercent}%` }} /></div>
@@ -1222,7 +1222,7 @@ export default function Trades() {
                   <div className="mt-2 grid grid-cols-5 gap-2">
                     {pickDepth.map((row) => (
                       <button key={row.key} type="button" onClick={() => setContextDetail({ type: "pick", key: row.key, label: row.label })} className="group relative flex min-w-0 cursor-pointer items-end justify-between gap-2 rounded-xl border border-white/[0.07] bg-[#15181d] px-2.5 py-3 text-left shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] transition hover:-translate-y-px hover:border-orange-400/35 hover:bg-[#191b20]" aria-label={`View ${row.label}`}>
-                        <span className="absolute right-2 top-1.5 text-[12px] font-black text-neutral-600 transition group-hover:translate-x-0.5 group-hover:text-orange-300">›</span>
+                        <span className="absolute right-2 top-1.5 text-[12px] font-black text-neutral-600 transition group-hover:translate-x-0.5 group-hover:text-orange-300">â€º</span>
                         <div className="min-w-0 flex-1 pr-4">
                           <div className="min-h-[24px] text-[9.5px] font-bold leading-[1.2] text-neutral-400">{row.label}</div>
                           <div className="mt-1.5 text-[20px] font-black leading-none text-white">{row.count}</div>
@@ -1242,15 +1242,15 @@ export default function Trades() {
                     className="group flex min-w-0 items-center justify-between rounded-xl bg-gradient-to-r from-orange-600 to-orange-500 px-4 py-3.5 text-left text-white shadow-[0_16px_36px_rgba(234,88,12,0.18)] transition hover:-translate-y-0.5 hover:from-orange-500 hover:to-orange-400 disabled:cursor-not-allowed disabled:from-neutral-800 disabled:to-neutral-800 disabled:text-neutral-500 disabled:shadow-none disabled:hover:translate-y-0"
                   >
                     <span className="flex min-w-0 items-center gap-3">
-                      <span className="text-[24px] leading-none">↔</span>
+                      <span className="text-[24px] leading-none">â†”</span>
                       <span className="min-w-0">
                         <span className="block truncate text-[14px] font-black">{hasSavedProposal ? "Resume Proposal" : "Propose Trade"}</span>
                         <span className="mt-0.5 block truncate text-[10px] font-semibold text-orange-50/85">
-                          {hasSavedProposal ? `${pluralize(userItems, "asset")} from you • ${pluralize(cpuItems, "asset")} from them` : "Build and send a trade proposal."}
+                          {hasSavedProposal ? `${pluralize(userItems, "asset")} from you â€¢ ${pluralize(cpuItems, "asset")} from them` : "Build and send a trade proposal."}
                         </span>
                       </span>
                     </span>
-                    <span className="text-xl transition group-hover:translate-x-0.5">›</span>
+                    <span className="text-xl transition group-hover:translate-x-0.5">â€º</span>
                   </button>
 
                   <button onClick={() => !tradeWindowLocked && navigate("/trade-finder")} disabled={tradeWindowLocked} className="group flex min-w-0 items-center justify-between rounded-xl border border-orange-400/20 bg-[#111318] px-4 py-3.5 text-left text-white transition hover:-translate-y-0.5 hover:border-orange-300/45 hover:bg-orange-500/[0.08] disabled:cursor-not-allowed disabled:border-white/10 disabled:text-neutral-600 disabled:hover:translate-y-0">
@@ -1261,7 +1261,7 @@ export default function Trades() {
                         <span className="mt-0.5 block truncate text-[10px] font-semibold text-neutral-400">Find matches and trade ideas.</span>
                       </span>
                     </span>
-                    <span className="text-xl transition group-hover:translate-x-0.5">›</span>
+                    <span className="text-xl transition group-hover:translate-x-0.5">â€º</span>
                   </button>
                 </div>
               </div>
@@ -1270,7 +1270,7 @@ export default function Trades() {
             <section className="trade-center-panel flex min-h-0 flex-col overflow-hidden rounded-[20px] border border-white/[0.08] bg-[#0b0d10] shadow-[0_22px_56px_rgba(0,0,0,0.30)]">
               <div className="shrink-0 px-4 pb-2 pt-4 lg:px-5">
                 <div className="flex items-center gap-3">
-                  <span className="text-[22px] font-black text-orange-500">⌁</span>
+                  <span className="text-[22px] font-black text-orange-500">âŒ</span>
                   <div>
                     <div className="text-[16px] font-black uppercase tracking-[0.035em] text-white">League Rumor Board</div>
                     <div className="mt-0.5 text-[11px] font-semibold text-neutral-400">Real CPU front-office signals, negotiations, and completed movement.</div>
@@ -1302,7 +1302,7 @@ export default function Trades() {
 
                     {!tradeDeskItems.length && (
                       <div className="mt-3 flex min-h-[220px] flex-col items-center justify-center rounded-xl border border-white/[0.08] bg-[#12161c] px-6 py-8 text-center shadow-[0_14px_28px_rgba(0,0,0,0.14),inset_0_1px_0_rgba(255,255,255,0.03)]">
-                        <div className="mb-2 flex h-14 w-14 items-center justify-center rounded-full border border-orange-400/25 bg-orange-500/[0.08] text-[23px] text-orange-400 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">⌁</div>
+                        <div className="mb-2 flex h-14 w-14 items-center justify-center rounded-full border border-orange-400/25 bg-orange-500/[0.08] text-[23px] text-orange-400 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">âŒ</div>
                         <div className="text-[10px] font-black uppercase tracking-[0.16em] text-orange-200/90">Awaiting activity</div>
                         <div className="mt-1 text-[14px] font-black text-white">No live activity right now</div>
                         <div className="mt-1.5 max-w-[420px] text-[11px] font-semibold leading-relaxed text-neutral-400">Sim ahead and real CPU rumors, talks, and completed deals will appear here as league activity unfolds.</div>
@@ -1316,10 +1316,10 @@ export default function Trades() {
                         const primaryLogo = teamLogoOf(primaryTeam);
                         const tagClass = item.type === "transaction" ? "border-emerald-400/20 bg-emerald-500/10 text-emerald-300" : item.type === "negotiation" ? "border-sky-400/20 bg-sky-500/10 text-sky-300" : "border-orange-400/20 bg-orange-500/10 text-orange-300";
                         return (
-                          <div key={item.id || `${item.label}_${item.headline}`} className="flex items-center gap-3 rounded-xl border border-white/[0.08] bg-[#15181d] px-3 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] transition hover:border-orange-400/25 hover:bg-[#191b20]">
+                          <div key={item.id || `${item.label}_${item.headline}`} className="flex items-center gap-2.5 rounded-xl border border-white/[0.08] bg-[#15181d] px-3 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] transition hover:border-orange-400/25 hover:bg-[#191b20]">
                             {primaryLogo ? <img src={primaryLogo} alt="" className="h-8 w-8 shrink-0 object-contain" /> : <div className="h-8 w-8 shrink-0 rounded-lg bg-white/5" />}
-                            <div className="min-w-0 flex-1"><div className="line-clamp-2 text-[11px] font-bold leading-snug text-neutral-200">{item.headline}</div></div>
-                            <div className="shrink-0 text-right"><div className={`rounded-md border px-2 py-1 text-[8px] font-black uppercase tracking-[0.1em] ${tagClass}`}>{displayLabel}</div><div className="mt-1 text-[9px] font-bold text-neutral-500">{formatFeedDate(item)}</div></div>
+                            <div className="min-w-0 flex-1"><div className="line-clamp-2 text-[10.5px] font-bold leading-[1.24] text-neutral-200">{item.headline}</div></div>
+                            <div className="shrink-0 text-right"><div className={`rounded-md border px-1.5 py-1 text-[7.5px] font-black uppercase tracking-[0.08em] ${tagClass}`}>{displayLabel}</div><div className="mt-1 text-[8.5px] font-bold text-neutral-500">{formatFeedDate(item)}</div></div>
                           </div>
                         );
                       })}
@@ -1361,3 +1361,4 @@ export default function Trades() {
     </PageFade>
   );
 }
+
