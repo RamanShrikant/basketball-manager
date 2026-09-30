@@ -1492,6 +1492,108 @@ const isOffseasonMode =
   );
   const offerMinimumMillions = offerMinimumAmount / 1_000_000;
   const offerMaximumMillions = Math.max(offerMinimumMillions, offerMaximumAmount / 1_000_000);
+
+  const maxOfferAmount = useMemo(() => {
+    if (!signTargetPlayer || !selectedTeam?.name || !userCapDashboard || !offerContractRules) {
+      return offerMaximumAmount;
+    }
+
+    const clampOfferAmount = (amount) => {
+      // Max Offer must never round upward past actual room. The salary UI uses
+      // $1K increments, so $22,303,532 should become $22,303,000, not
+      // $22,304,000.
+      const floored = Math.floor(Math.max(0, Number(amount || 0)) / 1_000) * 1_000;
+      return Math.min(offerMaximumAmount, Math.max(0, floored));
+    };
+
+    const candidates = [];
+    const addCandidate = (amount) => {
+      const safe = clampOfferAmount(amount);
+      if (safe > 0) candidates.push(safe);
+    };
+
+    const hardCap = Number(userCapDashboard.hardCap ?? 0);
+    const hasHardCap = userCapDashboard.hardCap !== null && Number.isFinite(hardCap) && hardCap > 0;
+    const capRouteForBasePayroll = (amount, basePayroll) => {
+      let capped = Number(amount || 0);
+      if (hasHardCap) {
+        capped = Math.min(capped, hardCap - Number(basePayroll || 0));
+      }
+      return Math.max(0, capped);
+    };
+
+    const replacedCapHold = getCapHoldForPlayer(signTargetPlayer, selectedTeam.name);
+    const practicalPayroll = Number(userCapDashboard.practicalPayroll || 0);
+    const rawPayrollWithoutHolds = Number(userCapDashboard.rawPayrollWithoutHolds || 0);
+    const practicalCapRoom = Number(userCapDashboard.practicalCapRoom || 0);
+    const rawCapRoomWithoutHolds = Number(
+      userCapDashboard.rawCapRoomWithoutHolds ??
+      userCapDashboard.basicCapRoom ??
+      userCapDashboard.capSpace ??
+      userCapDashboard.capRoom ??
+      0
+    );
+    const capHoldTotal = Number(userCapDashboard.capHoldTotal || 0);
+    const normalRouteBasePayroll = Math.max(0, practicalPayroll - replacedCapHold);
+    const ownRights = Boolean(offerContractRules.ownRights);
+
+    // Minimum exception path: even over-cap teams can usually offer the player minimum,
+    // subject to any active hard-cap limit.
+    addCandidate(capRouteForBasePayroll(offerMinimumAmount, normalRouteBasePayroll));
+
+    if (ownRights) {
+      addCandidate(capRouteForBasePayroll(offerContractRules.rightsCeiling || offerMaximumAmount, normalRouteBasePayroll));
+    }
+
+    const practicalCapPath = Math.max(0, practicalCapRoom) + replacedCapHold;
+    addCandidate(capRouteForBasePayroll(practicalCapPath, normalRouteBasePayroll));
+
+    // Match the backend live-offer behavior: if enough raw cap room exists after
+    // clearing cap holds, the user can submit the offer and clear holds later.
+    if (capHoldTotal > 0 && rawCapRoomWithoutHolds > 0) {
+      addCandidate(capRouteForBasePayroll(rawCapRoomWithoutHolds, rawPayrollWithoutHolds));
+    }
+
+    if (practicalCapRoom > 0) {
+      addCandidate(capRouteForBasePayroll(Number(userCapDashboard.roomException || 0) + replacedCapHold, normalRouteBasePayroll));
+    }
+
+    const payrollZone = String(userCapDashboard.payrollZone || "");
+    if (payrollZone === "first_apron" || payrollZone === "tax") {
+      addCandidate(capRouteForBasePayroll(Number(userCapDashboard.taxpayerMLE || 0) + replacedCapHold, normalRouteBasePayroll));
+    } else if (payrollZone !== "second_apron") {
+      const firstApron = Number(userCapDashboard.firstApron || 0);
+      const apronRoom = firstApron > 0 ? firstApron - normalRouteBasePayroll : Number.POSITIVE_INFINITY;
+      const nonTaxpayerRoute = Math.min(
+        Number(userCapDashboard.nonTaxpayerMLE || 0) + replacedCapHold,
+        apronRoom
+      );
+      addCandidate(capRouteForBasePayroll(nonTaxpayerRoute, normalRouteBasePayroll));
+    }
+
+    const best = Math.max(0, ...candidates);
+    return clampOfferAmount(best);
+  }, [
+    signTargetPlayer,
+    selectedTeam?.name,
+    userCapDashboard,
+    offerContractRules,
+    offerMinimumAmount,
+    offerMaximumAmount,
+  ]);
+
+  const maxOfferButtonDisabled = !offerContractRules?.hasLegalSalaryRange || maxOfferAmount < offerMinimumAmount;
+
+  const applyMaxOfferAmount = () => {
+    if (maxOfferButtonDisabled) {
+      setSignError("No legal max offer is available for this player right now.");
+      return;
+    }
+
+    setOfferSalaryText(formatMillionsInput(maxOfferAmount));
+    setSignError("");
+  };
+
   const legalOfferYears = Array.isArray(offerContractRules?.allowedYears) && offerContractRules.allowedYears.length
     ? offerContractRules.allowedYears
     : [1, 2, 3, 4];
@@ -3618,10 +3720,21 @@ updateOffseasonState({
                     {formatDollars(parseMillionsText(offerSalaryText))}
                   </span>
                 </div>
-                <div className={`text-xs ${offerContractRules?.hasLegalSalaryRange ? "text-gray-500" : "text-red-300"}`}>
-                  {offerContractRules?.hasLegalSalaryRange
-                    ? `Player range: ${formatDollars(offerMinimumAmount)} - ${formatDollars(offerMaximumAmount)}`
-                    : `No legal first-year salary exists for this player.`}
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className={`text-xs ${offerContractRules?.hasLegalSalaryRange ? "text-gray-500" : "text-red-300"}`}>
+                    {offerContractRules?.hasLegalSalaryRange
+                      ? `Player range: ${formatDollars(offerMinimumAmount)} - ${formatDollars(offerMaximumAmount)}`
+                      : `No legal first-year salary exists for this player.`}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={applyMaxOfferAmount}
+                    disabled={maxOfferButtonDisabled}
+                    title={maxOfferButtonDisabled ? "No legal max offer is available right now." : `Set to max legal offer: ${formatDollars(maxOfferAmount)}`}
+                    className="shrink-0 rounded-lg border border-emerald-400/35 bg-emerald-500/10 px-3 py-1 text-[11px] font-black uppercase tracking-[0.06em] text-emerald-200 transition hover:border-emerald-300/60 hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:border-neutral-700 disabled:bg-neutral-800 disabled:text-neutral-500"
+                  >
+                    Max Offer
+                  </button>
                 </div>
               </div>
             </div>
@@ -3732,7 +3845,7 @@ updateOffseasonState({
               </div>
             )}
 
-            {!offerEvalLoading && offerEvaluation?.reason && !offerEvaluation?.ok && (
+            {!offerEvalLoading && offerEvaluation?.reason && !offerEvaluation?.ok && offerEvaluation.reason !== signError && (
               <div className="mb-2 text-red-300 text-sm font-semibold">
                 {offerEvaluation.reason}
               </div>

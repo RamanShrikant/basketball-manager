@@ -19,6 +19,15 @@ import { clearActiveLeagueRuntime } from "../storage/saveManager.js";
 import { buildVisibleLeagueSaveSlots } from "../storage/leagueSaveSlots.js";
 import { withDevToolsEnabled } from "../utils/devTools.js";
 import {
+  DEFAULT_TRADE_RULE_SETTINGS,
+  TRADE_RULE_DEFINITIONS,
+  normalizeTradeRuleSettings,
+} from "../utils/tradeRuleSettings.js";
+import {
+  DEFAULT_INJURY_SETTINGS,
+  normalizeInjurySettings,
+} from "../utils/injurySystem.js";
+import {
   deleteCustomDraftClassForYear,
   readCustomDraftClassesIndex,
   writeCustomDraftClassForYear,
@@ -29,6 +38,41 @@ const CUSTOM_DRAFT_CLASS_MODE_BY_YEAR_KEY = "bm_draft_class_mode_by_year_v1";
 const DRAFT_STATE_KEY = "bm_draft_state_v1";
 const DEFAULT_DRAFT_CLASS_YEAR = 2027;
 const FUTURE_DRAFT_CLASS_YEARS = [2028, 2029, 2030, 2031, 2032, 2033, 2034, 2035];
+
+function buildDefaultPendingLeagueSettings() {
+  return {
+    injuries: normalizeInjurySettings(DEFAULT_INJURY_SETTINGS),
+    tradeRules: normalizeTradeRuleSettings(DEFAULT_TRADE_RULE_SETTINGS),
+  };
+}
+
+function applyPendingLeagueSettings(leagueData, pendingSettings) {
+  if (!leagueData || typeof leagueData !== "object") return leagueData;
+
+  return {
+    ...leagueData,
+    settings: {
+      ...(leagueData.settings || {}),
+      injuries: normalizeInjurySettings(pendingSettings?.injuries),
+      tradeRules: normalizeTradeRuleSettings(pendingSettings?.tradeRules),
+    },
+  };
+}
+
+function countDisabledPendingSettings(pendingSettings) {
+  const injuries = normalizeInjurySettings(pendingSettings?.injuries);
+  const tradeRules = normalizeTradeRuleSettings(pendingSettings?.tradeRules);
+  let disabled = 0;
+
+  if (injuries.enabled === false) disabled += 1;
+  if (injuries.userAlerts === false) disabled += 1;
+
+  for (const rule of TRADE_RULE_DEFINITIONS) {
+    if (tradeRules?.[rule.key] === false) disabled += 1;
+  }
+
+  return disabled;
+}
 
 function safeJSON(raw, fallback = null) {
   try {
@@ -154,10 +198,27 @@ export default function Play() {
   const [draftClassModes, setDraftClassModes] = useState(() =>
     safeJSON(localStorage.getItem(CUSTOM_DRAFT_CLASS_MODE_BY_YEAR_KEY), {}) || {}
   );
+  const [pendingLeagueSettings, setPendingLeagueSettings] = useState(() =>
+    buildDefaultPendingLeagueSettings()
+  );
+  const [settingsModalOpen, setSettingsModalOpen] = useState(false);
 
   const selectedYearKey = String(Number(draftClassYear || DEFAULT_DRAFT_CLASS_YEAR));
   const selectedClassSummary = draftClassIndex?.[selectedYearKey] || null;
   const selectedClassMode = draftClassModes?.[selectedYearKey] || (selectedClassSummary ? "custom" : "auto");
+  const pendingInjurySettings = useMemo(() => {
+    return normalizeInjurySettings(pendingLeagueSettings?.injuries);
+  }, [pendingLeagueSettings?.injuries]);
+  const pendingTradeRules = useMemo(() => {
+    return normalizeTradeRuleSettings(pendingLeagueSettings?.tradeRules);
+  }, [pendingLeagueSettings?.tradeRules]);
+  const disabledSettingsCount = useMemo(() => {
+    return countDisabledPendingSettings(pendingLeagueSettings);
+  }, [pendingLeagueSettings]);
+  const totalPendingSettings = TRADE_RULE_DEFINITIONS.length + 2;
+  const pendingSettingsSummary = disabledSettingsCount === 0
+    ? "All settings ON"
+    : `${disabledSettingsCount} of ${totalPendingSettings} settings OFF`;
 
   const loadedDraftClassYears = useMemo(() => {
     return Object.keys(draftClassIndex || {})
@@ -189,6 +250,30 @@ export default function Play() {
   const saveDraftClassModes = (nextModes) => {
     setDraftClassModes(nextModes);
     localStorage.setItem(CUSTOM_DRAFT_CLASS_MODE_BY_YEAR_KEY, JSON.stringify(nextModes || {}));
+  };
+
+  const updatePendingInjuryOption = (key, value) => {
+    setPendingLeagueSettings((current) => ({
+      ...(current || buildDefaultPendingLeagueSettings()),
+      injuries: {
+        ...normalizeInjurySettings(current?.injuries),
+        [key]: Boolean(value),
+      },
+    }));
+  };
+
+  const updatePendingTradeRule = (key, value) => {
+    setPendingLeagueSettings((current) => ({
+      ...(current || buildDefaultPendingLeagueSettings()),
+      tradeRules: {
+        ...normalizeTradeRuleSettings(current?.tradeRules),
+        [key]: Boolean(value),
+      },
+    }));
+  };
+
+  const resetPendingSettingsAllOn = () => {
+    setPendingLeagueSettings(buildDefaultPendingLeagueSettings());
   };
 
   const setDraftClassModeForYear = (year, mode) => {
@@ -396,6 +481,8 @@ export default function Play() {
       setRosterMode("default");
       setDraft2027Mode("default");
       setDevToolsEnabled(false);
+      resetPendingSettingsAllOn();
+      setSettingsModalOpen(false);
       setDraftClassStatus("");
       setNewLeagueSlotIndex(requestedSlotIndex);
       setScreen("new");
@@ -433,6 +520,7 @@ export default function Play() {
 
       setSelectedTeam(null);
       nextLeagueData = withDevToolsEnabled(nextLeagueData, devToolsEnabled);
+      nextLeagueData = applyPendingLeagueSettings(nextLeagueData, pendingLeagueSettings);
       nextLeagueData = setLeagueData(nextLeagueData, { source: "Play.startNewLeague", persist: false });
       await saveLeagueData(nextLeagueData, { source: "Play.startNewLeague" });
       window.leagueData = nextLeagueData;
@@ -566,6 +654,14 @@ export default function Play() {
   const selectInput = "rounded-lg border border-[#303030] bg-[#111111] px-3 py-2 text-sm font-black text-white outline-none [color-scheme:dark] focus:border-orange-500/70 focus:ring-2 focus:ring-orange-500/15";
   const quietButton = "rounded-lg border border-[#303030] bg-[#111111] px-4 py-3 text-sm font-black text-slate-300 transition hover:border-orange-500/45 hover:bg-orange-500/10 hover:text-white";
   const orangeButton = "rounded-lg border border-orange-500/30 bg-[#d65316] px-4 py-3 text-sm font-black text-white shadow-[0_7px_18px_rgba(67,20,7,.25)] transition hover:bg-orange-600 disabled:cursor-not-allowed disabled:border-[#303030] disabled:bg-slate-800 disabled:text-slate-500";
+  const setupSwitchClass = (checked) =>
+    `relative flex h-9 min-w-[86px] items-center justify-between rounded-full border px-3 text-[10px] font-black uppercase tracking-[0.08em] transition ${
+      checked
+        ? "border-orange-500/40 bg-orange-600 text-white shadow-[0_10px_24px_rgba(214,83,22,.25)]"
+        : "border-[#333] bg-[#181818] text-white/50"
+    }`;
+  const setupKnobClass = (checked) =>
+    `absolute top-1 h-7 w-7 rounded-full bg-white transition-all ${checked ? "right-1" : "left-1"}`;
   const choiceActive = "border-orange-500/55 bg-[#3a1608] text-orange-50";
   const choiceIdle = "border-[#303030] bg-[#111111] text-slate-300 hover:border-orange-500/40 hover:bg-orange-500/10 hover:text-white";
 
@@ -845,6 +941,26 @@ export default function Play() {
             </section>
           </div>
 
+          <section className="mt-3 rounded-xl border border-[#252525] bg-[#090909] p-3">
+            <button
+              type="button"
+              onClick={() => setSettingsModalOpen(true)}
+              className="flex w-full flex-col gap-3 rounded-lg border border-orange-500/18 bg-[#0d0d0d] px-4 py-3 text-left transition hover:border-orange-500/45 hover:bg-orange-500/8 sm:flex-row sm:items-center sm:justify-between"
+            >
+              <div>
+                <p className="text-[11px] font-black uppercase tracking-[0.18em] text-orange-300">Settings</p>
+                <h2 className="mt-1 text-xl font-black tracking-[-0.04em] text-white">League Settings</h2>
+                <p className="mt-1 text-xs font-semibold text-white/45">Adjust injuries, alerts, and trade rules before creating this league.</p>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className={`rounded-full border px-3 py-1 text-xs font-black uppercase tracking-[0.1em] ${disabledSettingsCount === 0 ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-200" : "border-orange-500/25 bg-orange-500/10 text-orange-100"}`}>
+                  {pendingSettingsSummary}
+                </span>
+                <span className="rounded-lg border border-[#303030] bg-[#111111] px-3 py-2 text-xs font-black text-white/72">Open</span>
+              </div>
+            </button>
+          </section>
+
           {error && <p className="mt-4 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm font-bold text-red-200">{error}</p>}
 
           <div className="mt-3 flex flex-col items-center justify-between gap-2 sm:flex-row">
@@ -855,6 +971,146 @@ export default function Play() {
           </div>
         </div>
       </div>
+
+      {settingsModalOpen && (
+        <div
+          className="fixed inset-0 z-[90] flex items-center justify-center bg-black/75 px-4 py-6 backdrop-blur-sm"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setSettingsModalOpen(false);
+          }}
+        >
+          <div
+            className="flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-[#303030] bg-[#101010] shadow-[0_28px_90px_rgba(0,0,0,.55)]"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="new-league-settings-title"
+          >
+            <div className="flex items-start justify-between gap-4 border-b border-white/10 px-5 py-4">
+              <div>
+                <p className="text-[11px] font-black uppercase tracking-[0.18em] text-orange-300">New League Setup</p>
+                <h2 id="new-league-settings-title" className="mt-1 text-2xl font-black tracking-[-0.05em] text-white">Settings</h2>
+                <p className="mt-1 text-xs font-semibold text-white/45">Saved into this league file when you click Create League.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSettingsModalOpen(false)}
+                className="rounded-full border border-[#303030] bg-[#171717] px-3 py-1.5 text-sm font-black text-white/65 hover:border-orange-500/40 hover:text-white"
+                aria-label="Close new league settings"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="overflow-y-auto px-5 py-4">
+              <section className="rounded-2xl border border-[#2a2a2a] bg-[#0b0b0b] p-4">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-[11px] font-black uppercase tracking-[0.18em] text-white/35">League Options</p>
+                    <h3 className="text-xl font-black text-white">Injuries and Alerts</h3>
+                  </div>
+                  <span className="text-[10px] font-black uppercase tracking-[0.14em] text-white/35">Default ON</span>
+                </div>
+
+                {[
+                  {
+                    key: "enabled",
+                    label: "Injuries",
+                    status: pendingInjurySettings.enabled
+                      ? "Enabled • minute-based odds • max 4 active per team"
+                      : "Disabled • no new injuries generated",
+                  },
+                  {
+                    key: "userAlerts",
+                    label: "User Injury Alerts",
+                    status: pendingInjurySettings.userAlerts
+                      ? "Enabled • pause when your team is injured or returns"
+                      : "Disabled • rotations auto-rebuild silently",
+                  },
+                ].map((option) => {
+                  const enabled = pendingInjurySettings?.[option.key] !== false;
+
+                  return (
+                    <article key={option.key} className={`mb-2 flex items-center justify-between gap-3 rounded-xl border px-4 py-3 ${enabled ? "border-orange-500/25 bg-orange-500/6" : "border-[#303030] bg-[#151515]"}`}>
+                      <div>
+                        <div className="text-sm font-black text-white">{option.label}</div>
+                        <div className="text-[10px] font-black uppercase tracking-[0.08em] text-white/38">{option.status}</div>
+                      </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={enabled}
+                        aria-label={`Toggle ${option.label}`}
+                        onClick={() => updatePendingInjuryOption(option.key, !enabled)}
+                        className={setupSwitchClass(enabled)}
+                      >
+                        <span className={enabled ? "mr-7" : "ml-7"}>{enabled ? "ON" : "OFF"}</span>
+                        <span className={setupKnobClass(enabled)} />
+                      </button>
+                    </article>
+                  );
+                })}
+              </section>
+
+              <section className="mt-4 rounded-2xl border border-[#2a2a2a] bg-[#0b0b0b] p-4">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-[11px] font-black uppercase tracking-[0.18em] text-white/35">User Trade Rules</p>
+                    <h3 className="text-xl font-black text-white">Trade Rules</h3>
+                  </div>
+                  <span className="text-[10px] font-black uppercase tracking-[0.14em] text-white/35">Default ON</span>
+                </div>
+
+                <div className="space-y-2">
+                  {TRADE_RULE_DEFINITIONS.map((rule) => {
+                    const enabled = pendingTradeRules?.[rule.key] !== false;
+
+                    return (
+                      <article key={rule.key} className={`flex items-center justify-between gap-3 rounded-xl border px-4 py-3 ${enabled ? "border-orange-500/25 bg-orange-500/6" : "border-[#303030] bg-[#151515]"}`}>
+                        <div>
+                          <div className="text-sm font-black text-white">{rule.label}</div>
+                          <div className="text-[10px] font-black uppercase tracking-[0.08em] text-white/38">{enabled ? "Enabled" : "Disabled"}</div>
+                        </div>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={enabled}
+                          aria-label={`Toggle ${rule.label}`}
+                          onClick={() => updatePendingTradeRule(rule.key, !enabled)}
+                          className={setupSwitchClass(enabled)}
+                        >
+                          <span className={enabled ? "mr-7" : "ml-7"}>{enabled ? "ON" : "OFF"}</span>
+                          <span className={setupKnobClass(enabled)} />
+                        </button>
+                      </article>
+                    );
+                  })}
+                </div>
+              </section>
+            </div>
+
+            <div className="flex flex-col gap-2 border-t border-white/10 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="text-xs font-black text-white/50">{pendingSettingsSummary}</div>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={resetPendingSettingsAllOn}
+                  className="rounded-xl border border-[#303030] bg-[#151515] px-4 py-2 text-xs font-black text-white/70 hover:border-orange-500/40 hover:text-white"
+                >
+                  Reset All On
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSettingsModalOpen(false)}
+                  className="rounded-xl bg-[#d65316] px-5 py-2 text-xs font-black text-white hover:bg-orange-600"
+                >
+                  Save Settings
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
