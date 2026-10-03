@@ -1233,7 +1233,10 @@
             "contract": {
               "startYear": 2026,
               "salaryByYear": [
-                2296271
+                2296271,
+                7407407,
+                8000000,
+                8592593
               ],
               "option": null
             },
@@ -18214,6 +18217,153 @@
             "birthYear": 2001
           },
           {
+            "potential": 89,
+            "height": 82,
+            "secondaryPos": "",
+            "scoringRating": 68.86264767958299,
+            "id": "1763359480423-qm2ujs",
+            "name": "Jalen Duren",
+            "pos": "C",
+            "age": 23,
+            "attrs": [
+              28,
+              61,
+              91,
+              67,
+              53,
+              54,
+              35,
+              60,
+              72,
+              85,
+              82,
+              67,
+              94,
+              77,
+              73
+            ],
+            "overall": 82,
+            "offRating": 75,
+            "defRating": 81,
+            "stamina": 82,
+            "headshot": "https://cdn.nba.com/headshots/nba/latest/1040x760/1631105.png",
+            "birthMonth": 11,
+            "birthDay": 18,
+            "contract": {
+              "startYear": 2026,
+              "salaryByYear": [
+                34482759,
+                37241379,
+                40000000,
+                42758621,
+                45517241
+              ],
+              "option": null
+            },
+            "rights": {
+              "heldByTeam": "Detroit Pistons",
+              "seasonsTowardBird": 3,
+              "birdLevel": "bird",
+              "rookieScale": false,
+              "restrictedFreeAgent": false,
+              "rookieScaleControlConsumed": true,
+              "rookieScaleExtensionSigned": true
+            },
+            "meta": {
+              "draftYear": 2022,
+              "draftRound": 1,
+              "draftPick": 13,
+              "draftedBy": "Charlotte Hornets",
+              "acquiredVia": "trade",
+              "proSeasons": 4,
+              "yearsWithCurrentTeam": 4
+            },
+            "history": {
+              "seasons": [
+                {
+                  "seasonYear": 2023,
+                  "teamName": "Detroit Pistons",
+                  "teamLogo": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c9/Logo_of_the_Detroit_Pistons.svg/500px-Logo_of_the_Detroit_Pistons.svg.png",
+                  "rowType": "team",
+                  "games": 67,
+                  "ppg": 9.1,
+                  "rpg": 8.9,
+                  "apg": 1.1,
+                  "spg": 0.7,
+                  "bpg": 0.9,
+                  "fgPct": 64.8,
+                  "threePct": 0,
+                  "ftPct": 61.1
+                },
+                {
+                  "seasonYear": 2024,
+                  "teamName": "Detroit Pistons",
+                  "teamLogo": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c9/Logo_of_the_Detroit_Pistons.svg/500px-Logo_of_the_Detroit_Pistons.svg.png",
+                  "rowType": "team",
+                  "games": 61,
+                  "ppg": 13.8,
+                  "rpg": 11.6,
+                  "apg": 2.4,
+                  "spg": 0.5,
+                  "bpg": 0.8,
+                  "fgPct": 61.9,
+                  "threePct": 0,
+                  "ftPct": 79
+                },
+                {
+                  "seasonYear": 2025,
+                  "teamName": "Detroit Pistons",
+                  "teamLogo": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c9/Logo_of_the_Detroit_Pistons.svg/500px-Logo_of_the_Detroit_Pistons.svg.png",
+                  "rowType": "team",
+                  "games": 78,
+                  "ppg": 11.8,
+                  "rpg": 10.3,
+                  "apg": 2.7,
+                  "spg": 0.7,
+                  "bpg": 1.1,
+                  "fgPct": 69.2,
+                  "threePct": 0,
+                  "ftPct": 66.9
+                },
+                {
+                  "seasonYear": 2026,
+                  "teamName": "Detroit Pistons",
+                  "teamLogo": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c9/Logo_of_the_Detroit_Pistons.svg/500px-Logo_of_the_Detroit_Pistons.svg.png",
+                  "rowType": "team",
+                  "games": 70,
+                  "ppg": 19.5,
+                  "rpg": 10.5,
+                  "apg": 2,
+                  "spg": 0.8,
+                  "bpg": 0.8,
+                  "fgPct": 65,
+                  "threePct": 0,
+                  "ftPct": 74.7
+                }
+              ],
+              "accolades": [
+                {
+                  "seasonYear": 2023,
+                  "type": "all_rookie_second",
+                  "label": "All-Rookie Second Team"
+                },
+                {
+                  "seasonYear": 2026,
+                  "type": "all_nba_third",
+                  "label": "All-NBA Third Team"
+                },
+                {
+                  "seasonYear": 2026,
+                  "type": "all_star",
+                  "label": "NBA All-Star"
+                }
+              ],
+              "transactions": []
+            },
+            "_restrictedFreeAgent": true,
+            "birthYear": 2003
+          },
+          {
             "potential": 86,
             "height": 79,
             "secondaryPos": "PF",
@@ -20056,272 +20206,6 @@
               ]
             },
             "birthYear": 2007
-          },
-          {
-            "potential": 63,
-            "height": 76,
-            "secondaryPos": "SF",
-            "scoringRating": 37.525688972311706,
-            "id": "1762846554118-qx19we",
-            "name": "Gary Harris",
-            "pos": "SG",
-            "age": 32,
-            "attrs": [
-              80,
-              69,
-              42,
-              82,
-              48,
-              51,
-              69,
-              66,
-              55,
-              29,
-              43,
-              73,
-              38,
-              85,
-              80
-            ],
-            "overall": 63,
-            "offRating": 63,
-            "defRating": 62,
-            "stamina": 76,
-            "headshot": "https://a.espncdn.com/combiner/i?img=/i/headshots/nba/players/full/2999547.png&w=350&h=254",
-            "birthMonth": 9,
-            "birthDay": 14,
-            "contract": {
-              "startYear": 2026,
-              "salaryByYear": [
-                3815861
-              ],
-              "option": null
-            },
-            "rights": {
-              "heldByTeam": "Detroit Pistons",
-              "seasonsTowardBird": 1,
-              "birdLevel": "non_bird",
-              "rookieScale": false,
-              "restrictedFreeAgent": false
-            },
-            "meta": {
-              "draftYear": 2014,
-              "draftRound": 1,
-              "draftPick": 19,
-              "draftedBy": "Chicago Bulls",
-              "acquiredVia": "offseason_update",
-              "proSeasons": 12,
-              "yearsWithCurrentTeam": 1
-            },
-            "history": {
-              "seasons": [
-                {
-                  "seasonYear": 2015,
-                  "teamName": "Denver Nuggets",
-                  "teamLogo": "https://upload.wikimedia.org/wikipedia/en/7/76/Denver_Nuggets.svg",
-                  "rowType": "team",
-                  "games": 55,
-                  "ppg": 3.4,
-                  "rpg": 1.2,
-                  "apg": 0.5,
-                  "spg": 0.7,
-                  "bpg": 0.1,
-                  "fgPct": 30.4,
-                  "threePct": 20.4,
-                  "ftPct": 74.5
-                },
-                {
-                  "seasonYear": 2016,
-                  "teamName": "Denver Nuggets",
-                  "teamLogo": "https://upload.wikimedia.org/wikipedia/en/7/76/Denver_Nuggets.svg",
-                  "rowType": "team",
-                  "games": 76,
-                  "ppg": 12.3,
-                  "rpg": 2.9,
-                  "apg": 1.9,
-                  "spg": 1.3,
-                  "bpg": 0.2,
-                  "fgPct": 46.9,
-                  "threePct": 35.4,
-                  "ftPct": 82
-                },
-                {
-                  "seasonYear": 2017,
-                  "teamName": "Denver Nuggets",
-                  "teamLogo": "https://upload.wikimedia.org/wikipedia/en/7/76/Denver_Nuggets.svg",
-                  "rowType": "team",
-                  "games": 57,
-                  "ppg": 14.9,
-                  "rpg": 3.1,
-                  "apg": 2.9,
-                  "spg": 1.2,
-                  "bpg": 0.1,
-                  "fgPct": 50.2,
-                  "threePct": 42,
-                  "ftPct": 77.6
-                },
-                {
-                  "seasonYear": 2018,
-                  "teamName": "Denver Nuggets",
-                  "teamLogo": "https://upload.wikimedia.org/wikipedia/en/7/76/Denver_Nuggets.svg",
-                  "rowType": "team",
-                  "games": 67,
-                  "ppg": 17.5,
-                  "rpg": 2.6,
-                  "apg": 2.9,
-                  "spg": 1.8,
-                  "bpg": 0.2,
-                  "fgPct": 48.5,
-                  "threePct": 39.6,
-                  "ftPct": 82.7
-                },
-                {
-                  "seasonYear": 2019,
-                  "teamName": "Denver Nuggets",
-                  "teamLogo": "https://upload.wikimedia.org/wikipedia/en/7/76/Denver_Nuggets.svg",
-                  "rowType": "team",
-                  "games": 57,
-                  "ppg": 12.9,
-                  "rpg": 2.8,
-                  "apg": 2.2,
-                  "spg": 1,
-                  "bpg": 0.3,
-                  "fgPct": 42.4,
-                  "threePct": 33.9,
-                  "ftPct": 79.9
-                },
-                {
-                  "seasonYear": 2020,
-                  "teamName": "Denver Nuggets",
-                  "teamLogo": "https://upload.wikimedia.org/wikipedia/en/7/76/Denver_Nuggets.svg",
-                  "rowType": "team",
-                  "games": 56,
-                  "ppg": 10.4,
-                  "rpg": 2.9,
-                  "apg": 2.1,
-                  "spg": 1.4,
-                  "bpg": 0.3,
-                  "fgPct": 42,
-                  "threePct": 33.3,
-                  "ftPct": 81.5
-                },
-                {
-                  "seasonYear": 2021,
-                  "teamName": "Denver Nuggets",
-                  "teamLogo": "https://upload.wikimedia.org/wikipedia/en/7/76/Denver_Nuggets.svg",
-                  "rowType": "team",
-                  "games": 19,
-                  "ppg": 9.7,
-                  "rpg": 2.5,
-                  "apg": 1.7,
-                  "spg": 0.9,
-                  "bpg": 0.2,
-                  "fgPct": 44.2,
-                  "threePct": 32,
-                  "ftPct": 73.3
-                },
-                {
-                  "seasonYear": 2021,
-                  "teamName": "Orlando Magic",
-                  "teamLogo": "https://upload.wikimedia.org/wikipedia/en/thumb/1/10/Orlando_Magic_logo.svg/500px-Orlando_Magic_logo.svg.png",
-                  "rowType": "team",
-                  "games": 20,
-                  "ppg": 10.2,
-                  "rpg": 1.6,
-                  "apg": 2.3,
-                  "spg": 0.6,
-                  "bpg": 0.4,
-                  "fgPct": 36.5,
-                  "threePct": 36.4,
-                  "ftPct": 87.5
-                },
-                {
-                  "seasonYear": 2022,
-                  "teamName": "Orlando Magic",
-                  "teamLogo": "https://upload.wikimedia.org/wikipedia/en/thumb/1/10/Orlando_Magic_logo.svg/500px-Orlando_Magic_logo.svg.png",
-                  "rowType": "team",
-                  "games": 61,
-                  "ppg": 11.1,
-                  "rpg": 2,
-                  "apg": 1.8,
-                  "spg": 1,
-                  "bpg": 0.1,
-                  "fgPct": 43.4,
-                  "threePct": 38.4,
-                  "ftPct": 87.4
-                },
-                {
-                  "seasonYear": 2023,
-                  "teamName": "Orlando Magic",
-                  "teamLogo": "https://upload.wikimedia.org/wikipedia/en/thumb/1/10/Orlando_Magic_logo.svg/500px-Orlando_Magic_logo.svg.png",
-                  "rowType": "team",
-                  "games": 48,
-                  "ppg": 8.3,
-                  "rpg": 2,
-                  "apg": 1.2,
-                  "spg": 0.9,
-                  "bpg": 0.3,
-                  "fgPct": 45,
-                  "threePct": 43.1,
-                  "ftPct": 90
-                },
-                {
-                  "seasonYear": 2024,
-                  "teamName": "Orlando Magic",
-                  "teamLogo": "https://upload.wikimedia.org/wikipedia/en/thumb/1/10/Orlando_Magic_logo.svg/500px-Orlando_Magic_logo.svg.png",
-                  "rowType": "team",
-                  "games": 54,
-                  "ppg": 6.9,
-                  "rpg": 1.7,
-                  "apg": 1.6,
-                  "spg": 0.6,
-                  "bpg": 0.3,
-                  "fgPct": 44.1,
-                  "threePct": 37.1,
-                  "ftPct": 75.6
-                },
-                {
-                  "seasonYear": 2025,
-                  "teamName": "Orlando Magic",
-                  "teamLogo": "https://upload.wikimedia.org/wikipedia/en/thumb/1/10/Orlando_Magic_logo.svg/500px-Orlando_Magic_logo.svg.png",
-                  "rowType": "team",
-                  "games": 48,
-                  "ppg": 3,
-                  "rpg": 1.3,
-                  "apg": 0.6,
-                  "spg": 0.5,
-                  "bpg": 0.3,
-                  "fgPct": 38.3,
-                  "threePct": 35.6,
-                  "ftPct": 58.3
-                },
-                {
-                  "seasonYear": 2026,
-                  "teamName": "Milwaukee Bucks",
-                  "teamLogo": "https://upload.wikimedia.org/wikipedia/en/thumb/4/4a/Milwaukee_Bucks_logo.svg/500px-Milwaukee_Bucks_logo.svg.png",
-                  "rowType": "team",
-                  "games": 48,
-                  "ppg": 2.7,
-                  "rpg": 1.3,
-                  "apg": 1.1,
-                  "spg": 0.6,
-                  "bpg": 0.2,
-                  "fgPct": 44.2,
-                  "threePct": 41.2,
-                  "ftPct": 88.9
-                }
-              ],
-              "accolades": [],
-              "transactions": [
-                {
-                  "seasonYear": 2027,
-                  "type": "offseason_move",
-                  "toTeam": "Detroit Pistons",
-                  "note": "joins via trade with Bucks"
-                }
-              ]
-            },
-            "birthYear": 1994
           },
           {
             "potential": 67,
@@ -32717,130 +32601,6 @@
               "transactions": []
             },
             "birthYear": 2005
-          },
-          {
-            "potential": 79,
-            "height": 73,
-            "secondaryPos": "",
-            "scoringRating": 40.739280457120216,
-            "id": "bdc28830-b7c2-4c19-8928-c374b41144a0",
-            "name": "Rob Dillingham",
-            "pos": "PG",
-            "age": 21,
-            "attrs": [
-              71,
-              72,
-              45,
-              66,
-              91,
-              67,
-              58,
-              50,
-              42,
-              25,
-              31,
-              77,
-              50,
-              68,
-              70
-            ],
-            "overall": 69,
-            "offRating": 68,
-            "defRating": 57,
-            "stamina": 78,
-            "headshot": "https://cdn.nba.com/headshots/nba/latest/1040x760/1642265.png",
-            "birthMonth": 1,
-            "birthDay": 4,
-            "contract": {
-              "startYear": 2026,
-              "salaryByYear": [
-                6889320,
-                8763216
-              ],
-              "option": {
-                "type": "team",
-                "yearIndices": [
-                  1
-                ],
-                "picked": null
-              }
-            },
-            "rights": {
-              "heldByTeam": "Charlotte Hornets",
-              "seasonsTowardBird": 3,
-              "birdLevel": "bird",
-              "rookieScale": true,
-              "restrictedFreeAgent": false
-            },
-            "meta": {
-              "draftYear": 2024,
-              "draftRound": 1,
-              "draftPick": 8,
-              "draftedBy": "San Antonio Spurs",
-              "acquiredVia": "offseason_update",
-              "proSeasons": 2,
-              "yearsWithCurrentTeam": 1
-            },
-            "history": {
-              "seasons": [
-                {
-                  "seasonYear": 2025,
-                  "teamName": "Minnesota Timberwolves",
-                  "teamLogo": "https://upload.wikimedia.org/wikipedia/en/thumb/c/c2/Minnesota_Timberwolves_logo.svg/500px-Minnesota_Timberwolves_logo.svg.png",
-                  "rowType": "team",
-                  "games": 49,
-                  "ppg": 4.5,
-                  "rpg": 1,
-                  "apg": 2,
-                  "spg": 0.5,
-                  "bpg": 0.1,
-                  "fgPct": 40.3,
-                  "threePct": 33.8,
-                  "ftPct": 81.3
-                },
-                {
-                  "seasonYear": 2026,
-                  "teamName": "Minnesota Timberwolves",
-                  "teamLogo": "https://upload.wikimedia.org/wikipedia/en/thumb/c/c2/Minnesota_Timberwolves_logo.svg/500px-Minnesota_Timberwolves_logo.svg.png",
-                  "rowType": "team",
-                  "games": 35,
-                  "ppg": 3.5,
-                  "rpg": 1.2,
-                  "apg": 1.7,
-                  "spg": 0.5,
-                  "bpg": 0.1,
-                  "fgPct": 33.3,
-                  "threePct": 36.4,
-                  "ftPct": 75
-                },
-                {
-                  "seasonYear": 2026,
-                  "teamName": "Chicago Bulls",
-                  "teamLogo": "https://a.espncdn.com/i/teamlogos/nba/500/chi.png",
-                  "rowType": "team",
-                  "games": 30,
-                  "ppg": 9.6,
-                  "rpg": 3,
-                  "apg": 2.8,
-                  "spg": 0.9,
-                  "bpg": 0.1,
-                  "fgPct": 42.8,
-                  "threePct": 30,
-                  "ftPct": 74.3
-                }
-              ],
-              "accolades": [],
-              "transactions": [
-                {
-                  "seasonYear": 2027,
-                  "type": "sept27_roster_move",
-                  "fromTeam": "Chicago Bulls",
-                  "toTeam": "Charlotte Hornets",
-                  "note": "Placed on Hornets per Sept. 27 roster sheet."
-                }
-              ]
-            },
-            "birthYear": 2005
           }
         ],
         "division": "Southeast",
@@ -42589,6 +42349,82 @@
               "transactions": []
             },
             "birthYear": 1996
+          },
+          {
+            "potential": 57,
+            "height": 79,
+            "secondaryPos": "PF",
+            "scoringRating": 53.63720621113906,
+            "id": "generated_2027_alpha_diallo_dd3184b1",
+            "name": "Alpha Diallo",
+            "pos": "SF",
+            "age": 29,
+            "attrs": [
+              54,
+              63,
+              63,
+              54,
+              40,
+              39,
+              59,
+              64,
+              50,
+              60,
+              58,
+              66,
+              63,
+              72,
+              63
+            ],
+            "overall": 57,
+            "offRating": 56,
+            "defRating": 61,
+            "stamina": 80,
+            "headshot": "https://www.proballers.com/media/cache/resize_600_png/https---www.proballers.com/ul/player/alpha-diallo-1f0acfc4-c6a7-64fc-8e8c-015fda574df7.png",
+            "birthMonth": 6,
+            "birthDay": 29,
+            "contract": {
+              "startYear": 2026,
+              "salaryByYear": [
+                1357763
+              ],
+              "option": null
+            },
+            "rights": {
+              "heldByTeam": "Denver Nuggets",
+              "seasonsTowardBird": 1,
+              "birdLevel": "non_bird",
+              "rookieScale": false,
+              "restrictedFreeAgent": true
+            },
+            "meta": {
+              "draftYear": 2020,
+              "draftRound": null,
+              "draftPick": null,
+              "draftedBy": null,
+              "acquiredVia": "free_agency",
+              "proSeasons": 1,
+              "yearsWithCurrentTeam": 1
+            },
+            "history": {
+              "seasons": [],
+              "accolades": [],
+              "transactions": [
+                {
+                  "seasonYear": 2027,
+                  "type": "created_placeholder",
+                  "toTeam": "Denver Nuggets",
+                  "note": "Generated placeholder for confirmed 2026-27 standard-contract addition. Ratings and picture intentionally left for manual update."
+                },
+                {
+                  "seasonYear": 2027,
+                  "type": "free_agent",
+                  "fromTeam": "Denver Nuggets",
+                  "note": "Not included among the visible standard-contract roster rows in the user-provided 2026-27 roster document."
+                }
+              ]
+            },
+            "birthYear": 1997
           },
           {
             "id": "custom_2026_040_trevon_brazile",
@@ -76160,147 +75996,6 @@
   },
   "freeAgents": [
     {
-      "potential": 89,
-      "height": 82,
-      "secondaryPos": "",
-      "scoringRating": 68.86264767958299,
-      "id": "1763359480423-qm2ujs",
-      "name": "Jalen Duren",
-      "pos": "C",
-      "age": 22,
-      "attrs": [
-        28,
-        61,
-        91,
-        67,
-        53,
-        54,
-        35,
-        60,
-        72,
-        85,
-        82,
-        67,
-        94,
-        77,
-        73
-      ],
-      "overall": 82,
-      "offRating": 75,
-      "defRating": 81,
-      "stamina": 82,
-      "headshot": "https://cdn.nba.com/headshots/nba/latest/1040x760/1631105.png",
-      "birthMonth": 11,
-      "birthDay": 18,
-      "contract": {
-        "startYear": 2026,
-        "salaryByYear": [
-          9136000
-        ],
-        "option": null
-      },
-      "rights": {
-        "heldByTeam": null,
-        "seasonsTowardBird": 3,
-        "birdLevel": "bird",
-        "rookieScale": true,
-        "restrictedFreeAgent": false
-      },
-      "meta": {
-        "draftYear": 2022,
-        "draftRound": 1,
-        "draftPick": 13,
-        "draftedBy": "Charlotte Hornets",
-        "acquiredVia": "free_agent_pool",
-        "proSeasons": 4,
-        "yearsWithCurrentTeam": 4
-      },
-      "history": {
-        "seasons": [
-          {
-            "seasonYear": 2023,
-            "teamName": "Detroit Pistons",
-            "teamLogo": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c9/Logo_of_the_Detroit_Pistons.svg/500px-Logo_of_the_Detroit_Pistons.svg.png",
-            "rowType": "team",
-            "games": 67,
-            "ppg": 9.1,
-            "rpg": 8.9,
-            "apg": 1.1,
-            "spg": 0.7,
-            "bpg": 0.9,
-            "fgPct": 64.8,
-            "threePct": 0,
-            "ftPct": 61.1
-          },
-          {
-            "seasonYear": 2024,
-            "teamName": "Detroit Pistons",
-            "teamLogo": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c9/Logo_of_the_Detroit_Pistons.svg/500px-Logo_of_the_Detroit_Pistons.svg.png",
-            "rowType": "team",
-            "games": 61,
-            "ppg": 13.8,
-            "rpg": 11.6,
-            "apg": 2.4,
-            "spg": 0.5,
-            "bpg": 0.8,
-            "fgPct": 61.9,
-            "threePct": 0,
-            "ftPct": 79
-          },
-          {
-            "seasonYear": 2025,
-            "teamName": "Detroit Pistons",
-            "teamLogo": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c9/Logo_of_the_Detroit_Pistons.svg/500px-Logo_of_the_Detroit_Pistons.svg.png",
-            "rowType": "team",
-            "games": 78,
-            "ppg": 11.8,
-            "rpg": 10.3,
-            "apg": 2.7,
-            "spg": 0.7,
-            "bpg": 1.1,
-            "fgPct": 69.2,
-            "threePct": 0,
-            "ftPct": 66.9
-          },
-          {
-            "seasonYear": 2026,
-            "teamName": "Detroit Pistons",
-            "teamLogo": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c9/Logo_of_the_Detroit_Pistons.svg/500px-Logo_of_the_Detroit_Pistons.svg.png",
-            "rowType": "team",
-            "games": 70,
-            "ppg": 19.5,
-            "rpg": 10.5,
-            "apg": 2,
-            "spg": 0.8,
-            "bpg": 0.8,
-            "fgPct": 65,
-            "threePct": 0,
-            "ftPct": 74.7
-          }
-        ],
-        "accolades": [
-          {
-            "seasonYear": 2023,
-            "type": "all_rookie_second",
-            "label": "All-Rookie Second Team"
-          },
-          {
-            "seasonYear": 2026,
-            "type": "all_nba_third",
-            "label": "All-NBA Third Team"
-          },
-          {
-            "seasonYear": 2026,
-            "type": "all_star",
-            "label": "NBA All-Star"
-          }
-        ],
-        "transactions": []
-      },
-      "_restrictedFreeAgent": true,
-      "birthYear": 2003
-    },
-    {
       "potential": 74,
       "height": 76,
       "secondaryPos": "SG",
@@ -105288,76 +104983,6 @@
       "birthYear": 1995
     },
     {
-      "potential": 57,
-      "height": 79,
-      "secondaryPos": "PF",
-      "scoringRating": 53.63720621113906,
-      "id": "generated_2027_alpha_diallo_dd3184b1",
-      "name": "Alpha Diallo",
-      "pos": "SF",
-      "age": 29,
-      "attrs": [
-        54,
-        63,
-        63,
-        54,
-        40,
-        39,
-        59,
-        64,
-        50,
-        60,
-        58,
-        66,
-        63,
-        72,
-        63
-      ],
-      "overall": 57,
-      "offRating": 56,
-      "defRating": 61,
-      "stamina": 80,
-      "headshot": "https://www.proballers.com/media/cache/resize_600_png/https---www.proballers.com/ul/player/alpha-diallo-1f0acfc4-c6a7-64fc-8e8c-015fda574df7.png",
-      "birthMonth": 6,
-      "birthDay": 29,
-      "contract": null,
-      "rights": {
-        "heldByTeam": null,
-        "seasonsTowardBird": 0,
-        "birdLevel": "none",
-        "rookieScale": false,
-        "restrictedFreeAgent": false
-      },
-      "meta": {
-        "draftYear": 2020,
-        "draftRound": null,
-        "draftPick": null,
-        "draftedBy": null,
-        "acquiredVia": "free_agent_pool",
-        "proSeasons": 0,
-        "yearsWithCurrentTeam": 0
-      },
-      "history": {
-        "seasons": [],
-        "accolades": [],
-        "transactions": [
-          {
-            "seasonYear": 2027,
-            "type": "created_placeholder",
-            "toTeam": "Denver Nuggets",
-            "note": "Generated placeholder for confirmed 2026-27 standard-contract addition. Ratings and picture intentionally left for manual update."
-          },
-          {
-            "seasonYear": 2027,
-            "type": "free_agent",
-            "fromTeam": "Denver Nuggets",
-            "note": "Not included among the visible standard-contract roster rows in the user-provided 2026-27 roster document."
-          }
-        ]
-      },
-      "birthYear": 1997
-    },
-    {
       "potential": 68,
       "height": 83,
       "secondaryPos": "",
@@ -112053,6 +111678,377 @@
       },
       "contract": null,
       "birthYear": 1985
+    },
+    {
+      "potential": 63,
+      "height": 76,
+      "secondaryPos": "SF",
+      "scoringRating": 37.525688972311706,
+      "id": "1762846554118-qx19we",
+      "name": "Gary Harris",
+      "pos": "SG",
+      "age": 32,
+      "attrs": [
+        80,
+        69,
+        42,
+        82,
+        48,
+        51,
+        69,
+        66,
+        55,
+        29,
+        43,
+        73,
+        38,
+        85,
+        80
+      ],
+      "overall": 63,
+      "offRating": 63,
+      "defRating": 62,
+      "stamina": 76,
+      "headshot": "https://a.espncdn.com/combiner/i?img=/i/headshots/nba/players/full/2999547.png&w=350&h=254",
+      "birthMonth": 9,
+      "birthDay": 14,
+      "contract": null,
+      "rights": {
+        "heldByTeam": null,
+        "seasonsTowardBird": 1,
+        "birdLevel": "non_bird",
+        "rookieScale": false,
+        "restrictedFreeAgent": false
+      },
+      "meta": {
+        "draftYear": 2014,
+        "draftRound": 1,
+        "draftPick": 19,
+        "draftedBy": "Chicago Bulls",
+        "acquiredVia": "free_agent_pool",
+        "proSeasons": 12,
+        "yearsWithCurrentTeam": 0
+      },
+      "history": {
+        "seasons": [
+          {
+            "seasonYear": 2015,
+            "teamName": "Denver Nuggets",
+            "teamLogo": "https://upload.wikimedia.org/wikipedia/en/7/76/Denver_Nuggets.svg",
+            "rowType": "team",
+            "games": 55,
+            "ppg": 3.4,
+            "rpg": 1.2,
+            "apg": 0.5,
+            "spg": 0.7,
+            "bpg": 0.1,
+            "fgPct": 30.4,
+            "threePct": 20.4,
+            "ftPct": 74.5
+          },
+          {
+            "seasonYear": 2016,
+            "teamName": "Denver Nuggets",
+            "teamLogo": "https://upload.wikimedia.org/wikipedia/en/7/76/Denver_Nuggets.svg",
+            "rowType": "team",
+            "games": 76,
+            "ppg": 12.3,
+            "rpg": 2.9,
+            "apg": 1.9,
+            "spg": 1.3,
+            "bpg": 0.2,
+            "fgPct": 46.9,
+            "threePct": 35.4,
+            "ftPct": 82
+          },
+          {
+            "seasonYear": 2017,
+            "teamName": "Denver Nuggets",
+            "teamLogo": "https://upload.wikimedia.org/wikipedia/en/7/76/Denver_Nuggets.svg",
+            "rowType": "team",
+            "games": 57,
+            "ppg": 14.9,
+            "rpg": 3.1,
+            "apg": 2.9,
+            "spg": 1.2,
+            "bpg": 0.1,
+            "fgPct": 50.2,
+            "threePct": 42,
+            "ftPct": 77.6
+          },
+          {
+            "seasonYear": 2018,
+            "teamName": "Denver Nuggets",
+            "teamLogo": "https://upload.wikimedia.org/wikipedia/en/7/76/Denver_Nuggets.svg",
+            "rowType": "team",
+            "games": 67,
+            "ppg": 17.5,
+            "rpg": 2.6,
+            "apg": 2.9,
+            "spg": 1.8,
+            "bpg": 0.2,
+            "fgPct": 48.5,
+            "threePct": 39.6,
+            "ftPct": 82.7
+          },
+          {
+            "seasonYear": 2019,
+            "teamName": "Denver Nuggets",
+            "teamLogo": "https://upload.wikimedia.org/wikipedia/en/7/76/Denver_Nuggets.svg",
+            "rowType": "team",
+            "games": 57,
+            "ppg": 12.9,
+            "rpg": 2.8,
+            "apg": 2.2,
+            "spg": 1,
+            "bpg": 0.3,
+            "fgPct": 42.4,
+            "threePct": 33.9,
+            "ftPct": 79.9
+          },
+          {
+            "seasonYear": 2020,
+            "teamName": "Denver Nuggets",
+            "teamLogo": "https://upload.wikimedia.org/wikipedia/en/7/76/Denver_Nuggets.svg",
+            "rowType": "team",
+            "games": 56,
+            "ppg": 10.4,
+            "rpg": 2.9,
+            "apg": 2.1,
+            "spg": 1.4,
+            "bpg": 0.3,
+            "fgPct": 42,
+            "threePct": 33.3,
+            "ftPct": 81.5
+          },
+          {
+            "seasonYear": 2021,
+            "teamName": "Denver Nuggets",
+            "teamLogo": "https://upload.wikimedia.org/wikipedia/en/7/76/Denver_Nuggets.svg",
+            "rowType": "team",
+            "games": 19,
+            "ppg": 9.7,
+            "rpg": 2.5,
+            "apg": 1.7,
+            "spg": 0.9,
+            "bpg": 0.2,
+            "fgPct": 44.2,
+            "threePct": 32,
+            "ftPct": 73.3
+          },
+          {
+            "seasonYear": 2021,
+            "teamName": "Orlando Magic",
+            "teamLogo": "https://upload.wikimedia.org/wikipedia/en/thumb/1/10/Orlando_Magic_logo.svg/500px-Orlando_Magic_logo.svg.png",
+            "rowType": "team",
+            "games": 20,
+            "ppg": 10.2,
+            "rpg": 1.6,
+            "apg": 2.3,
+            "spg": 0.6,
+            "bpg": 0.4,
+            "fgPct": 36.5,
+            "threePct": 36.4,
+            "ftPct": 87.5
+          },
+          {
+            "seasonYear": 2022,
+            "teamName": "Orlando Magic",
+            "teamLogo": "https://upload.wikimedia.org/wikipedia/en/thumb/1/10/Orlando_Magic_logo.svg/500px-Orlando_Magic_logo.svg.png",
+            "rowType": "team",
+            "games": 61,
+            "ppg": 11.1,
+            "rpg": 2,
+            "apg": 1.8,
+            "spg": 1,
+            "bpg": 0.1,
+            "fgPct": 43.4,
+            "threePct": 38.4,
+            "ftPct": 87.4
+          },
+          {
+            "seasonYear": 2023,
+            "teamName": "Orlando Magic",
+            "teamLogo": "https://upload.wikimedia.org/wikipedia/en/thumb/1/10/Orlando_Magic_logo.svg/500px-Orlando_Magic_logo.svg.png",
+            "rowType": "team",
+            "games": 48,
+            "ppg": 8.3,
+            "rpg": 2,
+            "apg": 1.2,
+            "spg": 0.9,
+            "bpg": 0.3,
+            "fgPct": 45,
+            "threePct": 43.1,
+            "ftPct": 90
+          },
+          {
+            "seasonYear": 2024,
+            "teamName": "Orlando Magic",
+            "teamLogo": "https://upload.wikimedia.org/wikipedia/en/thumb/1/10/Orlando_Magic_logo.svg/500px-Orlando_Magic_logo.svg.png",
+            "rowType": "team",
+            "games": 54,
+            "ppg": 6.9,
+            "rpg": 1.7,
+            "apg": 1.6,
+            "spg": 0.6,
+            "bpg": 0.3,
+            "fgPct": 44.1,
+            "threePct": 37.1,
+            "ftPct": 75.6
+          },
+          {
+            "seasonYear": 2025,
+            "teamName": "Orlando Magic",
+            "teamLogo": "https://upload.wikimedia.org/wikipedia/en/thumb/1/10/Orlando_Magic_logo.svg/500px-Orlando_Magic_logo.svg.png",
+            "rowType": "team",
+            "games": 48,
+            "ppg": 3,
+            "rpg": 1.3,
+            "apg": 0.6,
+            "spg": 0.5,
+            "bpg": 0.3,
+            "fgPct": 38.3,
+            "threePct": 35.6,
+            "ftPct": 58.3
+          },
+          {
+            "seasonYear": 2026,
+            "teamName": "Milwaukee Bucks",
+            "teamLogo": "https://upload.wikimedia.org/wikipedia/en/thumb/4/4a/Milwaukee_Bucks_logo.svg/500px-Milwaukee_Bucks_logo.svg.png",
+            "rowType": "team",
+            "games": 48,
+            "ppg": 2.7,
+            "rpg": 1.3,
+            "apg": 1.1,
+            "spg": 0.6,
+            "bpg": 0.2,
+            "fgPct": 44.2,
+            "threePct": 41.2,
+            "ftPct": 88.9
+          }
+        ],
+        "accolades": [],
+        "transactions": [
+          {
+            "seasonYear": 2027,
+            "type": "offseason_move",
+            "toTeam": "Detroit Pistons",
+            "note": "joins via trade with Bucks"
+          }
+        ]
+      },
+      "birthYear": 1994
+    },
+    {
+      "potential": 79,
+      "height": 73,
+      "secondaryPos": "",
+      "scoringRating": 40.739280457120216,
+      "id": "bdc28830-b7c2-4c19-8928-c374b41144a0",
+      "name": "Rob Dillingham",
+      "pos": "PG",
+      "age": 21,
+      "attrs": [
+        71,
+        72,
+        45,
+        66,
+        91,
+        67,
+        58,
+        50,
+        42,
+        25,
+        31,
+        77,
+        50,
+        68,
+        70
+      ],
+      "overall": 69,
+      "offRating": 68,
+      "defRating": 57,
+      "stamina": 78,
+      "headshot": "https://cdn.nba.com/headshots/nba/latest/1040x760/1642265.png",
+      "birthMonth": 1,
+      "birthDay": 4,
+      "contract": null,
+      "rights": {
+        "heldByTeam": null,
+        "seasonsTowardBird": 3,
+        "birdLevel": "bird",
+        "rookieScale": false,
+        "restrictedFreeAgent": false
+      },
+      "meta": {
+        "draftYear": 2024,
+        "draftRound": 1,
+        "draftPick": 8,
+        "draftedBy": "San Antonio Spurs",
+        "acquiredVia": "free_agent_pool",
+        "proSeasons": 2,
+        "yearsWithCurrentTeam": 0
+      },
+      "history": {
+        "seasons": [
+          {
+            "seasonYear": 2025,
+            "teamName": "Minnesota Timberwolves",
+            "teamLogo": "https://upload.wikimedia.org/wikipedia/en/thumb/c/c2/Minnesota_Timberwolves_logo.svg/500px-Minnesota_Timberwolves_logo.svg.png",
+            "rowType": "team",
+            "games": 49,
+            "ppg": 4.5,
+            "rpg": 1,
+            "apg": 2,
+            "spg": 0.5,
+            "bpg": 0.1,
+            "fgPct": 40.3,
+            "threePct": 33.8,
+            "ftPct": 81.3
+          },
+          {
+            "seasonYear": 2026,
+            "teamName": "Minnesota Timberwolves",
+            "teamLogo": "https://upload.wikimedia.org/wikipedia/en/thumb/c/c2/Minnesota_Timberwolves_logo.svg/500px-Minnesota_Timberwolves_logo.svg.png",
+            "rowType": "team",
+            "games": 35,
+            "ppg": 3.5,
+            "rpg": 1.2,
+            "apg": 1.7,
+            "spg": 0.5,
+            "bpg": 0.1,
+            "fgPct": 33.3,
+            "threePct": 36.4,
+            "ftPct": 75
+          },
+          {
+            "seasonYear": 2026,
+            "teamName": "Chicago Bulls",
+            "teamLogo": "https://a.espncdn.com/i/teamlogos/nba/500/chi.png",
+            "rowType": "team",
+            "games": 30,
+            "ppg": 9.6,
+            "rpg": 3,
+            "apg": 2.8,
+            "spg": 0.9,
+            "bpg": 0.1,
+            "fgPct": 42.8,
+            "threePct": 30,
+            "ftPct": 74.3
+          }
+        ],
+        "accolades": [],
+        "transactions": [
+          {
+            "seasonYear": 2027,
+            "type": "sept27_roster_move",
+            "fromTeam": "Chicago Bulls",
+            "toTeam": "Charlotte Hornets",
+            "note": "Placed on Hornets per Sept. 27 roster sheet."
+          }
+        ]
+      },
+      "birthYear": 2005
     }
   ],
   "draftPicks": [
