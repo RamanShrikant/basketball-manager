@@ -6,7 +6,7 @@ import gloveCardIcon from "../assets/game-card-mma-gloves-reference.webp";
 import styles from "./StudioLanding.module.css";
 
 const FEEDBACK_EMAIL = "samsarastudios.games@gmail.com";
-const FEEDBACK_FORM_URL = "https://forms.gle/replace-with-samsara-studios-feedback-form";
+const FEEDBACK_FORM_URL = "https://forms.gle/wbaoPZdNuxLXGjfQ7";
 
 function GameCardArtwork({ src, className, alt = "" }) {
   return (
@@ -78,7 +78,7 @@ export default function StudioLanding() {
           </div>
           <div className={styles.feedbackActions}>
             <a href={`mailto:${FEEDBACK_EMAIL}?subject=Samsara%20Studios%20Feedback`}>Email</a>
-            <a href={FEEDBACK_FORM_URL} target="_blank" rel="noreferrer">
+            <a href={FEEDBACK_FORM_URL} target="_blank" rel="noopener noreferrer">
               Feedback Form
             </a>
           </div>
