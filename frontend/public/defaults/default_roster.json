@@ -1,5 +1,5 @@
 {
-  "leagueName": "sept 28 roster",
+  "leagueName": "oct 10 roster",
   "conferences": {
     "East": [
       {
@@ -43,8 +43,8 @@
               "startYear": 2026,
               "salaryByYear": [
                 50300000,
-                56097561,
-                58902439
+                56100000,
+                58900000
               ],
               "option": {
                 "type": "player",
@@ -1234,9 +1234,9 @@
               "startYear": 2026,
               "salaryByYear": [
                 2296271,
-                7407407,
                 8000000,
-                8592593
+                8000000,
+                8000000
               ],
               "option": null
             },
@@ -18252,11 +18252,11 @@
             "contract": {
               "startYear": 2026,
               "salaryByYear": [
-                34482759,
-                37241379,
-                40000000,
-                42758621,
-                45517241
+                40160643,
+                36947792,
+                38955824,
+                40963856,
+                42971885
               ],
               "option": null
             },
@@ -18360,7 +18360,6 @@
               ],
               "transactions": []
             },
-            "_restrictedFreeAgent": true,
             "birthYear": 2003
           },
           {
@@ -26093,7 +26092,7 @@
             "contract": {
               "startYear": 2026,
               "salaryByYear": [
-                16100000,
+                16120000,
                 16880000
               ],
               "option": null
@@ -27353,7 +27352,7 @@
                 3453360,
                 3626160,
                 3798360,
-                6445817
+                6445818
               ],
               "option": {
                 "type": "team",
@@ -52493,9 +52492,17 @@
               "startYear": 2026,
               "salaryByYear": [
                 2449421,
-                2664401
+                2664401,
+                2888193,
+                3272766
               ],
-              "option": null
+              "option": {
+                "type": "team",
+                "yearIndices": [
+                  3
+                ],
+                "picked": null
+              }
             },
             "rights": {
               "heldByTeam": "Houston Rockets",
@@ -54646,123 +54653,6 @@
                 2497812
               ],
               "option": null
-            },
-            "birthYear": 2002
-          },
-          {
-            "potential": 71,
-            "height": 77,
-            "secondaryPos": "SF",
-            "scoringRating": 55.521562258374196,
-            "id": "1764129775235-6xkbnt",
-            "name": "Jordan Hawkins",
-            "pos": "SG",
-            "age": 24,
-            "attrs": [
-              76,
-              58,
-              61,
-              76,
-              56,
-              41,
-              77,
-              77,
-              79,
-              38,
-              43,
-              47,
-              46,
-              84,
-              86
-            ],
-            "overall": 64,
-            "offRating": 66,
-            "defRating": 70,
-            "stamina": 90,
-            "headshot": "https://cdn.nba.com/headshots/nba/latest/1040x760/1641722.png",
-            "birthMonth": 4,
-            "birthDay": 29,
-            "contract": {
-              "startYear": 2026,
-              "salaryByYear": [
-                7021895
-              ],
-              "option": null
-            },
-            "rights": {
-              "heldByTeam": "Memphis Grizzlies",
-              "seasonsTowardBird": 3,
-              "birdLevel": "bird",
-              "rookieScale": true,
-              "restrictedFreeAgent": false
-            },
-            "meta": {
-              "draftYear": 2023,
-              "draftRound": 1,
-              "draftPick": 14,
-              "draftedBy": "New Orleans Pelicans",
-              "acquiredVia": "offseason_update",
-              "proSeasons": 3,
-              "yearsWithCurrentTeam": 1
-            },
-            "history": {
-              "seasons": [
-                {
-                  "seasonYear": 2024,
-                  "teamName": "New Orleans Pelicans",
-                  "teamLogo": "https://cdn.freebiesupply.com/logos/large/2x/pelicans-logo-transparent.png",
-                  "rowType": "team",
-                  "games": 67,
-                  "ppg": 7.8,
-                  "rpg": 2.2,
-                  "apg": 1,
-                  "spg": 0.3,
-                  "bpg": 0.1,
-                  "fgPct": 38.2,
-                  "threePct": 36.6,
-                  "ftPct": 83.8
-                },
-                {
-                  "seasonYear": 2025,
-                  "teamName": "New Orleans Pelicans",
-                  "teamLogo": "https://cdn.freebiesupply.com/logos/large/2x/pelicans-logo-transparent.png",
-                  "rowType": "team",
-                  "games": 52,
-                  "ppg": 10.8,
-                  "rpg": 2.6,
-                  "apg": 1.2,
-                  "spg": 0.7,
-                  "bpg": 0.2,
-                  "fgPct": 38.7,
-                  "threePct": 36.8,
-                  "ftPct": 83.9
-                },
-                {
-                  "seasonYear": 2026,
-                  "teamName": "New Orleans Pelicans",
-                  "teamLogo": "https://cdn.freebiesupply.com/logos/large/2x/pelicans-logo-transparent.png",
-                  "rowType": "team",
-                  "games": 51,
-                  "ppg": 5.1,
-                  "rpg": 1.7,
-                  "apg": 0.8,
-                  "spg": 0.3,
-                  "bpg": 0.2,
-                  "fgPct": 36.6,
-                  "threePct": 34.8,
-                  "ftPct": 85.2
-                }
-              ],
-              "accolades": [],
-              "transactions": [
-                {
-                  "seasonYear": 2027,
-                  "type": "sept27_roster_move",
-                  "fromTeam": "New Orleans Pelicans",
-                  "toTeam": "Memphis Grizzlies",
-                  "note": "Placed on Grizzlies per Sept. 27 roster sheet."
-                }
-              ]
             },
             "birthYear": 2002
           },
@@ -57326,7 +57216,7 @@
                 3076920,
                 3230520,
                 3384480,
-                6102217
+                6102218
               ],
               "option": {
                 "type": "team",
@@ -60863,7 +60753,10 @@
             "contract": {
               "startYear": 2026,
               "salaryByYear": [
-                6557080
+                6557080,
+                20108695,
+                18500000,
+                16891305
               ],
               "option": null
             },
@@ -66648,7 +66541,11 @@
             "contract": {
               "startYear": 2026,
               "salaryByYear": [
-                5679459
+                5679459,
+                18965517,
+                20482759,
+                22000000,
+                23517241
               ],
               "option": null
             },
@@ -66656,8 +66553,10 @@
               "heldByTeam": "Golden State Warriors",
               "seasonsTowardBird": 3,
               "birdLevel": "bird",
-              "rookieScale": true,
-              "restrictedFreeAgent": false
+              "rookieScale": false,
+              "restrictedFreeAgent": false,
+              "rookieScaleControlConsumed": true,
+              "rookieScaleExtensionSigned": true
             },
             "meta": {
               "draftYear": 2023,
@@ -112049,6 +111948,117 @@
         ]
       },
       "birthYear": 2005
+    },
+    {
+      "potential": 71,
+      "height": 77,
+      "secondaryPos": "SF",
+      "scoringRating": 55.521562258374196,
+      "id": "1764129775235-6xkbnt",
+      "name": "Jordan Hawkins",
+      "pos": "SG",
+      "age": 24,
+      "attrs": [
+        76,
+        58,
+        61,
+        76,
+        56,
+        41,
+        77,
+        77,
+        79,
+        38,
+        43,
+        47,
+        46,
+        84,
+        86
+      ],
+      "overall": 64,
+      "offRating": 66,
+      "defRating": 70,
+      "stamina": 90,
+      "headshot": "https://cdn.nba.com/headshots/nba/latest/1040x760/1641722.png",
+      "birthMonth": 4,
+      "birthDay": 29,
+      "contract": null,
+      "rights": {
+        "heldByTeam": null,
+        "seasonsTowardBird": 3,
+        "birdLevel": "bird",
+        "rookieScale": false,
+        "restrictedFreeAgent": false
+      },
+      "meta": {
+        "draftYear": 2023,
+        "draftRound": 1,
+        "draftPick": 14,
+        "draftedBy": "New Orleans Pelicans",
+        "acquiredVia": "free_agent_pool",
+        "proSeasons": 3,
+        "yearsWithCurrentTeam": 0
+      },
+      "history": {
+        "seasons": [
+          {
+            "seasonYear": 2024,
+            "teamName": "New Orleans Pelicans",
+            "teamLogo": "https://cdn.freebiesupply.com/logos/large/2x/pelicans-logo-transparent.png",
+            "rowType": "team",
+            "games": 67,
+            "ppg": 7.8,
+            "rpg": 2.2,
+            "apg": 1,
+            "spg": 0.3,
+            "bpg": 0.1,
+            "fgPct": 38.2,
+            "threePct": 36.6,
+            "ftPct": 83.8
+          },
+          {
+            "seasonYear": 2025,
+            "teamName": "New Orleans Pelicans",
+            "teamLogo": "https://cdn.freebiesupply.com/logos/large/2x/pelicans-logo-transparent.png",
+            "rowType": "team",
+            "games": 52,
+            "ppg": 10.8,
+            "rpg": 2.6,
+            "apg": 1.2,
+            "spg": 0.7,
+            "bpg": 0.2,
+            "fgPct": 38.7,
+            "threePct": 36.8,
+            "ftPct": 83.9
+          },
+          {
+            "seasonYear": 2026,
+            "teamName": "New Orleans Pelicans",
+            "teamLogo": "https://cdn.freebiesupply.com/logos/large/2x/pelicans-logo-transparent.png",
+            "rowType": "team",
+            "games": 51,
+            "ppg": 5.1,
+            "rpg": 1.7,
+            "apg": 0.8,
+            "spg": 0.3,
+            "bpg": 0.2,
+            "fgPct": 36.6,
+            "threePct": 34.8,
+            "ftPct": 85.2
+          }
+        ],
+        "accolades": [],
+        "transactions": [
+          {
+            "seasonYear": 2027,
+            "type": "sept27_roster_move",
+            "fromTeam": "New Orleans Pelicans",
+            "toTeam": "Memphis Grizzlies",
+            "note": "Placed on Grizzlies per Sept. 27 roster sheet."
+          }
+        ]
+      },
+      "birthYear": 2002
     }
   ],
   "draftPicks": [

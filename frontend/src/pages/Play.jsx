@@ -1017,15 +1017,15 @@ export default function Play() {
                     key: "enabled",
                     label: "Injuries",
                     status: pendingInjurySettings.enabled
-                      ? "Enabled • minute-based odds • max 4 active per team"
-                      : "Disabled • no new injuries generated",
+                      ? "Enabled"
+                      : "Disabled",
                   },
                   {
                     key: "userAlerts",
                     label: "User Injury Alerts",
                     status: pendingInjurySettings.userAlerts
-                      ? "Enabled • pause when your team is injured or returns"
-                      : "Disabled • rotations auto-rebuild silently",
+                      ? "Enabled"
+                      : "Disabled",
                   },
                 ].map((option) => {
                   const enabled = pendingInjurySettings?.[option.key] !== false;

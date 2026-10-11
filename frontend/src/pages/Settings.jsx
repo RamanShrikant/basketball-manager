@@ -207,8 +207,8 @@ export default function Settings() {
                 <div className={styles.ruleLabel}>Injuries</div>
                 <div className={styles.ruleStatus}>
                   {injurySettings.enabled
-                    ? "Enabled • minute-based odds • max 4 active per team"
-                    : "Disabled • all active injuries cleared"}
+                    ? "Enabled"
+                    : "Disabled"}
                 </div>
               </div>
               <div className={styles.ruleControls}>
@@ -238,8 +238,8 @@ export default function Settings() {
                 <div className={styles.ruleLabel}>User Injury Alerts</div>
                 <div className={styles.ruleStatus}>
                   {injurySettings.userAlerts
-                    ? "Enabled • pause when your team is injured or returns"
-                    : "Disabled • rotations auto-rebuild silently"}
+                    ? "Enabled"
+                    : "Disabled"}
                 </div>
               </div>
               <div className={styles.ruleControls}>
