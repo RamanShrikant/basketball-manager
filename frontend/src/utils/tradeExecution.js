@@ -1247,7 +1247,7 @@ function strictMegaSellerExecutionBlockReason(leagueData = {}, recordsByTeam = {
   if (targetPlayer) {
     const ovr = finiteNumber(targetPlayer?.overall ?? targetPlayer?.ovr ?? targetPlayer?.rating, 0);
     const age = finiteNumber(targetPlayer?.age ?? targetPlayer?.playerAge, 27);
-    if (ovr < 90) return "mega_target_below_90";
+    if (ovr < 86) return "mega_target_below_86";
     if (age < 28) return "mega_target_too_young";
     if (direction.phase !== "rebuilding" && ovr >= 94 && age <= 30) {
       return "retool_or_mid_protects_prime_94_plus";
@@ -2616,6 +2616,102 @@ function getCpuOwnedSecondRoundPickItems(leagueData = {}, teamName = "", usedKey
     .sort((a, b) => Number(a.pick?.year || 0) - Number(b.pick?.year || 0));
 }
 
+// Mega trades must convey REAL, legally tradable first-round picks. A swap
+// right and a second-round asset are not substitutes for an outright first.
+function isQualifyingCpuMegaFirst(item = {}) {
+  if (!isCpuFutureFirstItem(item) || item?.tradeRule?.mirror || item?.tradeValueExcluded) return false;
+  const pick = item.pick || {};
+  const type = String(pick?.assetType || pick?.type || "").toLowerCase();
+  const protection = String(item?.protection || pick?.displayProtection || pick?.protection || pick?.protections || "").toLowerCase();
+  return !type.includes("swap") && !protection.includes("swap") &&
+    !pick?.swapWithTeam && !pick?.swapTeam && !pick?.swapWith;
+}
+
+function requiredCpuMegaFirsts(targetOvr = 0, usefulReturn = false) {
+  const ovr = finiteNumber(targetOvr, 0);
+  if (ovr >= 95) return usefulReturn ? 4 : 5;
+  if (ovr >= 94) return usefulReturn ? 3 : 4;
+  if (ovr >= 90) return usefulReturn ? 2 : 3;
+  if (ovr >= 86) return 2;
+  return Number.POSITIVE_INFINITY;
+}
+
+function maxCpuMegaFirsts(targetOvr = 0) {
+  if (targetOvr >= 95) return 5;
+  if (targetOvr >= 94) return 4;
+  if (targetOvr >= 90) return 3;
+  return 2;
+}
+
+function cpuMegaUsefulSellerReturn(items = []) {
+  return items.some((item) => {
+    if (item?.type !== "player" || !item?.player) return false;
+    const player = item.player;
+    const ovr = finiteNumber(player?.overall ?? player?.ovr ?? player?.rating, 0);
+    const age = finiteNumber(player?.age ?? player?.playerAge, 27);
+    const pot = finiteNumber(player?.potential ?? player?.pot, 0);
+    return ovr >= 76 || (age <= 26 && ovr >= 70 && pot >= 82);
+  });
+}
+
+// A bounded search for a LEGAL first-round combination, not merely an owned
+// pick count. It is used before buyer selection and uses the same source ledger
+// and Stepien validator as actual execution. Normal CPU trades are unaffected.
+export function findLegalCpuMegaFirstPackage({
+  leagueData = {}, buyerTeamName = "", buyerPlayerItems = [], sellerItems = [],
+  targetOvr = 0, minFirsts = null,
+} = {}) {
+  const required = minFirsts ?? requiredCpuMegaFirsts(targetOvr, cpuMegaUsefulSellerReturn(buyerPlayerItems));
+  const availableSlots = MAX_SIDE_ITEMS - cpuPackageAssetCount(buyerPlayerItems);
+  const maxWanted = Math.min(maxCpuMegaFirsts(targetOvr), availableSlots);
+  if (!buyerTeamName || maxWanted < required || !Number.isFinite(required)) {
+    return { ok: false, reason: "Not enough trade-package slots for required firsts." };
+  }
+  const stepienEnabled = getUserTradeRuleSettings(leagueData).stepienRule !== false;
+  const tradeContext = stepienEnabled ? getOffseasonTradeContext(leagueData) : null;
+  const pool = getCpuOwnedFirstRoundPickItems(leagueData, buyerTeamName)
+    .filter(isQualifyingCpuMegaFirst)
+    .slice(0, 16);
+  if (pool.length < required) return { ok: false, reason: "Buyer does not own enough real future firsts." };
+
+  // A first that is individually ineligible can never become legal by adding
+  // even more OUTGOING firsts. Filter those before the small combination search.
+  const eligible = stepienEnabled ? pool.filter((pick) =>
+    cpuStepienPackageValidation(leagueData, buyerTeamName, [...buyerPlayerItems, pick], sellerItems, tradeContext).ok
+  ) : pool;
+  if (eligible.length < required) return { ok: false, reason: "Buyer lacks enough individually Stepien-legal firsts." };
+
+  let checks = 0;
+  const tested = new Set();
+  const MAX_CHECKS = 180;
+  const MAX_PER_LAYOUT = 60;
+  const layouts = [
+    eligible,
+    [...eligible].reverse(),
+    eligible.filter((_, i) => i % 2 === 0).concat(eligible.filter((_, i) => i % 2 !== 0)),
+  ];
+  for (let count = Math.min(maxWanted, eligible.length); count >= required; count -= 1) {
+    for (const layout of layouts) {
+      // Alternate early/late/alternating attempts to avoid only examining
+      // consecutive-year combinations at the front of the pick ledger.
+      const combos = generateCpuFirstCombos(layout, count, MAX_PER_LAYOUT);
+      for (const combo of combos) {
+        const key = combo.map(cpuPickKey).sort().join(";");
+        if (tested.has(key)) continue;
+        tested.add(key);
+        if (++checks > MAX_CHECKS) break;
+        const outgoingItems = [...buyerPlayerItems, ...combo];
+        if (!stepienEnabled || cpuStepienPackageValidation(leagueData, buyerTeamName, outgoingItems, sellerItems, tradeContext).ok) {
+          return { ok: true, picks: combo, required, count: combo.length };
+        }
+      }
+      if (checks >= MAX_CHECKS) break;
+    }
+    if (checks >= MAX_CHECKS) break;
+  }
+  return { ok: false, reason: "No legal multi-first package found under the active Stepien rules." };
+}
+
 function cpuStepienPackageValidation(leagueData, teamName, outgoingItems, incomingItems, tradeContext = null) {
   return validateUserTradeAssetPackage({
     leagueData,
@@ -3323,21 +3419,54 @@ export function executeCpuMegaTradeCandidateOnLeagueLoose({
     const playerName = playerNameOf(protectedBuyerPartner.player) || "another aging star";
     return {
       ok: false,
-      reason: `Mega trade buyer blocked: ${toTeamName} should not trade ${playerName} away as the headline salary in a 90+ star swing.`,
+      reason: `Mega trade buyer blocked: ${toTeamName} should not trade ${playerName} away as the headline salary in an 86+ veteran-star swing.`,
       staleCode: "mega_buyer_veteran_partner_protected",
     };
   }
-  const stepienRepair = repairCpuTradeStepienPackages({ leagueData: evaluationLeagueData, fromTeamName, toTeamName, fromItems, toItems });
-  if (!stepienRepair.ok) {
+  const outgoingStar = fromItems.find((item) => item?.type === "player")?.player || null;
+  const targetOvr = finiteNumber(outgoingStar?.overall ?? outgoingStar?.ovr ?? outgoingStar?.rating, 0);
+  // Enforce compensation for ALL tiers, including 95+ superstars. A second-round
+  // pick or swap cannot substitute for any required outright first.
+  const qualifyingFirsts = toItems.filter(isQualifyingCpuMegaFirst);
+  const minimumFirsts = requiredCpuMegaFirsts(targetOvr, cpuMegaUsefulSellerReturn(toItems));
+  if (qualifyingFirsts.length < minimumFirsts) {
     return {
       ok: false,
-      reason: stepienRepair.reason || "Mega trade candidate would violate the active Stepien rule.",
-      staleCode: stepienRepair.staleCode || "cpu_mega_stepien_rule",
+      reason: `Mega trade blocked: ${fromTeamName} must receive at least ${minimumFirsts} real first-round picks for a ${targetOvr} OVR player.`,
+      staleCode: "mega_insufficient_legal_firsts",
     };
   }
-  fromItems = stepienRepair.fromItems;
-  toItems = stepienRepair.toItems;
-  const outgoingStar = fromItems.find((item) => item?.type === "player")?.player || null;
+  if (targetOvr >= 86 && targetOvr <= 89) {
+    const nearPeerSwap = toItems.find((item) => item?.type === "player" && (
+      finiteNumber(item?.player?.overall ?? item?.player?.ovr ?? item?.player?.rating, 0) >= 85 &&
+      finiteNumber(item?.player?.overall ?? item?.player?.ovr ?? item?.player?.rating, 0) >= targetOvr - 2
+    ));
+    if (nearPeerSwap) {
+      return {
+        ok: false,
+        reason: `Mega trade buyer blocked: ${toTeamName} cannot swap a comparable star for an ${targetOvr} OVR veteran.`,
+        staleCode: "mega_buyer_near_peer_swap",
+      };
+    }
+  }
+  // Normal CPU trades may use Stepien repair; mega deals must not. Check the
+  // unchanged candidate against the actual pick ledger for BOTH teams.
+  if (getUserTradeRuleSettings(evaluationLeagueData).stepienRule !== false) {
+    const context = getOffseasonTradeContext(evaluationLeagueData);
+    for (const [teamName, outgoingItems, incomingItems] of [
+      [fromTeamName, fromItems, toItems],
+      [toTeamName, toItems, fromItems],
+    ]) {
+      const legality = cpuStepienPackageValidation(evaluationLeagueData, teamName, outgoingItems, incomingItems, context);
+      if (!legality.ok) {
+        return {
+          ok: false,
+          reason: legality.reason || `${teamName} cannot legally trade the required first-round picks.`,
+          staleCode: "mega_first_round_stepien_illegal",
+        };
+      }
+    }
+  }
   const guaranteedMegaFallback = Boolean(candidate?.debug?.guaranteedMegaFallback || candidate?.guaranteedMegaFallback);
   const sellerBlockReason = guaranteedMegaFallback
     ? ""
@@ -3372,7 +3501,7 @@ export function executeCpuMegaTradeCandidateOnLeagueLoose({
     };
   }
 
-  const targetName = fromItems.find((item) => item?.type === "player")?.player?.name || "a 90+ star";
+  const targetName = fromItems.find((item) => item?.type === "player")?.player?.name || "an 86+ veteran star";
   const evaluation = {
     accepted: true,
     decision: "accept",
@@ -3380,7 +3509,7 @@ export function executeCpuMegaTradeCandidateOnLeagueLoose({
     message: "Mega deadline deal legal check passed.",
     reasons: [
       candidate?.motive || `${toTeamName} makes a bonus deadline swing for ${targetName}.`,
-      `${fromTeamName} gets a legal mega package of players and/or draft picks.`,
+      `${fromTeamName} receives mandatory legal first-round compensation and salary-matching players.`,
       `${toTeamName} gets the best player in a title-window move.`,
     ],
   };
@@ -3422,7 +3551,7 @@ export function executeCpuMegaTradeCandidateOnLeagueLoose({
 
   const cpuTiming = getTradeTimingSnapshot(leagueData);
   const buyerReason = `${toTeamName} accepted because a contender is making a legal bonus mega-deadline swing for ${targetName}.`;
-  const sellerReason = `${fromTeamName} accepted because the team is converting a prime/older 90+ star into a legal package of salary, young value, and draft assets.`;
+  const sellerReason = `${fromTeamName} accepted because the team is converting an 86+ veteran star into salary-matching players and ${qualifyingFirsts.length} legal first-round picks.`;
   const patchedTradeRecord = {
     ...(execution.tradeRecord || {}),
     source: "cpu_cpu_trade",

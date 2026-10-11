@@ -1,5 +1,6 @@
 import {
   executeCpuMegaTradeCandidateOnLeagueLoose,
+  findLegalCpuMegaFirstPackage,
   executeCpuTradeCandidateOnLeague,
   validateCpuTradeCandidateOnLeague,
 } from "./tradeExecution.js";
@@ -57,7 +58,16 @@ const MEGA_TRADE_FIRST_DAY = 45;
 // The bonus mega trade is planned quietly during the season and executed with
 // timing variance before the deadline.  It must never become a deadline-day
 // brute-force search.
-const MEGA_TRADE_PLANNER_VERSION = 2;
+// Bump so incomplete plans from the previous 90+ rules are re-planned; completed
+// mega trades remain completed when normalizeMegaTradeState migrates the save.
+const MEGA_TRADE_PLANNER_VERSION = 4;
+const MEGA_TRADE_MIN_TARGET_OVR = 86;
+// Relative tier selection weights, applied only among eligible seller targets.
+const MEGA_TRADE_TARGET_TIERS = [
+  { key: "veteran", min: 86, max: 89, weight: 70 },
+  { key: "star", min: 90, max: 93, weight: 25 },
+  { key: "elite", min: 94, max: Infinity, weight: 5 },
+];
 const MEGA_TRADE_PLANNING_LEAD_DAYS = 28;
 const MEGA_TRADE_PLAN_RETRY_DAYS = 7;
 const MEGA_TRADE_EXECUTION_RETRY_DAYS = 3;
@@ -1608,7 +1618,7 @@ function strictMegaSellerBlockReason(leagueData = {}, context = {}, sellerTeam =
   if (targetPlayer) {
     const ovr = playerOvr(targetPlayer);
     const age = playerAge(targetPlayer);
-    if (ovr < 90) return "mega_target_below_90";
+    if (ovr < MEGA_TRADE_MIN_TARGET_OVR) return "mega_target_below_86";
     if (age < 28) return "mega_target_too_young";
     // Final intended rule: only a true rebuilding team may move a 94+ star
     // aged 30 or younger. Retooling and generic mid/bad teams protect them.
@@ -1655,32 +1665,9 @@ function isProtectedBuyerCore(player = {}, buyerTeam = {}) {
 function isProtectedMegaBuyerVeteranPartner(player = {}) {
   const age = playerAge(player);
   const ovr = playerOvr(player);
-  // Tiny mega-trade-only direction guard: a contender buying a 90+ aging star
-  // should not use another aging star as the salary headline. That keeps rare
-  // mega swings aimed at pairing stars instead of swapping old stars.
+  // Mega-only guard: a contender adding an 86+ veteran should pair stars,
+  // not swap an established aging star as its salary headline.
   return age >= 34 && ovr >= 84;
-}
-
-function activeFirstPicksForTeam(leagueData = {}, teamName = "", limit = 4) {
-  const seasonYear = getSeasonYear(leagueData, {});
-  const teamNames = getAllTeams(leagueData).map((team) => teamNameOf(team)).filter(Boolean);
-  return (Array.isArray(leagueData?.draftPicks) ? leagueData.draftPicks : [])
-    .map((pick, index) => ({ raw: pick, normalized: normalizeDraftPickAsset(pick, index, teamNames) }))
-    .filter(({ normalized }) => {
-      const owner = normalized?.ownerTeam || normalized?.currentOwnerTeamName || normalized?.owner || "";
-      const round = finiteNumber(normalized?.round, 2);
-      const year = finiteNumber(normalized?.year ?? normalized?.seasonYear, 0);
-      const status = String(normalized?.status || "active").toLowerCase();
-      return sameTeam(owner, teamName) && round === 1 && year >= seasonYear + 1 && status !== "traded" && status !== "conveyed";
-    })
-    .sort((a, b) => finiteNumber(a.normalized?.year ?? a.normalized?.seasonYear, 0) - finiteNumber(b.normalized?.year ?? b.normalized?.seasonYear, 0))
-    .slice(0, limit)
-    .map(({ raw, normalized }) => ({
-      type: "pick",
-      teamName,
-      pick: compactPickReference({ ...raw, ...normalized }),
-      protection: normalized?.protection || normalized?.protections || normalized?.displayProtection || raw?.protection || "Unprotected",
-    }));
 }
 
 function playerTradeItem(player = {}, teamName = "") {
@@ -1704,7 +1691,7 @@ function buildFastMegaTargets(leagueData = {}, context = {}, directionMap = null
     for (const player of team?.players || []) {
       const ovr = playerOvr(player);
       const age = playerAge(player);
-      if (ovr < 90 || age < 28) continue;
+      if (ovr < MEGA_TRADE_MIN_TARGET_OVR || age < 28) continue;
       if (direction.phase !== "rebuilding" && ovr >= 94 && age <= 30) continue;
       if (isYoungMegaCore(player)) continue;
       const pctPenalty = direction.pct == null ? 0.08 : Math.max(0, 0.5 - direction.pct);
@@ -1713,11 +1700,13 @@ function buildFastMegaTargets(leagueData = {}, context = {}, directionMap = null
         team,
         teamName,
         player,
+        // Within a tier, prefer older players from truly struggling teams,
+        // but do not deterministically select the highest-OVR star league-wide.
         score:
-          ovr * 10 +
+          (ovr - MEGA_TRADE_MIN_TARGET_OVR) * 1.6 +
           age * 0.8 +
-          pctPenalty * 100 +
-          Math.max(0, finiteNumber(direction.leagueRank, 16) - 12) * 3 +
+          pctPenalty * 80 +
+          Math.max(0, finiteNumber(direction.leagueRank, 16) - 12) * 1.8 +
           directionBonus,
         powerRank: direction.leagueRank,
         conferenceRank: direction.conferenceRank,
@@ -1727,7 +1716,63 @@ function buildFastMegaTargets(leagueData = {}, context = {}, directionMap = null
     }
   }
 
-  return rows.sort((a, b) => b.score - a.score).slice(0, MEGA_TRADE_FAST_MAX_TARGETS);
+  return rows.sort((a, b) => b.score - a.score);
+}
+
+// Weighted, seeded selection is applied before the fast search is capped at
+// five targets. Missing tiers are automatically excluded rather than forcing
+// an ineligible seller. This is an opportunity mix, not a fixed outcome quota.
+function selectWeightedMegaTargets(rows = [], seed = "", limit = MEGA_TRADE_FAST_MAX_TARGETS) {
+  const random = seededRandom(`${seed}|target-tier-mix-v4`);
+  const pools = MEGA_TRADE_TARGET_TIERS.map((tier) => ({
+    ...tier,
+    rows: rows.filter((row) => {
+      const ovr = playerOvr(row.player);
+      return ovr >= tier.min && ovr <= tier.max;
+    }),
+  }));
+  const selected = [];
+  while (selected.length < limit) {
+    const available = pools.filter((tier) => tier.rows.length > 0);
+    if (!available.length) break;
+    let ticket = random() * available.reduce((sum, tier) => sum + tier.weight, 0);
+    let chosen = available[available.length - 1];
+    for (const tier of available) {
+      ticket -= tier.weight;
+      if (ticket < 0) { chosen = tier; break; }
+    }
+    // Smooth score preference within the selected tier. Even with a strong
+    // seller score advantage, other eligible teams still have a real chance.
+    const bestScore = Math.max(...chosen.rows.map((row) => row.score));
+    const weights = chosen.rows.map((row) => Math.exp((row.score - bestScore) / 16));
+    let rowTicket = random() * weights.reduce((sum, value) => sum + value, 0);
+    let index = chosen.rows.length - 1;
+    for (let i = 0; i < weights.length; i += 1) {
+      rowTicket -= weights[i];
+      if (rowTicket < 0) { index = i; break; }
+    }
+    selected.push(chosen.rows.splice(index, 1)[0]);
+  }
+  return selected;
+}
+
+// A near-peer star-for-star swap doesn't accomplish the win-now goal of a
+// mega trade. Keep this restriction local to the new 86-89 veteran tier.
+function isMegaNearPeerBuyerSwap(targetOvr, salaryItems = []) {
+  return targetOvr >= 86 && targetOvr <= 89 && salaryItems.some((item) => {
+    const ovr = playerOvr(item?.player);
+    return item?.type === "player" && ovr >= 85 && ovr >= targetOvr - 2;
+  });
+}
+
+function hasUsefulMegaSellerReturn(salaryItems = []) {
+  return salaryItems.some((item) => {
+    if (item?.type !== "player") return false;
+    const player = item.player;
+    return playerOvr(player) >= 76 || (
+      playerAge(player) <= 26 && playerOvr(player) >= 70 && playerPot(player) >= 82
+    );
+  });
 }
 
 function buildFastMegaBuyers(leagueData = {}, context = {}, sellerName = "", directionMap = null) {
@@ -1755,8 +1800,7 @@ function buildFastMegaBuyers(leagueData = {}, context = {}, sellerName = "", dir
         score: (pct == null ? 0.55 : pct) * 100 + teamTopOvr(team, 6) * 2 + rankBonus,
       };
     })
-    .sort((a, b) => b.score - a.score)
-    .slice(0, MEGA_TRADE_FAST_MAX_BUYERS);
+    .sort((a, b) => b.score - a.score);
 }
 
 function buildBuyerSalaryCombos(leagueData = {}, buyerTeam = {}, targetSalary = 0) {
@@ -1828,34 +1872,49 @@ function buildFastMegaCandidates(leagueData = {}, context = {}, state = {}, opti
   const maxBuyers = clamp(Math.trunc(finiteNumber(options?.maxBuyers, MEGA_TRADE_FAST_MAX_BUYERS)), 1, MEGA_TRADE_FAST_MAX_BUYERS);
   const maxCandidates = clamp(Math.trunc(finiteNumber(options?.maxCandidates, MEGA_TRADE_FAST_MAX_CANDIDATES)), 1, MEGA_TRADE_FAST_MAX_CANDIDATES);
   const directionMap = buildMegaDirectionMap(leagueData, context);
-  const randomTargets = shuffled(buildFastMegaTargets(leagueData, context, directionMap), seed)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, maxTargets);
-  const firstPickCache = new Map();
+  const randomTargets = selectWeightedMegaTargets(
+    buildFastMegaTargets(leagueData, context, directionMap), seed, maxTargets
+  );
   const out = [];
+  const legalFirstPackageCache = new Map();
 
   for (const targetRow of randomTargets) {
+    let builtForTarget = 0;
     const targetSalary = getMegaPlayerSalary(targetRow.player, leagueData);
     const targetOvr = playerOvr(targetRow.player);
-    const buyers = buildFastMegaBuyers(leagueData, context, targetRow.teamName, directionMap).slice(0, maxBuyers);
+    // Search across contenders until enough buyers with legal firsts are found;
+    // a high-ranked team lacking Stepien capacity must not monopolize the list.
+    const buyers = buildFastMegaBuyers(leagueData, context, targetRow.teamName, directionMap);
+    let legalBuyersTried = 0;
     const sellerStandardCount = countStandardRosterPlayers(targetRow.team);
     const sellerMaxIncomingPlayers = Math.max(
       1,
       TRADE_TEMPORARY_STANDARD_ROSTER_MAX - Math.max(0, sellerStandardCount - 1)
     );
     for (const buyerRow of buyers) {
-      const pickCacheKey = normalizeTeamName(buyerRow.teamName);
-      if (!firstPickCache.has(pickCacheKey)) {
-        firstPickCache.set(pickCacheKey, activeFirstPicksForTeam(leagueData, buyerRow.teamName, 4));
-      }
-      const firstPicks = firstPickCache.get(pickCacheKey) || [];
-      if (firstPicks.length < 1) continue;
+      if (legalBuyersTried >= maxBuyers) break;
       const salaryCombos = buildBuyerSalaryCombos(leagueData, buyerRow.team, targetSalary);
+      let buyerHasLegalPackage = false;
       for (const salaryItems of salaryCombos) {
         if (salaryItems.length > sellerMaxIncomingPlayers) continue;
-        const pickNeed = targetOvr >= 94 ? Math.min(4, Math.max(2, firstPicks.length)) : Math.min(3, Math.max(1, firstPicks.length));
-        const picks = firstPicks.slice(0, pickNeed);
-        const toItems = [...salaryItems, ...picks].slice(0, 7);
+        if (isMegaNearPeerBuyerSwap(targetOvr, salaryItems)) continue;
+        // Same Stepien/ownership validation used at execution, before this team
+        // can qualify as a buyer. No second-round repair for a mega proposal.
+        const legalKey = `${normalizeTeamName(buyerRow.teamName)}|${targetOvr}|${salaryItems.length}|${hasUsefulMegaSellerReturn(salaryItems)}`;
+        if (!legalFirstPackageCache.has(legalKey)) {
+          legalFirstPackageCache.set(legalKey, findLegalCpuMegaFirstPackage({
+            leagueData,
+            buyerTeamName: buyerRow.teamName,
+            buyerPlayerItems: salaryItems,
+            sellerItems: [playerTradeItem(targetRow.player, targetRow.teamName)],
+            targetOvr,
+          }));
+        }
+        const legal = legalFirstPackageCache.get(legalKey);
+        if (!legal.ok) continue;
+        buyerHasLegalPackage = true;
+        const picks = legal.picks;
+        const toItems = [...salaryItems, ...picks];
         if (toItems.length < 2) continue;
         out.push({
           id: `fast_mega_${hashString(`${targetRow.teamName}|${buyerRow.teamName}|${playerDisplayName(targetRow.player)}|${out.length}|${seed}`).toString(16)}`,
@@ -1878,8 +1937,14 @@ function buildFastMegaCandidates(leagueData = {}, context = {}, state = {}, opti
             sellerPowerRank: targetRow.powerRank,
           },
         });
+        builtForTarget += 1;
         if (out.length >= maxCandidates) return out;
+        // Avoid the first contender/salary combination monopolizing all 12
+        // fallback slots. Preserve several independent buyer/seller options.
+        break;
       }
+      if (buyerHasLegalPackage) legalBuyersTried += 1;
+      if (builtForTarget >= 3) break;
     }
   }
 
@@ -2063,7 +2128,7 @@ function finalizePreparedMegaSuccess({
     tradeLabel: "Mega Deadline Deal",
     motive: (result?.tradeRecord?.motive || candidate?.motive || "").startsWith("Mega Deadline Deal:")
       ? (result?.tradeRecord?.motive || candidate?.motive || "")
-      : `Mega Deadline Deal: ${result?.tradeRecord?.motive || candidate?.motive || "A contender makes a title-window swing for a 90+ star."}`,
+      : `Mega Deadline Deal: ${result?.tradeRecord?.motive || candidate?.motive || "A contender makes a title-window swing for an 86+ veteran star."}`,
   };
   const finalLeagueWithRecord = replaceTradeRecordInLeague(result.leagueData, patchedTradeRecord);
   state.completedTrades = countCpuTradesForSeason(finalLeagueWithRecord, state.seasonYear);
@@ -2277,7 +2342,7 @@ export function executeImmediateCpuMegaTradeFromCandidates({
     tradeType: "cpu_mega_trade",
     motive: String(candidate?.motive || "").startsWith("Mega Deadline Deal:")
       ? candidate.motive
-      : `Mega Deadline Deal: ${candidate?.motive || "A contender makes a title-window swing for a 90+ star from a team outside the title race."}`,
+      : `Mega Deadline Deal: ${candidate?.motive || "A contender makes a title-window swing for an 86+ veteran star from a team outside the title race."}`,
     debug: {
       ...(candidate?.debug || {}),
       megaTrade: true,
@@ -2368,7 +2433,7 @@ export function executeImmediateCpuMegaTradeFromCandidates({
       tradeLabel: "Mega Deadline Deal",
       motive: (result?.tradeRecord?.motive || candidate?.motive || "").startsWith("Mega Deadline Deal:")
         ? (result?.tradeRecord?.motive || candidate?.motive || "")
-        : `Mega Deadline Deal: ${result?.tradeRecord?.motive || candidate?.motive || "A contender makes a title-window swing for a 90+ star."}`,
+        : `Mega Deadline Deal: ${result?.tradeRecord?.motive || candidate?.motive || "A contender makes a title-window swing for an 86+ veteran star."}`,
     };
     const finalLeagueWithRecord = replaceTradeRecordInLeague(result.leagueData, patchedTradeRecord);
     state.completedTrades = countCpuTradesForSeason(finalLeagueWithRecord, state.seasonYear);
