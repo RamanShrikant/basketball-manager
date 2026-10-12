@@ -1546,8 +1546,20 @@ function CompactAttributeBar({ label, value }) {
   );
 }
 
+// Independent y-axis per category. Points, rebounds and assists must never
+// share one numeric scale: a 7 APG season is meaningful even next to 30 PPG.
+function trendScaleMaximum(rawMax) {
+  const maxValue = Math.max(0, safeNumber(rawMax, 0));
+  const padded = Math.max(1, maxValue * 1.12);
+  const step = padded <= 5 ? 1 : padded <= 16 ? 2 : padded <= 40 ? 5 : 10;
+  return Math.max(step, Math.ceil(padded / step) * step);
+}
+
 function PerformanceTrendsChart({ seasons }) {
   const rows = getTrendRows(seasons);
+  const [hoveredDot, setHoveredDot] = useState(null);
+  const [pinnedDot, setPinnedDot] = useState(null);
+
   if (!rows.length) {
     return (
       <div className="grid min-h-[220px] place-items-center rounded-[18px] border border-white/[0.07] bg-black/20 px-6 text-center">
@@ -1559,135 +1571,117 @@ function PerformanceTrendsChart({ seasons }) {
     );
   }
 
+  // Keep season spacing consistent across all three independent charts.
   const width = 760;
-  const height = 220;
-  const margin = { left: 38, right: 20, top: 20, bottom: 36 };
+  const height = 128;
+  const margin = { left: 36, right: 28, top: 15, bottom: 26 };
   const plotWidth = width - margin.left - margin.right;
   const plotHeight = height - margin.top - margin.bottom;
-
-  const allValues = rows.flatMap((row) => TREND_SERIES.map((series) => Math.max(0, safeNumber(row?.[series.key], 0))));
-  const rawMax = Math.max(5, ...allValues);
-  const yMax = Math.max(5, Math.ceil(rawMax / 5) * 5);
   const xForIndex = (index) => rows.length === 1
     ? margin.left + plotWidth / 2
     : margin.left + (index / (rows.length - 1)) * plotWidth;
-  const yForValue = (value) => margin.top + (1 - clamp(safeNumber(value, 0) / yMax, 0, 1)) * plotHeight;
-  const yTicks = [0, 0.25, 0.5, 0.75, 1].map((ratio) => ({
-    value: Math.round(yMax * ratio),
-    y: margin.top + (1 - ratio) * plotHeight,
-  }));
+  const displayValue = (value) => safeNumber(value, 0).toFixed(1);
   const latest = rows[rows.length - 1];
+  const activeDot = hoveredDot || pinnedDot;
 
   return (
-    <div className="rounded-[18px] border border-white/[0.07] bg-black/20 p-3">
-      <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-4">
-          {TREND_SERIES.map((series) => (
-            <div key={series.key} className="flex items-center gap-1.5 text-[11px] font-medium text-zinc-400">
-              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: series.color }} />
-              {series.label}
-            </div>
-          ))}
-        </div>
-        <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-600">
-          {rows.length === 1 ? "1 season" : `${rows.length} seasons`}
-        </div>
+    <div className="space-y-2.5" aria-label="Separate points, rebounds and assists trends with individual scales">
+      <div className="flex items-center justify-between gap-3 px-1 text-[10px] text-zinc-500">
+        <span>Each statistic has its own per-game scale · Hover or select a season dot for the exact value</span>
+        <span className="shrink-0 uppercase tracking-[0.12em]">{rows.length} {rows.length === 1 ? "season" : "seasons"}</span>
       </div>
+      {TREND_SERIES.map((series) => {
+        const yMax = trendScaleMaximum(Math.max(...rows.map((row) => safeNumber(row?.[series.key], 0))));
+        const yForValue = (value) => margin.top + (1 - clamp(safeNumber(value, 0) / yMax, 0, 1)) * plotHeight;
+        const ticks = [0, yMax / 2, yMax];
+        const selected = activeDot?.key === series.key ? activeDot : null;
+        const selectedRow = selected && rows[selected.index];
+        const selectedX = selected ? xForIndex(selected.index) : 0;
+        const selectedY = selectedRow ? yForValue(selectedRow?.[series.key]) : 0;
+        const tooltipX = Math.max(67, Math.min(width - 67, selectedX));
+        const tooltipY = selectedRow ? (selectedY < 44 ? selectedY + 11 : selectedY - 35) : 0;
 
-      <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_118px]">
-        <div className="min-w-0">
+        return <div key={series.key} className="min-w-0 rounded-[14px] border border-white/[0.075] bg-[#0e1014] px-3 pb-2.5 pt-2.5">
+          <div className="flex items-center justify-between gap-2 px-1">
+            <div className="flex items-center gap-2">
+              <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: series.color }} />
+              <h4 className="text-[12px] font-semibold text-zinc-100">{series.label} <span className="font-normal text-zinc-500">per game</span></h4>
+            </div>
+            <div className="flex items-baseline gap-1.5">
+              <span className="text-[17px] font-bold tabular-nums" style={{ color: series.color }}>{displayValue(latest?.[series.key])}</span>
+              <span className="text-[10px] text-zinc-500">{series.shortLabel} · {formatSeasonLabel(latest?.seasonYear)}</span>
+            </div>
+          </div>
           <svg
             viewBox={`0 0 ${width} ${height}`}
-            className="h-[210px] w-full overflow-visible"
-            role="img"
-            aria-label="Player points, rebounds, and assists trend by season"
+            className="mt-1 block h-auto w-full"
+            role="group"
+            aria-label={`${series.label} per game by season; independent scale from 0 to ${yMax}`}
+            onPointerLeave={() => setHoveredDot(null)}
           >
-            {yTicks.map((tick) => (
-              <g key={tick.value}>
-                <line
-                  x1={margin.left}
-                  x2={width - margin.right}
-                  y1={tick.y}
-                  y2={tick.y}
-                  stroke="rgba(255,255,255,0.075)"
-                  strokeDasharray="3 5"
-                />
-                <text
-                  x={margin.left - 10}
-                  y={tick.y + 4}
-                  fill="rgba(161,161,170,0.78)"
-                  fontSize="10"
-                  textAnchor="end"
-                  fontFamily='Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
-                >
-                  {tick.value}
-                </text>
-              </g>
-            ))}
-
-            {TREND_SERIES.map((series) => {
-              const points = rows.map((row, index) => `${xForIndex(index)},${yForValue(row?.[series.key])}`).join(" ");
-              return (
-                <g key={series.key}>
-                  {rows.length > 1 && (
-                    <polyline
-                      fill="none"
-                      stroke={series.color}
-                      strokeWidth="2.25"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      points={points}
-                    />
-                  )}
-                  {rows.map((row, index) => (
-                    <circle
-                      key={`${series.key}-${row?.seasonYear}-${index}`}
-                      cx={xForIndex(index)}
-                      cy={yForValue(row?.[series.key])}
-                      r="3.8"
-                      fill={series.color}
-                      stroke="#0b0d10"
-                      strokeWidth="1.5"
-                    />
-                  ))}
-                </g>
-              );
+            {ticks.map((value) => {
+              const y = yForValue(value);
+              return <g key={`${series.key}-tick-${value}`}>
+                <line x1={margin.left} x2={width - margin.right} y1={y} y2={y}
+                  stroke="rgba(255,255,255,0.09)" strokeDasharray="3 5" />
+                <text x={margin.left - 10} y={y + 3.5} fill="#92939d" fontSize="10"
+                  textAnchor="end">{Number.isInteger(value) ? value : value.toFixed(1)}</text>
+              </g>;
             })}
-
+            {rows.length > 1 && <polyline
+              fill="none" stroke={series.color} strokeWidth="2.6"
+              strokeLinecap="round" strokeLinejoin="round"
+              points={rows.map((row, index) => `${xForIndex(index)},${yForValue(row?.[series.key])}`).join(" ")}
+            />}
             {rows.map((row, index) => {
-              const showLabel = rows.length <= 6 || index % 2 === 0 || index === rows.length - 1;
-              if (!showLabel) return null;
-              return (
-                <text
-                  key={`season-${row?.seasonYear}-${index}`}
-                  x={xForIndex(index)}
-                  y={height - 10}
-                  fill="rgba(161,161,170,0.82)"
-                  fontSize="10"
-                  textAnchor="middle"
-                  fontFamily='Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+              const cx = xForIndex(index);
+              const cy = yForValue(row?.[series.key]);
+              const dotId = `${series.key}:${index}`;
+              const highlighted = selected?.index === index;
+              return <g key={dotId}>
+                <circle cx={cx} cy={cy} r={highlighted ? 5.3 : 4.1}
+                  fill={series.color} stroke="#0b0d10" strokeWidth="1.5" />
+                <circle cx={cx} cy={cy} r="13" fill="transparent" stroke="none"
+                  role="button" tabIndex={0}
+                  aria-label={`${formatSeasonLabel(row?.seasonYear)}: ${displayValue(row?.[series.key])} ${series.shortLabel}; select to pin value`}
+                  style={{ cursor: "pointer", outline: "none" }}
+                  onPointerEnter={() => setHoveredDot({ key: series.key, index })}
+                  onFocus={() => setHoveredDot({ key: series.key, index })}
+                  onBlur={() => setHoveredDot(null)}
+                  onClick={() => setPinnedDot((current) => current?.key === series.key && current?.index === index ? null : { key: series.key, index })}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      setPinnedDot((current) => current?.key === series.key && current?.index === index ? null : { key: series.key, index });
+                    } else if (event.key === "Escape") {
+                      setPinnedDot(null);
+                    }
+                  }}
                 >
-                  {formatSeasonLabel(row?.seasonYear)}
-                </text>
-              );
+                  <title>{formatSeasonLabel(row?.seasonYear)} · {displayValue(row?.[series.key])} {series.shortLabel}</title>
+                </circle>
+              </g>;
             })}
+            {rows.map((row, index) => {
+              if (!(rows.length <= 6 || index % 2 === 0 || index === rows.length - 1)) return null;
+              return <text key={`${series.key}-season-${row?.seasonYear}-${index}`}
+                x={xForIndex(index)} y={height - 5} fill="#92939d" fontSize="10"
+                textAnchor="middle">{formatSeasonLabel(row?.seasonYear)}</text>;
+            })}
+            {selectedRow && <g pointerEvents="none">
+              <rect x={tooltipX - 61} y={tooltipY} width="122" height="26" rx="7"
+                fill="#17191e" stroke={series.color} strokeOpacity="0.7" />
+              <text x={tooltipX} y={tooltipY + 11} fontSize="9" fill="#c4c4cb" textAnchor="middle">
+                {formatSeasonLabel(selectedRow?.seasonYear)}
+              </text>
+              <text x={tooltipX} y={tooltipY + 22} fontSize="11" fontWeight="700"
+                fill={series.color} textAnchor="middle">
+                {displayValue(selectedRow?.[series.key])} {series.shortLabel}
+              </text>
+            </g>}
           </svg>
-        </div>
-
-        <div className="flex flex-col justify-center border-t border-white/[0.06] pt-3 lg:border-l lg:border-t-0 lg:pl-4 lg:pt-0">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-500">{formatSeasonLabel(latest?.seasonYear)}</div>
-          <div className="mt-2 space-y-2">
-            {TREND_SERIES.map((series) => (
-              <div key={series.key}>
-                <div className="text-[22px] font-semibold leading-none" style={{ color: series.color }}>
-                  {safeNumber(latest?.[series.key], 0).toFixed(1)}
-                </div>
-                <div className="mt-0.5 text-[10px] font-semibold uppercase tracking-[0.11em] text-zinc-500">{series.shortLabel}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
+        </div>;
+      })}
     </div>
   );
 }
@@ -1920,11 +1914,7 @@ export default function PlayerCardModal({
       <div aria-hidden="true" onClick={onClose} className="absolute inset-0 bg-black/58" style={{ backdropFilter: "blur(1.5px)", WebkitBackdropFilter: "blur(1.5px)" }} />
 
       <div data-bm-sfx-scope="player-card" className="pc-player-card pc29-card pc-pop pc-glow-card relative flex flex-col overflow-hidden rounded-[20px] border border-white/[0.10] bg-[#090b0e] text-white">
-        <div className="absolute inset-0 pointer-events-none">
-          <div className="absolute -left-32 -top-32 h-80 w-80 rounded-full bg-orange-500/20 blur-3xl" />
-          <div className="absolute -right-24 top-24 h-72 w-72 rounded-full bg-amber-400/10 blur-3xl" />
-          <div className="absolute bottom-0 left-1/2 h-44 w-[70%] -translate-x-1/2 bg-orange-500/5 blur-3xl" />
-        </div>
+        {/* Neutral charcoal surface: removed amber/orange atmospheric glow. */}
 
         {/* PASS 29.1: roster-style identity header with CSS-stable geometry */}
         <div className="pc29-hero">
@@ -1956,11 +1946,23 @@ export default function PlayerCardModal({
                 ["Position", `${player?.pos || "-"}${player?.secondaryPos ? ` / ${player.secondaryPos}` : ""}`],
                 ["Age", player?.age ?? "-"],
                 ["Height", formatHeight(player?.height)],
-                ["Contract", contractTypeLabel],
+                ["Contract", isTwoWayDevelopmentContract || ["two_way", "two-way"].includes(String(player?.contract?.type || "").toLowerCase()) || player?.isTwoWay === true
+                  ? "Two-Way Contract"
+                  : isNonCapDevelopmentContract
+                    ? contractTypeLabel
+                    : contractYears > 0 && contractTotalRemaining > 0
+                      ? `${contractYears}Y left · ${formatMillions(contractTotalRemaining)} remaining`
+                      : contractYears > 0
+                        ? `${contractYears}Y left · Salary unavailable`
+                        : resolvedContractType === "free_agent"
+                          ? "Free Agent"
+                          : player?.contract && typeof player.contract === "object"
+                            ? "Contract details unavailable"
+                            : "No active deal"],
               ].map(([label, value]) => (
                 <div key={label} className="pc29-meta-cell">
                   <div className="pc29-meta-label">{label}</div>
-                  <div className="pc29-meta-value">{value}</div>
+                  <div className="pc29-meta-value" title={String(value ?? "")}>{value}</div>
                 </div>
               ))}
             </div>

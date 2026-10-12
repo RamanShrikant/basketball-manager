@@ -1,7 +1,7 @@
-﻿import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
-import { getUserTradeDeadlineStatus } from "../utils/userTradeRules.js";
+import { getUserTradeCurrentDate, getUserTradeDeadlineStatus } from "../utils/userTradeRules.js";
 import { buildRecordMap, getStandardPlayers, playerHeadshotOf, playerOverall } from "../utils/teamIntel_v1.js";
 import { readScheduleFromStorage } from "../utils/scheduleStorage.js";
 import { buildCanonicalStandingLabelMap, loadRegularSeasonResultsV3FromStorage } from "../utils/canonicalStandings.js";
@@ -12,7 +12,12 @@ import PageFade from "../components/PageFade";
 import PlayerCardModal from "../components/PlayerCardModal.jsx";
 import RuntimePlayerPortrait from "../components/RuntimePlayerPortrait.jsx";
 import PlayerRatingRing from "../components/PlayerRatingRing.jsx";
+import { tradeSearchContractDisplay, tradeSearchPlayerMeta } from "../utils/tradeSearchPresentation.js";
+import { tradeSearchTuningVars } from "../config/tradeSearchLayout.js";
 import { TRADE_CONTEXT_POPUP_TUNING } from "../config/tradeContextPopupTuning.js";
+import { tradeCenterOverviewVars } from "../config/tradeCenterOverviewLayout.js";
+import { tradeCenterContractSnapshot, tradeCenterExtensionStatus } from "../utils/tradeCenterOverviewDetails.js";
+import { previewContractExtensions } from "../api/simEnginePy.js";
 import {
   readTradeDeskFeed,
   mergeTradeDeskFeedWithLeague,
@@ -493,6 +498,47 @@ function formatTradeMoney(value) {
   return `$${Math.round(amount)}`;
 }
 
+
+// UI-only row, derived entirely from the saved player and existing extension
+// preview. No trade/contract action is triggered by opening the list.
+// Display-only contract row: derived from existing saved contract data and
+// read-only extension preview. Does not create or alter any transaction.
+function TradeOverviewPlayerRow({ player, leagueData, teamName, teamLogo, section, extensionPreview, extensionLoading }) {
+  const name = player?.name || player?.player || 'Unknown player';
+  const year = getContractSeasonYear(leagueData || {});
+  const details = tradeCenterContractSnapshot(player, year);
+  const age = Number(player?.age);
+  const status = section === 'expiring'
+    ? (extensionLoading ? { label: 'Checking interest…', code: 'unknown' } : tradeCenterExtensionStatus(extensionPreview, player))
+    : null;
+  const salaryTitle = details.completeSchedule
+    ? `${formatTradeMoney(details.remainingTotal)} total remaining on recorded contract`
+    : 'Only current salary is recorded; future total is not established';
+  return <div className={`bm-tco-player-row bm-tco-player-row--${section}`}>
+    {teamLogo ? <span className="bm-tco-row-team-logo" aria-hidden="true"><img src={teamLogo} alt="" /></span> : null}
+    <div className="bm-tco-portrait"><div className="bm-tco-portrait-tune">
+      <RuntimePlayerPortrait player={player} teamName={teamName} src={playerHeadshotOf(player)} alt={name} layoutPage="trades" className="h-full w-full" fallback={<span aria-hidden="true" className="text-[10px] text-neutral-500">NBA</span>} />
+    </div></div>
+    <div className="bm-tco-player-text">
+      <div className="bm-tco-player-name" title={name}>{name}</div>
+      {Number.isFinite(age) && age > 0 && <div className="bm-tco-player-age">Age {Math.round(age)}</div>}
+      {section === 'expiring' ? (
+        <>
+          <div className="bm-tco-money" title={salaryTitle}>{details.remainingTotal != null ? `${formatTradeMoney(details.remainingTotal)} remaining` : details.currentSalary != null ? `${formatTradeMoney(details.currentSalary)} current` : 'Salary unavailable'}</div>
+          <div className={`bm-tco-interest bm-tco-interest--${status.code}`} title="An interest signal is not a signed agreement">{status.label}</div>
+        </>
+      ) : (
+        <div className="bm-tco-player-finance">
+          <span className="bm-tco-salary" title="Salary for the current contract season">{details.currentSalary != null ? formatTradeMoney(details.currentSalary) : 'Salary unavailable'}</span>
+          <span className="bm-tco-years" title={details.yearsLeft ? `${details.yearsLeft} year(s) remaining` : 'Contract term unavailable'}>{details.yearsLeft ? `· ${details.yearsLeft}Y` : '· —'}</span>
+        </div>
+      )}
+      {details.option && <span className="bm-tco-option" title={`${details.option.label} in ${details.option.year}–${details.option.year + 1} (not yet resolved)`}>{section === 'cap' ? `${details.option.short || (details.option.type === 'player' ? 'PO' : 'TO')} · ${details.option.year + 1}` : `${details.option.label} · ${details.option.year + 1}`}</span>}
+    </div>
+    <div className="bm-tco-ring"><PlayerRatingRing overall={playerOverall(player)} potential={player?.potential ?? player?.pot ?? null} size={54} strokeWidth={7} /></div>
+  </div>;
+}
+
 function getTradeCenterDeadCap(team, leagueData) {
   const teamName = team?.name || team?.teamName || "";
   const seasonYear = getContractSeasonYear(leagueData || {});
@@ -926,7 +972,12 @@ export default function Trades() {
   const [playerSearchQuery, setPlayerSearchQuery] = useState("");
   const [playerSearchOpen, setPlayerSearchOpen] = useState(false);
   const [searchPlayerCard, setSearchPlayerCard] = useState(null);
+  const [openOverview, setOpenOverview] = useState({ cap: true, expiring: true });
+  const [extensionPreview, setExtensionPreview] = useState(null);
+  const [extensionLoading, setExtensionLoading] = useState(false);
   const playerSearchRef = useRef(null);
+  const tradeOverviewPairRef = useRef(null);
+  const tradeOverviewLeftPanelRef = useRef(null);
 
   useEffect(() => {
     const refresh = () => setStoredFeed(readTradeDeskFeed());
@@ -961,6 +1012,20 @@ export default function Trades() {
       document.removeEventListener("keydown", handleKeyDown);
     };
   }, []);
+
+  useEffect(() => {
+    if (!openOverview.expiring || !leagueData || !selectedTeam?.name) return undefined;
+    let live = true;
+    setExtensionPreview(null);
+    setExtensionLoading(true);
+    // Preview only: unlike submission/CPU extension processing, this call
+    // does not execute transactions or write league state.
+    previewContractExtensions(leagueData, selectedTeam.name, getUserTradeCurrentDate(leagueData))
+      .then((result) => { if (live) setExtensionPreview(result?.ok ? result : null); })
+      .catch(() => { if (live) setExtensionPreview(null); })
+      .finally(() => { if (live) setExtensionLoading(false); });
+    return () => { live = false; };
+  }, [openOverview.expiring, leagueData, selectedTeam?.name]);
 
   const allTradeDeskRows = useMemo(() => {
     return mergeTradeDeskFeedWithLeague(storedFeed, leagueData);
@@ -1003,6 +1068,9 @@ export default function Trades() {
   const selectedStanding = standingByTeam.get(normalizeTeamName(selectedTeam?.name || selectedTeam?.teamName || ""));
   const selectedStandingLabel = standingLabel(selectedStanding);
   const expiringContracts = useMemo(() => getExpiringContractRows(selectedTeam, leagueData), [selectedTeam, leagueData]);
+  const capPlayers = useMemo(() => (Array.isArray(selectedTeam?.players) ? selectedTeam.players : [])
+    .filter((player) => currentContractSalary(player, leagueData) > 0)
+    .sort((a, b) => currentContractSalary(b, leagueData) - currentContractSalary(a, leagueData)), [selectedTeam, leagueData]);
   const capOutlook = useMemo(() => buildCapOutlook(selectedTeam, leagueData), [selectedTeam, leagueData]);
   const searchablePlayers = useMemo(
     () => collectTradeCenterSearchablePlayers(leagueData || {}, teams),
@@ -1030,6 +1098,41 @@ export default function Trades() {
   const firstPlayerSearchResult = playerSearchResults[0] || null;
   const primaryExpiringName = expiringContracts[0]?.name || expiringContracts[0]?.player || "";
 
+  // The Trade Center is a fixed-height screen. Let ONLY each opened contract
+  // list scroll: dynamically cap it to the free space below its summary tile.
+  // This is a read-only DOM measurement; it never touches league state.
+  useEffect(() => {
+    const pair = tradeOverviewPairRef.current;
+    const panel = tradeOverviewLeftPanelRef.current;
+    if (!pair || !panel) return undefined;
+    let frame = 0;
+    const measure = () => {
+      const pairBounds = pair.getBoundingClientRect();
+      const panelBounds = panel.getBoundingClientRect();
+      const summary = pair.querySelector('.bm-tco-summary');
+      const summaryHeight = summary?.getBoundingClientRect().height || 93;
+      const footerHeight = 37;
+      const bottomPadding = 28;
+      const available = Math.max(0, Math.floor(
+        panelBounds.bottom - pairBounds.top - summaryHeight - footerHeight - bottomPadding
+      ));
+      pair.style.setProperty('--bm-tco-available-height', `${available}px`);
+    };
+    const schedule = () => {
+      if (frame) window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => { frame = 0; measure(); });
+    };
+    const resizeObserver = typeof ResizeObserver === 'function' ? new ResizeObserver(schedule) : null;
+    resizeObserver?.observe(panel);
+    window.addEventListener('resize', schedule);
+    schedule();
+    return () => {
+      if (frame) window.cancelAnimationFrame(frame);
+      resizeObserver?.disconnect();
+      window.removeEventListener('resize', schedule);
+    };
+  }, [openOverview.cap, openOverview.expiring, selectedTeam?.name]);
+
   if (!selectedTeam) {
     return (
       <PageFade>
@@ -1048,7 +1151,7 @@ export default function Trades() {
 
   return (
     <PageFade>
-      <div className="bmCourtPage min-h-screen overflow-y-auto overflow-x-hidden px-4 py-3 text-white lg:px-5 lg:py-4">
+      <div className="bmCourtPage bm-trade-center-viewport min-h-0 overflow-hidden px-4 py-3 text-white lg:px-5 lg:py-4">
         <div className="mx-auto flex min-h-0 w-full max-w-none flex-col gap-3">
           <header className="trade-center-header flex shrink-0 items-center justify-between gap-5 px-1 py-1 lg:gap-6">
             <div className="flex min-w-0 items-center gap-4 lg:gap-5">
@@ -1100,11 +1203,20 @@ export default function Trades() {
               </label>
 
               {playerSearchOpen && playerSearchQuery.trim() ? (
-                <div id="trade-center-player-search-results" className="absolute right-0 top-[calc(100%+8px)] z-50 w-full overflow-hidden rounded-xl border border-white/[0.12] bg-[#0d1014] p-2 shadow-[0_22px_48px_rgba(0,0,0,0.55)]">
+                <div id="trade-center-player-search-results" className="trade-search-results-panel absolute right-0 top-[calc(100%+8px)] z-50 w-full overflow-hidden rounded-xl border border-white/[0.12] bg-[#0d1014] p-2 shadow-[0_22px_48px_rgba(0,0,0,0.55)]">
                   <div className="px-2 pb-1.5 pt-1 text-[9px] font-black uppercase tracking-[0.16em] text-neutral-500">Players</div>
                   {playerSearchResults.length ? playerSearchResults.map((result) => {
                     const name = playerSearchNameOf(result.player);
                     const headshot = playerHeadshotOf(result.player);
+                    const isFreeAgent = result.teamName === "Free Agent";
+                    const contract = tradeSearchContractDisplay(result.player, leagueData, isFreeAgent);
+                    const overall = playerOverall(result.player);
+                    const potential = result.player?.potential ?? result.player?.pot ?? null;
+                    // Same source strings as before; split only to allow each
+                    // visible field independent X/Y/Scale tuning.
+                    const [positionText, ageText] = tradeSearchPlayerMeta(result.player).split(" · ");
+                    const [contractYearsText, ...contractValueParts] = contract.summary.split(" · ");
+                    const contractValueText = contractValueParts.join(" · ");
                     return (
                       <button
                         key={`${result.teamName}-${result.player?.id ?? result.player?.playerId ?? name}`}
@@ -1113,18 +1225,34 @@ export default function Trades() {
                           setSearchPlayerCard(result);
                           setPlayerSearchOpen(false);
                         }}
-                        className="flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left transition hover:bg-white/[0.06]"
+                        className="trade-search-player-row flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left transition hover:bg-white/[0.06]"
+                        style={tradeSearchTuningVars()}
+                        aria-label={`${name}, ${tradeSearchPlayerMeta(result.player)}, ${contract.full.replace(/\n/g, ", ")}`}
                       >
-                        <span className="flex h-10 w-10 shrink-0 items-end justify-center overflow-hidden rounded-lg border border-white/[0.08] bg-[#171b21]">
-                          {headshot ? <img src={headshot} alt="" className="h-full w-full object-cover object-top" /> : <span className="pb-2 text-sm font-black text-neutral-500">{name.slice(0, 1)}</span>}
+                        {!isFreeAgent && result.teamLogo ? (
+                          <span className="trade-search-team-logo-bg" aria-hidden="true"><img src={result.teamLogo} alt="" /></span>
+                        ) : null}
+                        <span className="trade-search-headshot flex h-10 w-10 shrink-0 items-end justify-center overflow-hidden">
+                          {headshot ? <img src={headshot} alt="" className="h-full w-full object-contain object-bottom" /> : <span className="pb-2 text-sm font-black text-neutral-500">{name.slice(0, 1)}</span>}
                         </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate text-[12px] font-black text-white">{name}</span>
-                          <span className="mt-0.5 block truncate text-[10px] font-semibold text-neutral-500">
-                            {result.player?.pos || result.player?.position || "—"}{result.teamName ? ` • ${result.teamName}` : ""}
+                        <span className="trade-search-player-copy min-w-0 flex-1">
+                          <span className="trade-search-player-name block truncate text-[12px] font-black text-white">{name}</span>
+                          <span className="trade-search-player-meta block truncate text-[10px] font-semibold text-neutral-300">
+                            <span className="trade-search-meta-position">{positionText}</span>
+                            <span className="trade-search-meta-separator" aria-hidden="true"> · </span>
+                            <span className="trade-search-meta-age">{ageText || "Age —"}</span>
+                            <span className="trade-search-meta-separator" aria-hidden="true"> · </span>
+                            <span className="trade-search-meta-contract-years">{contractYearsText}</span>
+                            {contractValueText ? <>
+                              <span className="trade-search-meta-separator" aria-hidden="true"> · </span>
+                              <span className="trade-search-meta-contract-value">{contractValueText}</span>
+                            </> : null}
                           </span>
+                          <span className="trade-search-contract-average" title={contract.full}>{contract.average}</span>
                         </span>
-                        <span className="shrink-0 rounded-lg border border-orange-400/20 bg-orange-500/10 px-2 py-1 text-[11px] font-black text-orange-200">{playerOverall(result.player)}</span>
+                        <span className="trade-search-rating-shell shrink-0" title={`OVR ${overall} · POT ${potential ?? "unknown"}`}>
+                          <PlayerRatingRing overall={overall} potential={potential} size={48} strokeWidth={7} className="trade-search-rating" />
+                        </span>
                       </button>
                     );
                   }) : (
@@ -1136,7 +1264,7 @@ export default function Trades() {
           </header>
 
           <div className="trade-center-grid grid min-h-0 gap-3 lg:grid-cols-[1fr_0.82fr]">
-            <section className="trade-center-panel flex min-h-0 flex-col overflow-hidden rounded-[20px] border border-white/[0.08] bg-[#0b0d10] shadow-[0_22px_56px_rgba(0,0,0,0.30)]">
+            <section ref={tradeOverviewLeftPanelRef} className="trade-center-panel flex min-h-0 flex-col overflow-hidden rounded-[20px] border border-white/[0.08] bg-[#0b0d10] shadow-[0_22px_56px_rgba(0,0,0,0.30)]">
               <div className="flex min-h-0 flex-1 flex-col p-4 lg:p-5">
                 <div className="flex items-center gap-3">
                   <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-orange-400/20 bg-orange-500/10 text-orange-400">
@@ -1150,43 +1278,34 @@ export default function Trades() {
 
                 <div className="mt-3 grid grid-cols-2 gap-2.5">
                   <button
-                    type="button"
-                    onClick={() => navigate("/salary-table")}
-                    className="group flex min-w-0 cursor-pointer items-center gap-3 rounded-xl border border-white/[0.09] bg-[#171b21] px-3.5 py-3.5 text-left shadow-[0_10px_22px_rgba(0,0,0,0.16),inset_0_1px_0_rgba(255,255,255,0.03)] transition hover:-translate-y-px hover:border-orange-400/35 hover:bg-[#1b2027] hover:shadow-[0_14px_28px_rgba(0,0,0,0.22),inset_0_1px_0_rgba(255,255,255,0.04)]"
+                    onClick={() => !tradeWindowLocked && navigate("/propose-trade")}
+                    disabled={tradeWindowLocked}
+                    className="group flex min-w-0 items-center justify-between rounded-xl bg-gradient-to-r from-orange-600 to-orange-500 px-4 py-3.5 text-left text-white shadow-[0_16px_36px_rgba(234,88,12,0.18)] transition hover:-translate-y-0.5 hover:from-orange-500 hover:to-orange-400 disabled:cursor-not-allowed disabled:from-neutral-800 disabled:to-neutral-800 disabled:text-neutral-500 disabled:shadow-none disabled:hover:translate-y-0"
                   >
-                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-orange-400/15 bg-orange-500/[0.08] text-orange-300">
-                      <span className="text-lg">◉</span>
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="text-[11px] font-bold text-neutral-300">Cap Outlook</div>
-                      <div className="mt-0.5 truncate text-[17px] font-black text-white">{capOutlook.primary}</div>
-                      <div className="mt-0.5 flex items-center justify-between gap-2 text-[10px] font-semibold text-neutral-500">
-                        <span className="truncate">{capOutlook.secondary}</span>
-                        <span className="shrink-0 text-orange-300/75">Salary Table</span>
-                      </div>
-                    </div>
-                    <span className="text-neutral-600 transition group-hover:translate-x-0.5 group-hover:text-orange-300">›</span>
+                    <span className="flex min-w-0 items-center gap-3">
+                      <span className="text-[24px] leading-none">↔</span>
+                      <span className="min-w-0">
+                        <span className="block truncate text-[14px] font-black">{hasSavedProposal ? "Resume Proposal" : "Propose Trade"}</span>
+                        <span className="mt-0.5 block truncate text-[10px] font-semibold text-orange-50/85">
+                          {hasSavedProposal ? `${pluralize(userItems, "asset")} from you • ${pluralize(cpuItems, "asset")} from them` : "Build and send a trade proposal."}
+                        </span>
+                      </span>
+                    </span>
+                    <span className="text-xl transition group-hover:translate-x-0.5">›</span>
                   </button>
 
-                  <button
-                    type="button"
-                    onClick={() => navigate("/contract-extensions")}
-                    className="group flex min-w-0 cursor-pointer items-center gap-3 rounded-xl border border-white/[0.09] bg-[#171b21] px-3.5 py-3.5 text-left shadow-[0_10px_22px_rgba(0,0,0,0.16),inset_0_1px_0_rgba(255,255,255,0.03)] transition hover:-translate-y-px hover:border-orange-400/35 hover:bg-[#1b2027] hover:shadow-[0_14px_28px_rgba(0,0,0,0.22),inset_0_1px_0_rgba(255,255,255,0.04)]"
-                  >
-                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-orange-400/15 bg-orange-500/[0.08] text-orange-300">
-                      <span className="text-lg">▤</span>
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="text-[11px] font-bold text-neutral-300">Expiring Contracts</div>
-                      <div className="mt-0.5 text-[17px] font-black text-white">{pluralize(expiringContracts.length, "player")}</div>
-                      <div className="mt-0.5 flex items-center justify-between gap-2 text-[10px] font-semibold text-neutral-500">
-                        <span className="truncate">{primaryExpiringName ? `${primaryExpiringName}${expiringContracts.length > 1 ? ` + ${expiringContracts.length - 1} more` : ""}` : "No standard contracts expiring"}</span>
-                        <span className="shrink-0 text-orange-300/75">Contracts</span>
-                      </div>
-                    </div>
-                    <span className="text-neutral-600 transition group-hover:translate-x-0.5 group-hover:text-orange-300">›</span>
+                  <button onClick={() => !tradeWindowLocked && navigate("/trade-finder")} disabled={tradeWindowLocked} className="group flex min-w-0 items-center justify-between rounded-xl border border-orange-400/20 bg-[#111318] px-4 py-3.5 text-left text-white transition hover:-translate-y-0.5 hover:border-orange-300/45 hover:bg-orange-500/[0.08] disabled:cursor-not-allowed disabled:border-white/10 disabled:text-neutral-600 disabled:hover:translate-y-0">
+                    <span className="flex min-w-0 items-center gap-3">
+                      <TradeSearchIcon className="h-6 w-6 shrink-0 text-orange-400" />
+                      <span className="min-w-0">
+                        <span className="block text-[14px] font-black">Trade Finder</span>
+                        <span className="mt-0.5 block truncate text-[10px] font-semibold text-neutral-400">Find matches and trade ideas.</span>
+                      </span>
+                    </span>
+                    <span className="text-xl transition group-hover:translate-x-0.5">›</span>
                   </button>
                 </div>
+                {tradeWindowLocked && <div className="mt-2.5 rounded-xl border border-orange-400/25 bg-orange-500/10 px-4 py-2.5 text-[11px] font-black text-orange-100">{tradeLockMessage}</div>}
 
                 <div className="mt-3 rounded-[16px] bg-[#101217] p-3.5 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.055)]">
                   <div className="flex items-center gap-2.5">
@@ -1233,37 +1352,50 @@ export default function Trades() {
                   </div>
                 </div>
 
-                {tradeWindowLocked && <div className="mt-2.5 rounded-xl border border-orange-400/25 bg-orange-500/10 px-4 py-2.5 text-[11px] font-black text-orange-100">{tradeLockMessage}</div>}
-
-                <div className="mt-3 grid grid-cols-2 gap-2.5">
-                  <button
-                    onClick={() => !tradeWindowLocked && navigate("/propose-trade")}
-                    disabled={tradeWindowLocked}
-                    className="group flex min-w-0 items-center justify-between rounded-xl bg-gradient-to-r from-orange-600 to-orange-500 px-4 py-3.5 text-left text-white shadow-[0_16px_36px_rgba(234,88,12,0.18)] transition hover:-translate-y-0.5 hover:from-orange-500 hover:to-orange-400 disabled:cursor-not-allowed disabled:from-neutral-800 disabled:to-neutral-800 disabled:text-neutral-500 disabled:shadow-none disabled:hover:translate-y-0"
-                  >
-                    <span className="flex min-w-0 items-center gap-3">
-                      <span className="text-[24px] leading-none">↔</span>
-                      <span className="min-w-0">
-                        <span className="block truncate text-[14px] font-black">{hasSavedProposal ? "Resume Proposal" : "Propose Trade"}</span>
-                        <span className="mt-0.5 block truncate text-[10px] font-semibold text-orange-50/85">
-                          {hasSavedProposal ? `${pluralize(userItems, "asset")} from you • ${pluralize(cpuItems, "asset")} from them` : "Build and send a trade proposal."}
-                        </span>
+                <div ref={tradeOverviewPairRef} className="mt-3 grid grid-cols-2 items-start gap-2.5 bm-tco-pair">
+                  <div className={`bm-tco-column${openOverview.cap ? ' is-open' : ''}`} style={tradeCenterOverviewVars('cap')}>
+                    <button type="button" aria-expanded={openOverview.cap} aria-controls="bm-tco-cap-list"
+                      onClick={() => setOpenOverview((prev) => ({ ...prev, cap: !prev.cap }))}
+                      className="bm-tco-summary group flex min-w-0 w-full cursor-pointer items-center gap-3 border border-white/[0.09] bg-[#171b21] px-3.5 py-3.5 text-left transition hover:border-orange-400/35 hover:bg-[#1b2027]">
+                      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-orange-400/15 bg-orange-500/[0.08] text-orange-300 text-lg">◉</span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-[11px] font-bold text-neutral-300">Cap Outlook</span>
+                        <span className="mt-0.5 block truncate text-[17px] font-black text-white">{capOutlook.primary}</span>
+                        <span className="mt-0.5 block truncate text-[10px] font-semibold text-neutral-500">{capOutlook.secondary}</span>
                       </span>
-                    </span>
-                    <span className="text-xl transition group-hover:translate-x-0.5">›</span>
-                  </button>
+                      <span className="bm-tco-chevron" aria-hidden="true">⌄</span>
+                    </button>
+                    {openOverview.cap && <div id="bm-tco-cap-list" className="bm-tco-connected">
+                      <div className="bm-tco-scroll" tabIndex={0} aria-label="Team salary contracts, scrollable">
+                        {capPlayers.length ? capPlayers.map((player, index) => <TradeOverviewPlayerRow key={player?.id || `${player?.name}_${index}`} player={player} leagueData={leagueData} teamName={selectedTeam.name} teamLogo={teamLogoOf(selectedTeam)} section="cap" />)
+                          : <div className="bm-tco-empty">No recorded roster salaries.</div>}
+                      </div>
+                      <button type="button" className="bm-tco-footer-link" onClick={() => navigate('/salary-table')}>Open Salary Table <span aria-hidden="true">↗</span></button>
+                    </div>}
+                  </div>
 
-                  <button onClick={() => !tradeWindowLocked && navigate("/trade-finder")} disabled={tradeWindowLocked} className="group flex min-w-0 items-center justify-between rounded-xl border border-orange-400/20 bg-[#111318] px-4 py-3.5 text-left text-white transition hover:-translate-y-0.5 hover:border-orange-300/45 hover:bg-orange-500/[0.08] disabled:cursor-not-allowed disabled:border-white/10 disabled:text-neutral-600 disabled:hover:translate-y-0">
-                    <span className="flex min-w-0 items-center gap-3">
-                      <TradeSearchIcon className="h-6 w-6 shrink-0 text-orange-400" />
-                      <span className="min-w-0">
-                        <span className="block text-[14px] font-black">Trade Finder</span>
-                        <span className="mt-0.5 block truncate text-[10px] font-semibold text-neutral-400">Find matches and trade ideas.</span>
+                  <div className={`bm-tco-column${openOverview.expiring ? ' is-open' : ''}`} style={tradeCenterOverviewVars('expiring')}>
+                    <button type="button" aria-expanded={openOverview.expiring} aria-controls="bm-tco-expiring-list"
+                      onClick={() => setOpenOverview((prev) => ({ ...prev, expiring: !prev.expiring }))}
+                      className="bm-tco-summary group flex min-w-0 w-full cursor-pointer items-center gap-3 border border-white/[0.09] bg-[#171b21] px-3.5 py-3.5 text-left transition hover:border-orange-400/35 hover:bg-[#1b2027]">
+                      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-orange-400/15 bg-orange-500/[0.08] text-orange-300 text-lg">▤</span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-[11px] font-bold text-neutral-300">Expiring Contracts</span>
+                        <span className="mt-0.5 block text-[17px] font-black text-white">{pluralize(expiringContracts.length, 'player')}</span>
+                        <span className="mt-0.5 block truncate text-[10px] font-semibold text-neutral-500">{primaryExpiringName ? `${primaryExpiringName}${expiringContracts.length > 1 ? ` + ${expiringContracts.length - 1} more` : ''}` : 'No standard contracts expiring'}</span>
                       </span>
-                    </span>
-                    <span className="text-xl transition group-hover:translate-x-0.5">›</span>
-                  </button>
+                      <span className="bm-tco-chevron" aria-hidden="true">⌄</span>
+                    </button>
+                    {openOverview.expiring && <div id="bm-tco-expiring-list" className="bm-tco-connected">
+                      <div className="bm-tco-scroll" tabIndex={0} aria-label="Expiring players and extension interest, scrollable">
+                        {expiringContracts.length ? expiringContracts.map((player, index) => <TradeOverviewPlayerRow key={player?.id || `${player?.name}_${index}`} player={player} leagueData={leagueData} teamName={selectedTeam.name} teamLogo={teamLogoOf(selectedTeam)} section="expiring" extensionPreview={extensionPreview} extensionLoading={extensionLoading} />)
+                          : <div className="bm-tco-empty">No standard player contracts expiring this season.</div>}
+                      </div>
+                      <button type="button" className="bm-tco-footer-link" onClick={() => navigate('/contract-extensions')}>Open Contract Extensions <span aria-hidden="true">↗</span></button>
+                    </div>}
+                  </div>
                 </div>
+
               </div>
             </section>
 

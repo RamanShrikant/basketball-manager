@@ -57,3 +57,1040 @@
 .trade-context-modal-scroll {
   overflow-x: hidden;
 }
+
+/* TRADE CENTER PLAYER SEARCH — scoped visual polish, no changes to search
+   data, player-card navigation, or player contracts. Keep 56px result height. */
+.trade-search-results-panel .trade-search-player-row {
+  position: relative;
+  isolation: isolate;
+  box-sizing: border-box;
+  height: 56px;
+  min-height: 56px;
+  width: 100%;
+  padding: 7px 9px;
+  gap: 10px;
+  overflow: hidden;
+  border: 1px solid rgba(203, 203, 203, .20);
+  border-radius: 9px;
+  background: linear-gradient(110deg, rgba(32, 33, 36, .80), rgba(19, 21, 25, .86));
+  transition: border-color .15s ease, background-color .15s ease;
+}
+/* Deliberate small gaps: six distinct cards, not one continuous list. */
+.trade-search-results-panel .trade-search-player-row + .trade-search-player-row {
+  margin-top: 4px;
+}
+.trade-search-results-panel .trade-search-player-row:hover,
+.trade-search-results-panel .trade-search-player-row:focus-visible {
+  border-color: rgba(251,146,60,.55);
+  background-color: rgba(249,115,22,.05);
+}
+.trade-search-player-row > :not(.trade-search-team-logo-bg) {
+  position: relative;
+  z-index: 1;
+}
+/* Entire watermark lies INSIDE the rounded row and never receives clicks. */
+.trade-search-team-logo-bg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  pointer-events: none;
+  overflow: hidden;
+  border-radius: inherit;
+}
+.trade-search-team-logo-bg img {
+  display: block;
+  flex: none;
+  height: 94px;
+  width: 120px;
+  max-width: none;
+  max-height: none;
+  object-fit: contain;
+  opacity: var(--bm-trade-search-logo-opacity, .10);
+  transform: var(--bm-trade-search-logo-tune, none);
+  transform-origin: center;
+  filter: saturate(.85);
+}
+/* Do not crop ESPN sources horizontally. Widen the transparent portrait
+   viewport without increasing the outer result-row height. */
+.trade-search-results-panel .trade-search-headshot {
+  width: 49px;
+  height: 40px;
+  flex: 0 0 49px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
+  transform: var(--bm-trade-search-headshot-tune, translateY(6px));
+  transform-origin: center bottom;
+}
+.trade-search-results-panel .trade-search-headshot img {
+  display: block;
+  height: 100%;
+  width: 100%;
+  object-fit: contain;
+  object-position: center bottom;
+}
+.trade-search-results-panel .trade-search-player-copy {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 2px;
+  justify-content: center;
+}
+.trade-search-player-name {
+  line-height: 1.05;
+  transform: var(--bm-trade-search-name-tune, none);
+  transform-origin: left center;
+}
+.trade-search-player-meta {
+  line-height: 1.1;
+  white-space: nowrap;
+}
+/* Independent metadata controls: keep natural inline spacing, the original
+   compact layout, and the row's fixed height. The separator stays untuned. */
+.trade-search-meta-position,
+.trade-search-meta-age,
+.trade-search-meta-contract-years,
+.trade-search-meta-contract-value {
+  display: inline-block;
+  white-space: nowrap;
+  transform-origin: left center;
+}
+.trade-search-meta-position { transform: var(--bm-trade-search-position-tune, none); }
+.trade-search-meta-age { transform: var(--bm-trade-search-age-tune, none); }
+.trade-search-meta-contract-years { transform: var(--bm-trade-search-contract-years-tune, none); }
+.trade-search-meta-contract-value { transform: var(--bm-trade-search-contract-value-tune, none); }
+/* Only average scheduled annual pay is highlighted; no wide salary ticker. */
+.trade-search-contract-average {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  font-weight: 850;
+  line-height: 1.2;
+  color: #ffb454;
+  transform: var(--bm-trade-search-average-tune, none);
+  transform-origin: left center;
+}
+.trade-search-rating-shell {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  margin-left: auto;
+}
+.trade-search-rating { transform: scale(.82); transform-origin: center; }
+
+/* The previous 6px portrait drop is now the default in tradeSearchLayout.js.
+   No second transform override: editing headshot.x/y/scale changes all axes. */
+
+/* ================================================================
+   TRADE CENTER OVERVIEW EXPANDERS — page-local styling / no trade logic
+   Two summary tiles retain their dimensions; each detail panel connects
+   immediately beneath its own tile, with independent vertical scrolling.
+   ================================================================ */
+.bm-tco-pair { isolation: isolate; }
+.bm-tco-column { min-width: 0; }
+.bm-tco-summary {
+  border-radius: 12px;
+  min-height: 93px;
+  box-shadow: 0 10px 22px rgba(0,0,0,.16), inset 0 1px 0 rgba(255,255,255,.03);
+}
+.bm-tco-column.is-open .bm-tco-summary {
+  border-radius: 12px 12px 0 0;
+  border-bottom-color: rgba(255,255,255,.065);
+  box-shadow: none;
+}
+.bm-tco-chevron {
+  display: grid;
+  place-items: center;
+  flex: 0 0 25px;
+  height: 25px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: #bdbdbd;
+  font-size: 20px;
+  line-height: 1;
+  transition: transform .22s ease, color .22s ease;
+  /* Chevron points RIGHT while closed and DOWN when open. */
+  transform: rotate(-90deg);
+}
+.bm-tco-column.is-open .bm-tco-chevron { transform: rotate(0deg); color: #fb923c; }
+.bm-tco-summary:hover .bm-tco-chevron,
+.bm-tco-summary:focus-visible .bm-tco-chevron { color: #fb923c; }
+.bm-tco-connected {
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,.09);
+  border-top: 0;
+  border-radius: 0 0 12px 12px;
+  background: #101216;
+  box-shadow: 0 14px 30px rgba(0,0,0,.18);
+}
+.bm-tco-scroll {
+  box-sizing: border-box;
+  min-height: 0;
+  max-height: min(var(--bm-tco-max-height, 272px), var(--bm-tco-available-height, 272px));
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  overflow-x: hidden;
+  padding: 7px;
+  scrollbar-color: #f97316 #1d1d1d;
+  scrollbar-width: thin;
+}
+.bm-tco-scroll:focus-visible { outline: 1px solid rgba(251,146,60,.65); outline-offset: -2px; }
+.bm-tco-scroll::-webkit-scrollbar { width: 7px; }
+.bm-tco-scroll::-webkit-scrollbar-track { background: #1d1d1d; border-radius: 20px; }
+.bm-tco-scroll::-webkit-scrollbar-thumb { background: #f97316; border: 1px solid #1d1d1d; border-radius: 20px; }
+.bm-tco-scroll::-webkit-scrollbar-thumb:hover { background: #fb923c; }
+.bm-tco-player-row {
+  container-type: inline-size;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  position: relative;
+  min-width: 0;
+  min-height: 75px;
+  padding: 7px;
+  margin-bottom: 6px;
+  border: 1px solid rgba(255,255,255,.085);
+  border-radius: 9px;
+  background: #1b1d21;
+  overflow: hidden;
+}
+.bm-tco-player-row:last-child { margin-bottom: 0; }
+.bm-tco-portrait {
+  flex: 0 0 42px;
+  width: 42px;
+  height: 56px;
+  overflow: hidden;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+.bm-tco-portrait-tune {
+  width: 44px;
+  height: 56px;
+  flex: 0 0 44px;
+  transform: var(--bm-tco-headshot-tune, none);
+  transform-origin: bottom center;
+}
+.bm-tco-portrait-tune img { object-fit: contain; object-position: center bottom; }
+.bm-tco-ring {
+  flex: 0 0 37px;
+  width: 37px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transform: var(--bm-tco-ring-tune, none);
+  transform-origin: center;
+}
+.bm-tco-ring > div { transform: scale(.75); transform-origin: center; }
+.bm-tco-player-text { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
+.bm-tco-player-name {
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1.2;
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transform: var(--bm-tco-name-tune, none);
+  transform-origin: left center;
+}
+.bm-tco-player-age {
+  font-size: 10px;
+  line-height: 1.3;
+  color: #a5a5a5;
+  font-weight: 650;
+  transform: var(--bm-tco-age-tune, none);
+  transform-origin: left center;
+}
+.bm-tco-player-finance { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
+.bm-tco-salary, .bm-tco-money {
+  font-size: 11px;
+  font-weight: 800;
+  color: #ffad56;
+  white-space: nowrap;
+  transform: var(--bm-tco-salary-tune, none);
+  transform-origin: left center;
+}
+.bm-tco-money { transform: var(--bm-tco-money-tune, none); }
+.bm-tco-years {
+  font-size: 10px;
+  font-weight: 650;
+  color: #cecece;
+  transform: var(--bm-tco-years-tune, none);
+  transform-origin: left center;
+}
+.bm-tco-option {
+  max-width: 100%;
+  font-size: 9px;
+  line-height: 1.2;
+  color: #e3c1a0;
+  font-weight: 800;
+  white-space: nowrap;
+  transform: var(--bm-tco-option-tune, none);
+  transform-origin: left center;
+}
+.bm-tco-interest {
+  font-size: 9px;
+  color: #aaa;
+  font-weight: 700;
+  line-height: 1.25;
+  transform: var(--bm-tco-interest-tune, none);
+  transform-origin: left center;
+}
+.bm-tco-interest--open { color: #63dda7; }
+.bm-tco-interest--declined { color: #f3a18c; }
+.bm-tco-footer-link {
+  width: 100%;
+  padding: 10px;
+  color: #f4a261;
+  background: #121417;
+  border-top: 1px solid rgba(255,255,255,.08);
+  font-size: 10px;
+  font-weight: 850;
+  text-align: center;
+  transition: background .2s ease, color .2s ease;
+}
+.bm-tco-footer-link:hover { color: #fff; background: #24201b; }
+.bm-tco-empty { color: #999; font-size: 11px; line-height: 1.4; padding: 20px 8px; text-align: center; }
+@media (max-width: 1120px) {
+  .bm-tco-player-row { gap: 4px; padding: 5px; }
+  .bm-tco-summary { gap: 6px; padding-left: 8px; padding-right: 8px; }
+  .bm-tco-chevron { flex-basis: 22px; height: 22px; }
+  .bm-tco-ring { flex-basis: 32px; width: 32px; }
+  .bm-tco-ring > div { transform: scale(.66); }
+  .bm-tco-portrait { flex-basis: 34px; width: 34px; }
+}
+@media (prefers-reduced-motion: reduce) { .bm-tco-chevron { transition: none; } }
+
+/* TRADE-CENTER VIEWPORT LOCK: historical index.css forces the left column's
+   whole content container to overflow-y:auto !important. Override it only on
+   this route so expanding Cap/Expiring never creates a second/page scrollbar.
+   The dedicated .bm-tco-scroll regions above remain scrollable. */
+html[data-bm-route="trades"],
+body[data-bm-route="trades"] {
+  overflow-y: hidden !important;
+}
+body[data-bm-route="trades"] .bmCourtPage.bm-trade-center-viewport {
+  box-sizing: border-box;
+  height: 100dvh !important;
+  max-height: 100dvh !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+}
+body[data-bm-route="trades"] .bm-trade-center-viewport .trade-center-panel:first-child > div:first-child {
+  overflow-y: hidden !important;
+  overflow-x: hidden !important;
+}
+body[data-bm-route="trades"] .bm-trade-center-viewport .trade-center-grid {
+  min-height: 0 !important;
+}
+body[data-bm-route="trades"] .bm-trade-center-viewport .bm-tco-column {
+  min-height: 0;
+}
+
+
+/* ========================================================================
+   TRADE CENTER: BLACK/CHECKERED EXPANDED PLAYER PILLS (UI ONLY)
+   Does not modify summary contents, scroll-lock logic, contract amounts,
+   extension preview or the PlayerRatingRing component.
+   ======================================================================== */
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-summary {
+  background: #101010 !important;
+  border-color: #333 !important;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.035);
+}
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-summary:hover {
+  background: #171717 !important;
+  border-color: rgba(249,115,22,.38) !important;
+}
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-connected {
+  background: #0c0c0c;
+  border-color: #303030;
+}
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-scroll {
+  background: #0c0c0c;
+}
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-footer-link {
+  background: #101010;
+}
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-player-row {
+  display: grid;
+  grid-template-columns: 68px minmax(0, 1fr) 60px;
+  align-items: center;
+  gap: 6px;
+  position: relative;
+  isolation: isolate;
+  min-width: 0;
+  min-height: 92px;
+  padding: 6px 9px 0 3px;
+  border: var(--bm-tco-card-border-width, 1px) solid #3b3b3b;
+  border-radius: var(--bm-tco-card-radius, 12px);
+  background-color: #1c1c1c;
+  /* Same checkerboard/pattern stack used by League Intel player pills. */
+  background-image:
+    url("../assets/basketball-pattern.svg"),
+    repeating-linear-gradient(45deg, transparent 0 23px, rgba(210,210,210,.065) 23px 24px, transparent 24px 47px),
+    repeating-linear-gradient(-45deg, transparent 0 23px, rgba(210,210,210,.055) 23px 24px, transparent 24px 47px),
+    linear-gradient(125deg, #232323, #141414);
+  background-size: cover, auto, auto, auto;
+  overflow: hidden;
+}
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-row-team-logo {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  pointer-events: none;
+  z-index: 0;
+}
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-row-team-logo img {
+  display: block;
+  width: min(33%, 105px);
+  height: 88%;
+  object-fit: contain;
+  opacity: var(--bm-tco-logo-opacity, .09);
+  transform: var(--bm-tco-logo-tune, none);
+  transform-origin: center;
+}
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-player-row > :not(.bm-tco-row-team-logo) {
+  position: relative;
+  z-index: 1;
+}
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-portrait {
+  align-self: end;
+  width: 68px;
+  height: 83px;
+  flex: initial;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-portrait-tune {
+  width: 68px;
+  height: 83px;
+  flex: 0 0 68px;
+  transform: var(--bm-tco-headshot-tune, none);
+  transform-origin: bottom center;
+}
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-portrait-tune img {
+  object-fit: contain;
+  object-position: bottom center;
+}
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-player-text {
+  min-width: 0;
+  flex: initial;
+  gap: 3px;
+  padding: 4px 0 6px;
+}
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-player-name {
+  font-size: 12px;
+  line-height: 1.2;
+  font-weight: 900;
+  color: #f4f4f4;
+  max-width: 100%;
+  text-overflow: ellipsis;
+}
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-player-age {
+  color: #c0c0c0;
+  font-size: 10px;
+  line-height: 1.25;
+}
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-player-finance {
+  gap: 4px 7px;
+}
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-salary,
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-money {
+  color: #ffa64b;
+  font-size: 11px;
+}
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-years {
+  color: #e0e0e0;
+  font-size: 10px;
+}
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-option {
+  max-width: 100%;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 9px;
+}
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-ring {
+  display: flex;
+  flex: initial;
+  align-self: center;
+  justify-self: end;
+  width: 58px;
+  height: 58px;
+  margin: 0;
+  align-items: center;
+  justify-content: center;
+  transform: var(--bm-tco-ring-tune, none);
+  transform-origin: center;
+}
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-ring > div {
+  transform: scale(.90);
+  transform-origin: center;
+}
+@media (max-width: 1120px) {
+  .bm-trade-center-viewport .bm-tco-pair .bm-tco-player-row {
+    grid-template-columns: 54px minmax(0, 1fr) 48px;
+    gap: 4px;
+    min-height: 80px;
+    padding: 4px 6px 0 2px;
+  }
+  .bm-trade-center-viewport .bm-tco-pair .bm-tco-portrait {
+    width: 54px;
+    height: 72px;
+  }
+  .bm-trade-center-viewport .bm-tco-pair .bm-tco-portrait-tune {
+    width: 54px;
+    height: 72px;
+    flex-basis: 54px;
+  }
+  .bm-trade-center-viewport .bm-tco-pair .bm-tco-ring {
+    width: 46px;
+    height: 46px;
+  }
+  .bm-trade-center-viewport .bm-tco-pair .bm-tco-ring > div {
+    transform: scale(.73);
+  }
+  .bm-trade-center-viewport .bm-tco-pair .bm-tco-player-name {
+    font-size: 11px;
+  }
+  .bm-trade-center-viewport .bm-tco-pair .bm-tco-row-team-logo img {
+    width: min(31%, 85px);
+  }
+}
+
+/* ======================================================================
+   TRADE CENTER: PORTRAIT / RING SPACING AND PAGE-MATCHED PILL TEXTURE
+   Replaces the previous BLACK/CHECKERED section; no gameplay changes.
+   ====================================================================== */
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-summary {
+  background: #101010 !important;
+  border-color: #333 !important;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.035);
+}
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-summary:hover {
+  background: #171717 !important;
+  border-color: rgba(249,115,22,.38) !important;
+}
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-connected,
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-scroll {
+  background: #0c0c0c;
+}
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-footer-link { background: #101010; }
+
+/* Card geometry is isolated from the old flex/grid styles so neither
+   team logos nor rating rings can become unintended layout columns. */
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-player-row {
+  display: block;
+  box-sizing: border-box;
+  position: relative;
+  isolation: isolate;
+  min-width: 0;
+  min-height: 112px;
+  padding: 0;
+  margin-bottom: 8px;
+  border: var(--bm-tco-card-border-width, 1px) solid #383838;
+  border-radius: var(--bm-tco-card-radius, 12px);
+  background-color: #191919;
+  /* Match League Intel and the game surface: fixed-size pattern at a soft
+     blend. Previous 'cover' enlarged basketball.svg into giant diagonals. */
+  background-image:
+    url("../assets/basketball-pattern.svg"),
+    linear-gradient(125deg, #202020, #111);
+  background-size: 340px 340px, cover;
+  background-repeat: repeat, no-repeat;
+  background-position: center;
+  background-blend-mode: soft-light, normal;
+  overflow: hidden; /* Clips watermarks to the rounded pill ONLY. */
+}
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-player-row:last-child { margin-bottom: 0; }
+
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-row-team-logo {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-row-team-logo img {
+  display: block;
+  width: min(32%, 105px);
+  height: 85%;
+  object-fit: contain;
+  opacity: var(--bm-tco-logo-opacity, .09);
+  transform: var(--bm-tco-logo-tune, none);
+  transform-origin: center;
+}
+
+/* Make portrait lane WIDER and let ESPN shoulders extend naturally within
+   the pill: no cropping by the old 68px portrait viewport. */
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-player-row > .bm-tco-portrait {
+  position: absolute;
+  z-index: 1;
+  left: 6px;
+  bottom: 0;
+  top: auto;
+  align-self: auto;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  width: 98px;
+  height: 103px;
+  flex: none;
+  margin: 0;
+  padding: 0;
+  overflow: visible;
+}
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-portrait-tune {
+  width: 98px;
+  height: 103px;
+  flex: 0 0 98px;
+  transform: var(--bm-tco-headshot-tune, none);
+  transform-origin: bottom center;
+}
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-portrait-tune img {
+  object-fit: contain;
+  object-position: center bottom;
+}
+
+/* Runtime jersey composites use a 1040:760 canvas. Within THESE compact
+   Trade Center pills, fit that canvas by width rather than height, otherwise
+   its shoulders can exceed the 98px portrait lane and be cut at the card edge.
+   This selector does not affect the shared renderer on any other screen. */
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-player-row .bm-tco-portrait [data-bm-portrait-envelope="height-fit"] {
+  width: 100%;
+  height: auto;
+  max-height: 100%;
+}
+
+/* The copy uses reserved physical space on BOTH sides. It can never end up
+   beneath the far-right OVR/POT ring; the middle doesn't depend on grid/flex. */
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-player-row > .bm-tco-player-text {
+  position: relative;
+  z-index: 2;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 3px;
+  min-width: 0;
+  min-height: 110px;
+  width: auto;
+  margin: 0 76px 0 109px;
+  padding: 9px 0;
+  overflow: hidden;
+}
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-player-name {
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1.2;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-player-age {
+  font-size: 10px;
+  font-weight: 750;
+  line-height: 1.25;
+  color: #c5c5c5;
+}
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-player-finance {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  min-width: 0;
+}
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-salary,
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-money {
+  color: #ffab51;
+  font-weight: 900;
+  font-size: 11px;
+  white-space: nowrap;
+  max-width: 100%;
+}
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-years {
+  color: #ddd;
+  font-size: 10px;
+}
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-option {
+  font-size: 9px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Absolutely anchor the rating at the far right, regardless of flex/grid
+   rules elsewhere. It is visually transformed only via existing ring config. */
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-player-row > .bm-tco-ring {
+  position: absolute;
+  z-index: 2;
+  top: 50%;
+  right: 9px;
+  left: auto;
+  bottom: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 62px;
+  height: 62px;
+  margin: 0;
+  padding: 0;
+  transform: translateY(-50%) var(--bm-tco-ring-tune, none);
+  transform-origin: center;
+}
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-ring > div {
+  transform: scale(.97);
+  transform-origin: center;
+}
+
+@media (max-width: 1120px) {
+  .bm-trade-center-viewport .bm-tco-pair .bm-tco-player-row { min-height: 96px; }
+  .bm-trade-center-viewport .bm-tco-pair .bm-tco-player-row > .bm-tco-portrait,
+  .bm-trade-center-viewport .bm-tco-pair .bm-tco-portrait-tune {
+    width: 79px;
+    height: 88px;
+  }
+  .bm-trade-center-viewport .bm-tco-pair .bm-tco-portrait-tune { flex-basis: 79px; }
+  .bm-trade-center-viewport .bm-tco-pair .bm-tco-player-row > .bm-tco-player-text {
+    min-height: 94px;
+    margin-left: 89px;
+    margin-right: 61px;
+    gap: 2px;
+    padding: 6px 0;
+  }
+  .bm-trade-center-viewport .bm-tco-pair .bm-tco-player-row > .bm-tco-ring {
+    width: 52px;
+    height: 52px;
+    right: 5px;
+  }
+  .bm-trade-center-viewport .bm-tco-pair .bm-tco-ring > div { transform: scale(.81); }
+  .bm-trade-center-viewport .bm-tco-pair .bm-tco-player-name { font-size: 11px; }
+  .bm-trade-center-viewport .bm-tco-pair .bm-tco-row-team-logo img { width: min(30%, 90px); }
+}
+
+/* BM_TRADE_CENTER_PILL_CHECKER_V2
+ * Trade Center contract player pills: dark X-check pattern, no gray card fill.
+ * Background-only. Does not alter portrait, ring, row size, or team logos.
+ */
+body[data-bm-route="trades"] .bm-trade-center-viewport .bm-tco-pair .bm-tco-player-row {
+  background-color: #090909 !important;
+  background-image:
+    repeating-linear-gradient(45deg,
+      transparent 0px 26px,
+      rgba(255,255,255,0.060) 26px 27px,
+      transparent 27px 54px),
+    repeating-linear-gradient(-45deg,
+      transparent 0px 26px,
+      rgba(255,255,255,0.052) 26px 27px,
+      transparent 27px 54px) !important;
+  background-size: auto !important;
+  background-repeat: repeat !important;
+  background-position: center !important;
+  background-blend-mode: normal !important;
+}
+/* Remove only the old decorative full-card overlay; keep the team logo. */
+body[data-bm-route="trades"] .bm-trade-center-viewport .bm-tco-pair .bm-tco-player-row > .bm-tco-player-pattern {
+  display: none !important;
+}
+
+/* BM_TRADE_CENTER_EXACT_PAGE_PILLS_V3
+   Trade Center only. Uses EXACT bmCourtPage backdrop from
+   frontend/src/styles/BMPageBackground.css (texture/gradients/tiling/blend).
+   Never touches contracts, roster state or manual layout settings.
+   Text/portrait/ring get separate physical grid lanes.
+*/
+body[data-bm-route="trades"] .bm-trade-center-viewport .bm-tco-pair .bm-tco-player-row,
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-player-row {
+  display: grid !important;
+  grid-template-columns: 100px minmax(0, 1fr) 66px !important;
+  grid-template-rows: minmax(110px, auto) !important;
+  column-gap: 9px !important;
+  align-items: center !important;
+  box-sizing: border-box;
+  position: relative !important;
+  isolation: isolate;
+  min-width: 0 !important;
+  min-height: 112px !important;
+  height: auto;
+  margin-bottom: 8px;
+  padding: 0 8px 0 2px !important;
+  border: var(--bm-tco-card-border-width, 1px) solid #383838;
+  border-radius: var(--bm-tco-card-radius, 12px);
+  /* Exact same composition as .bmCourtPage in BMPageBackground.css. */
+  background-color: #0d0d0d !important;
+  background-image:
+    url("../assets/basketball-pattern.svg"),
+    repeating-linear-gradient(45deg, rgba(255,255,255,0.045) 0 1px, transparent 1px 28px),
+    repeating-linear-gradient(-45deg, rgba(255,255,255,0.035) 0 1px, transparent 1px 22px),
+    radial-gradient(circle at 50% 30%, #2b2b2b 0%, #0d0d0d 80%) !important;
+  background-repeat: repeat, repeat, repeat, no-repeat !important;
+  background-size: 340px 340px, auto, auto, cover !important;
+  background-position: center !important;
+  background-blend-mode: soft-light, normal, normal, normal !important;
+  overflow: hidden !important;
+}
+
+/* Old CSS introduced a second oversized/graphic pattern. Remove THAT layer
+   but keep the source team's subdued watermark where one is present. */
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-player-row > .bm-tco-player-pattern {
+  display: none !important;
+}
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-player-row > .bm-tco-row-team-logo,
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-player-row > .bm-tco-team-logo-bg {
+  position: absolute !important;
+  inset: 0 !important;
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+  grid-column: auto !important;
+  pointer-events: none;
+  z-index: 0 !important;
+}
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-player-row > .bm-tco-row-team-logo img,
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-player-row > .bm-tco-team-logo-bg img {
+  width: min(28%, 96px);
+  height: 80%;
+  object-fit: contain;
+  opacity: var(--bm-tco-logo-opacity, .09);
+  transform: var(--bm-tco-logo-tune, none);
+  transform-origin: center;
+}
+
+/* Three nonoverlapping zones: PORTRAIT | TEXT | OVR/POT. */
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-player-row > .bm-tco-portrait {
+  grid-column: 1 !important;
+  grid-row: 1 !important;
+  position: relative !important;
+  left: auto !important;
+  right: auto !important;
+  top: auto !important;
+  bottom: auto !important;
+  z-index: 1 !important;
+  width: 100% !important;
+  height: 110px !important;
+  min-width: 0 !important;
+  align-self: end !important;
+  justify-self: center;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  flex: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: visible !important;
+}
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-player-row > .bm-tco-portrait > .bm-tco-portrait-tune {
+  width: 98px !important;
+  height: 108px !important;
+  max-width: none;
+  flex: 0 0 98px !important;
+  transform: var(--bm-tco-headshot-tune, none);
+  transform-origin: center bottom;
+}
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-portrait-tune img {
+  object-fit: contain;
+  object-position: bottom center;
+}
+
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-player-row > .bm-tco-player-text {
+  grid-column: 2 !important;
+  grid-row: 1 !important;
+  position: relative !important;
+  left: auto !important;
+  right: auto !important;
+  top: auto !important;
+  bottom: auto !important;
+  z-index: 2 !important;
+  display: flex !important;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  flex: none !important;
+  align-self: stretch;
+  width: 100% !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  height: auto !important;
+  margin: 0 !important;
+  padding: 8px 0 !important;
+  gap: 3px;
+  overflow: hidden;
+}
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-player-name,
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-player-age,
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-salary,
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-money,
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-years,
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-interest,
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-option {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-player-name {
+  font-size: 12px;
+  line-height: 1.16;
+}
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-money,
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-salary {
+  font-size: 11px;
+}
+
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-player-row > .bm-tco-ring {
+  grid-column: 3 !important;
+  grid-row: 1 !important;
+  position: relative !important;
+  top: auto !important;
+  right: auto !important;
+  bottom: auto !important;
+  left: auto !important;
+  z-index: 2 !important;
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+  align-self: center !important;
+  justify-self: center !important;
+  width: 62px !important;
+  height: 62px !important;
+  flex: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  transform: var(--bm-tco-ring-tune, none) !important;
+  transform-origin: center;
+}
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-player-row > .bm-tco-ring > div {
+  transform: scale(.96);
+  transform-origin: center;
+}
+
+/* Adapt to a narrower individual expander column without changing global
+   responsive rules, salary functionality, or the user's manual offsets. */
+@media (max-width: 1120px) {
+  .bm-trade-center-viewport .bm-tco-pair .bm-tco-player-row {
+    grid-template-columns: 79px minmax(0,1fr) 51px !important;
+    column-gap: 6px !important;
+    min-height: 96px !important;
+    grid-template-rows: minmax(94px,auto) !important;
+    padding-right: 5px !important;
+  }
+  .bm-trade-center-viewport .bm-tco-pair .bm-tco-player-row > .bm-tco-portrait {
+    height: 94px !important;
+  }
+  .bm-trade-center-viewport .bm-tco-pair .bm-tco-player-row > .bm-tco-portrait > .bm-tco-portrait-tune {
+    width: 78px !important;
+    height: 93px !important;
+    flex-basis: 78px !important;
+  }
+  .bm-trade-center-viewport .bm-tco-pair .bm-tco-player-row > .bm-tco-ring {
+    width: 49px !important;
+    height: 49px !important;
+  }
+  .bm-trade-center-viewport .bm-tco-pair .bm-tco-player-row > .bm-tco-ring > div {
+    transform: scale(.77);
+  }
+  .bm-trade-center-viewport .bm-tco-pair .bm-tco-player-name { font-size: 11px; }
+  .bm-trade-center-viewport .bm-tco-pair .bm-tco-money,
+  .bm-trade-center-viewport .bm-tco-pair .bm-tco-salary { font-size: 10px; }
+}
+
+/* BM_TRADE_CENTER_FULL_NAMES_V1
+   Contract expander player rows ONLY.
+   The previous exact-page pill patch forced nowrap+ellipsis on every label.
+   This fixes text clipping without changing the pattern, OVR positions,
+   headshots, manual CSS transform variables, gameplay, or salary data.
+*/
+body[data-bm-route="trades"] .bm-trade-center-viewport .bm-tco-pair .bm-tco-player-row > .bm-tco-player-text,
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-player-row > .bm-tco-player-text {
+  overflow: visible !important;
+  min-width: 0 !important;
+}
+
+body[data-bm-route="trades"] .bm-trade-center-viewport .bm-tco-pair .bm-tco-player-row .bm-tco-player-name,
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-player-row .bm-tco-player-name {
+  max-width: 100% !important;
+  width: auto !important;
+  white-space: normal !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+  overflow-wrap: break-word !important;
+  word-break: normal !important;
+  line-height: 1.18 !important;
+}
+
+/* Never abbreviate the actual salary/option explanation with ellipses;
+   allow a second line when the available column is narrow. */
+body[data-bm-route="trades"] .bm-trade-center-viewport .bm-tco-pair .bm-tco-player-row :is(.bm-tco-money, .bm-tco-option),
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-player-row :is(.bm-tco-money, .bm-tco-option) {
+  max-width: 100% !important;
+  white-space: normal !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+  overflow-wrap: break-word !important;
+  line-height: 1.2 !important;
+}
+
+/* BM_TRADE_CENTER_SINGLE_LINE_NAMES_V1
+ * Both expanded Trade Center panels only.
+ * The earlier full-name fix changed white-space to normal, forcing names
+ * like "Jayson Tatum" and "Mike Conley" into two lines inside a narrow
+ * flex column. Keep the full original name on one line, without ellipses.
+ * No adjustment to content transforms, ring placement, row geometry,
+ * backdrop, contract data, or game logic.
+ */
+body[data-bm-route="trades"] .bm-trade-center-viewport .bm-tco-pair .bm-tco-player-row .bm-tco-player-name,
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-player-row .bm-tco-player-name {
+  display: inline-block !important;
+  flex: 0 0 auto !important;
+  width: max-content !important;
+  max-width: none !important;
+  white-space: nowrap !important;
+  overflow: visible !important;
+  overflow-wrap: normal !important;
+  word-break: keep-all !important;
+  text-overflow: clip !important;
+}
+
+/* BM_TCO_CAP_COMPACT_SALARY_YEARS_V1
+ * Only the Cap Outlook player's salary/term labels. No changes to
+ * Expiring Contracts, portrait/ring geometry, manual X/Y/scale, or gameplay.
+ */
+body[data-bm-route="trades"] .bm-trade-center-viewport .bm-tco-pair .bm-tco-player-row--cap .bm-tco-player-finance,
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-player-row--cap .bm-tco-player-finance {
+  display: inline-flex !important;
+  width: max-content !important;
+  max-width: none !important;
+  flex-wrap: nowrap !important;
+  align-items: baseline !important;
+  gap: 0.3em !important;
+  white-space: nowrap !important;
+}
+body[data-bm-route="trades"] .bm-trade-center-viewport .bm-tco-pair .bm-tco-player-row--cap .bm-tco-years,
+.bm-trade-center-viewport .bm-tco-pair .bm-tco-player-row--cap .bm-tco-years {
+  white-space: nowrap !important;
+  flex: 0 0 auto !important;
+}

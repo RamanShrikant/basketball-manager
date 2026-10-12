@@ -1,0 +1,902 @@
+/* Phase 2 League Intel. Scoped entirely to bm-il; no changes to other pages. */
+.bm-il-page { --il-orange:#ff8d35;--il-edge:rgba(104,152,182,.24);--il-muted:#96aabb;--il-dark:#071019;position:relative;height:100%;min-height:0;overflow:hidden;padding:9px 13px 13px;background:radial-gradient(circle at 72% -20%,rgba(45,83,118,.23),transparent 50%),linear-gradient(150deg,#060b11,#0a1018 60%,#060a0f);font-family:inherit;color:#f8fafc;display:flex;flex-direction:column;gap:10px;isolation:isolate}
+.bm-il-page:before{content:"";position:absolute;inset:0;pointer-events:none;z-index:-1;opacity:.11;background-image:repeating-linear-gradient(45deg,transparent,transparent 25px,#46617b 26px,transparent 27px)}
+.bm-il-page * {box-sizing:border-box}
+.bm-il-topbar{display:grid;grid-template-columns:minmax(175px,1fr) auto minmax(106px,1fr);align-items:center;gap:10px;min-height:47px;max-height:56px;flex:0 0 50px}
+.bm-il-page-heading>span{display:block;font-size:9px;letter-spacing:.34em;color:#b8c4d1;font-weight:900}
+.bm-il-page-heading>h1{margin:0;font-size:clamp(21px,2.2vw,29px);font-weight:1000;color:#ff7f2c;letter-spacing:-.035em;line-height:1.1}
+.bm-il-filters{display:flex;justify-content:center;gap:7px;min-width:0}
+.bm-il-filters button{white-space:nowrap;border-radius:25px;border:1px solid var(--il-edge);background:#06101a;color:#e5eaf0;font-size:clamp(9px,.78vw,11px);font-weight:950;text-transform:uppercase;padding:8px clamp(8px,1vw,17px);transition:background .18s,border .18s}
+.bm-il-filters button:hover{border-color:#ff873f80}
+.bm-il-filters button.is-active{border-color:#fb6e18;background:linear-gradient(110deg,#c94c16,#ff7a19);box-shadow:0 0 18px #dc651b36}
+.bm-il-filters small{margin-left:8px;padding:3px 6px;border-radius:20px;background:#060d1599;color:#e0e7ee;font-size:9px}
+.bm-il-trade-button{justify-self:end;border:1px solid #b6642caa;border-radius:10px;padding:9px 15px;background:linear-gradient(135deg,#331b0e,#0a121a);font-weight:900;font-size:11px;color:#fff}
+.bm-il-trade-button:hover{background:#5c2b12}
+.bm-il-main{display:grid;grid-template-columns:clamp(228px,18.5vw,282px) minmax(0,1fr);gap:11px;flex:1;min-height:0;overflow:hidden}
+.bm-il-panel{background:linear-gradient(137deg,#0b1721eb,#060d15f7);border:1px solid var(--il-edge);border-radius:17px;box-shadow:0 12px 35px #0006;overflow:hidden;min-width:0;min-height:0}
+.bm-il-sidebar{display:flex;flex-direction:column}
+.bm-il-sidebar-heading{padding:12px 11px 9px;flex:none}
+.bm-il-sidebar-heading h2{font-weight:1000;color:#ffab64;letter-spacing:.17em;font-size:12px;margin:0}
+.bm-il-sidebar-heading p{margin:3px 0 0;color:#adbdc8;font-size:10px}
+.bm-il-team-scroll{overflow-y:auto;overflow-x:hidden;min-height:0;flex:1;padding:0 6px 8px;scrollbar-color:#ff791c #12212c;scrollbar-width:thin}
+.bm-il-team-list{display:flex;flex-direction:column;gap:3px}
+.bm-il-team-row{min-height:45px;display:flex;align-items:center;gap:8px;width:100%;padding:5px 7px;border-radius:10px;border:1px solid rgba(118,146,165,.35);background:#090f17;color:#fff;text-align:left;transition:border-color .16s,background .16s}
+.bm-il-team-row:hover{background:#172431;border-color:#d27b43}
+.bm-il-team-row.is-active{border-color:#f88a2c;background:linear-gradient(90deg,#4a2514d9,#0c1117);box-shadow:inset 0 0 12px #fb791320,0 0 7px #fb791336}
+.bm-il-team-logo{display:grid;place-items:center;width:30px;height:30px;flex:none;border-radius:6px;color:#9cb4c6;font-weight:900;font-size:9px;background:#14202c}
+.bm-il-team-logo img{height:28px;width:28px;object-fit:contain}
+.bm-il-team-details{flex:1;min-width:0}
+.bm-il-team-details strong{display:block;font-size:11px;line-height:1.12;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bm-il-team-details small{display:block;font-size:8px;font-weight:900;margin-top:5px;text-transform:uppercase;color:#a5b9ca;letter-spacing:.07em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bm-il-team-rank{flex:none;font-weight:900;font-size:10px;color:#f8e3cf;padding:4px 6px;border:1px solid #644d3788;border-radius:20px;background:#04080b}
+.bm-il-report{min-height:0;display:grid;grid-template-rows:minmax(115px,1fr) minmax(202px,1.58fr) minmax(195px,1.48fr) minmax(148px,1.05fr);gap:9px;overflow:hidden}
+.bm-il-hero{position:relative;overflow:hidden;border-radius:17px;border:1px solid rgba(26,111,177,.35);background:linear-gradient(110deg,#081523,#093158 50%,#051021 81%);box-shadow:inset 0 0 24px #0008;min-height:0;padding:12px 14px;display:grid;grid-template-columns:minmax(0,1.1fr) minmax(300px,.95fr);align-items:center;gap:12px}
+.bm-il-hero:before{position:absolute;content:"";inset:0;background:radial-gradient(circle at 13% 45%,#a64b2c3d,transparent 36%),linear-gradient(90deg,transparent,#0008);pointer-events:none}
+.bm-il-hero-watermark{position:absolute;right:25%;top:50%;height:185%;width:30%;transform:translateY(-50%) rotate(-15deg);opacity:.12;object-fit:contain;pointer-events:none}
+.bm-il-hero-identity{position:relative;z-index:1;display:flex;align-items:center;gap:13px;min-width:0}
+.bm-il-hero-logo{width:clamp(74px,9vw,130px);height:clamp(72px,8.7vw,124px);flex:none;display:grid;place-items:center;color:#d7edff;font-size:12px;font-weight:900}
+.bm-il-hero-logo img{width:100%;height:100%;object-fit:contain;filter:drop-shadow(0 6px 14px #000a)}
+.bm-il-hero-copy{min-width:0}.bm-il-hero-copy h2{margin:0;line-height:1.04;font-size:clamp(21px,2.45vw,38px);font-weight:1000;letter-spacing:-.035em;text-shadow:0 2px 11px #0008;overflow:hidden;text-overflow:ellipsis}
+.bm-il-hero-tags{display:flex;gap:5px;flex-wrap:wrap;margin-top:9px}.bm-il-hero-tags>span{font-size:9px;white-space:nowrap;text-transform:uppercase;font-weight:950;border:1px solid #514d45;padding:4px 7px;border-radius:20px;background:#080f17ce;color:#fff}.bm-il-hero-tags>.bm-il-phase{border-color:#1d9b77;color:#98ffe7}
+.bm-il-hero-stats{position:relative;z-index:1;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;min-width:0;align-self:stretch}
+.bm-il-stat{min-width:0;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;background:#040c16c9;border:1px solid #31516b91;border-radius:9px;padding:7px 5px}
+.bm-il-stat>span{font-size:9px;font-weight:950;letter-spacing:.09em;color:#c2d4e3}.bm-il-stat>strong{font-weight:1000;font-size:clamp(15px,1.75vw,27px);color:#ffaf65;white-space:nowrap;line-height:1.28}.bm-il-stat>small{color:#a3b4bf;white-space:nowrap;overflow:hidden;max-width:100%;text-overflow:ellipsis;font-size:9px}
+.bm-il-lineup-panel{padding:9px 10px;display:flex;flex-direction:column;gap:7px}
+.bm-il-panel-heading{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 5px;align-items:center;flex:none;min-width:0}
+.bm-il-panel-title{display:flex;align-items:center;gap:9px;min-width:0}.bm-il-panel-icon{color:#ff8d35;font-size:21px;font-weight:1000;line-height:1}.bm-il-panel-label{color:#ffa25a;font-weight:1000;font-size:clamp(10px,.84vw,13px);letter-spacing:.1em;white-space:nowrap;text-overflow:ellipsis;overflow:hidden}
+.bm-il-subtitle{grid-column:1/-1;margin:0;color:#9baebc;font-size:9px;white-space:nowrap;text-overflow:ellipsis;overflow:hidden;line-height:1.3}
+.bm-il-roster-link{color:#51c8ff;background:transparent;font-size:10px;font-weight:900;white-space:nowrap}.bm-il-roster-link:hover{text-decoration:underline}
+.bm-il-starters{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:7px;flex:1;min-height:0}
+.bm-il-starter{position:relative;overflow:hidden;min-width:0;border-radius:10px;border:1px solid #3a53619c;background:linear-gradient(165deg,#1b2732,#0b131b 65%,#06101a);box-shadow:inset 0 0 20px #0004}
+.bm-il-position{position:absolute;z-index:4;top:7px;left:7px;font-size:13px;font-weight:1000;color:#e7f2ff;padding:3px 5px;border:1px solid #2e83ba;border-radius:6px;background:#142b40ee}
+.bm-il-portrait{position:relative;display:block;overflow:hidden;background:radial-gradient(circle at 50% 22%,#344857bd,transparent 69%);flex:none}
+.bm-il-portrait--hero{position:absolute;inset:5px 13% 30px 0;background:transparent;overflow:hidden;z-index:1}
+.bm-il-portrait-image{position:relative!important;width:100%!important;height:100%!important;display:block!important}
+.bm-il-portrait--mini{width:36px;height:37px;border-radius:6px;overflow:hidden;border:1px solid #3d505a}
+.bm-il-portrait-fallback{position:absolute;inset:0;display:grid;place-items:center;color:#8493a3;font-size:11px;font-weight:900}
+.bm-il-starter .bm-il-ring--lg{position:absolute;z-index:3;right:5px;top:19%;box-shadow:0 0 12px #0006}
+.bm-il-starter-foot{position:absolute;bottom:0;left:0;right:0;z-index:3;min-height:39px;padding:5px 7px 5px;background:linear-gradient(0deg,#050b10 65%,#050b100d);display:flex;flex-direction:column;justify-content:flex-end}
+.bm-il-starter-foot strong{font-size:clamp(9px,.84vw,12px);font-weight:950;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.bm-il-starter-foot span{font-size:10px;color:#b2c1ce}
+.bm-il-starter-empty{position:absolute;top:44%;left:8px;color:#8193a2;font-size:12px}
+.bm-il-ring{--bm-il-ring-color:#f4bf3c;display:grid;place-items:center;border-radius:50%;background:conic-gradient(var(--bm-il-ring-color) var(--bm-il-rating),#45505a var(--bm-il-rating));padding:4px;flex:none}
+.bm-il-ring--high{--bm-il-ring-color:#21db75}.bm-il-ring--mid{--bm-il-ring-color:#f5c646}.bm-il-ring--sm{width:35px;height:35px;padding:3px}.bm-il-ring--lg{width:clamp(43px,4.6vw,66px);height:clamp(43px,4.6vw,66px);padding:5px}
+.bm-il-ring-inner{width:100%;height:100%;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-direction:column;background:#0b141d}
+.bm-il-ring-inner strong{font-size:12px;font-weight:1000;line-height:1;color:#fff}.bm-il-ring-inner small{font-size:6px;letter-spacing:.12em;color:#a7bac8}.bm-il-ring--lg strong{font-size:clamp(15px,1.5vw,22px)}.bm-il-ring--lg small{font-size:8px}
+.bm-il-market-grid,.bm-il-bottom-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;min-height:0}
+.bm-il-market-panel,.bm-il-fact-panel{padding:9px 9px 8px;display:flex;flex-direction:column;gap:7px}
+.bm-il-mini-list,.bm-il-facts{display:flex;flex-direction:column;gap:5px;flex:1;min-height:0}
+.bm-il-mini-player{display:flex;align-items:center;width:100%;flex:1;min-height:0;gap:6px;padding:4px 6px;text-align:left;background:linear-gradient(125deg,#172733,#0d1822);border:1px solid #3a566763;border-radius:9px;color:#fff;overflow:hidden}
+.bm-il-mini-player:hover,.bm-il-expiring:hover,.bm-il-need:hover{border-color:#d27b43;background:#21303b}
+.bm-il-mini-text{min-width:0;flex:1;display:flex;flex-direction:column;gap:3px}.bm-il-mini-text strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:clamp(9px,.79vw,11px);font-weight:950;line-height:1.2}.bm-il-mini-text small{color:#b0c0cc;font-size:9px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bm-il-arrow{color:#d1e2eb;font-size:21px;padding:0 1px}.bm-il-empty{display:flex;align-items:center;justify-content:center;flex:1;padding:9px;text-align:center;font-size:11px;color:#98a9b6;border-radius:9px;border:1px dashed #3d505a66;background:#0d1620}
+.bm-il-need{display:flex;gap:10px;align-items:center;text-align:left;border:1px solid transparent;border-radius:9px;background:#09131ca3;padding:4px 7px;min-height:27px;color:#d9e5ed}.bm-il-need>span{border-radius:50%;border:1px solid #596e7f;width:24px;height:24px;display:grid;place-items:center;flex:none;font-size:11px;font-weight:900}.bm-il-need>strong{font-size:11px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bm-il-expiring{display:flex;align-items:center;text-align:left;gap:7px;background:#14212b;border:1px solid #3a505e66;border-radius:9px;padding:3px 5px;min-height:0;flex:1;color:#fff;overflow:hidden}.bm-il-expiring>span:nth-child(2){display:flex;flex-direction:column;min-width:0;flex:1}.bm-il-expiring>span strong{font-size:10px;font-weight:950;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.bm-il-expiring>span small{font-size:9px;color:#a2b6c6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.bm-il-expiring>b{font-size:10px;display:flex;flex-direction:column;text-align:right;white-space:nowrap}.bm-il-expiring>b small{font-size:9px;color:#9ab0bd;font-weight:500}
+.bm-il-assets{margin:0;padding:0 2px 0 17px;list-style-type:disc;display:flex;flex-direction:column;justify-content:center;gap:5px;flex:1;min-height:0}.bm-il-assets li{font-size:10px;color:#d3dde6;line-height:1.3}.bm-il-assets li::marker{color:#f80}
+.bm-il-modal-backdrop{position:fixed;inset:0;background:#000a;z-index:100000;display:grid;place-items:center;padding:20px;backdrop-filter:blur(4px)}
+.bm-il-modal{width:min(500px,100%);border-radius:18px;border:1px solid #5d7686;background:linear-gradient(145deg,#122433,#070e15);padding:22px;box-shadow:0 30px 100px #000c;max-height:85vh;overflow-y:auto}.bm-il-modal-top{display:flex;align-items:center;justify-content:space-between;color:#ffa25a;font-weight:950;letter-spacing:.18em;font-size:12px}.bm-il-modal-top button{background:#152b3d;color:#fff;border:1px solid #49647a;padding:3px 11px;border-radius:8px;font-size:24px}.bm-il-modal h2{font-size:24px;line-height:1.2;font-weight:1000;margin:15px 0 2px}.bm-il-modal-section{color:#9db3c3;font-size:13px}.bm-il-modal-evidence{background:#0d1d2a;border-radius:12px;border:1px solid #547083;padding:13px;margin:17px 0}.bm-il-modal-evidence strong{font-size:11px;color:#ffb574;letter-spacing:.1em}.bm-il-modal-evidence p{font-size:14px;margin:8px 0 0;line-height:1.45}.bm-il-modal-info{font-size:12px;color:#c9d9e6;overflow-wrap:anywhere;margin:7px 0}.bm-il-modal-warning{font-size:11px;color:#96b3c7;line-height:1.55;margin:14px 0 0}
+.bm-il-loading{display:grid;place-items:center;color:#ff9a51;font-size:20px;font-weight:900;min-height:300px}
+@media(max-width:1450px){.bm-il-page{padding:7px 10px 9px;gap:8px}.bm-il-main{grid-template-columns:clamp(215px,18vw,260px) minmax(0,1fr);gap:8px}.bm-il-report{gap:7px;grid-template-rows:minmax(103px,.9fr) minmax(170px,1.45fr) minmax(178px,1.4fr) minmax(138px,1.05fr)}.bm-il-market-grid,.bm-il-bottom-grid{gap:7px}.bm-il-hero{grid-template-columns:minmax(0,1fr) minmax(275px,.95fr)}.bm-il-hero-logo{width:76px;height:84px}.bm-il-market-panel,.bm-il-fact-panel{padding:7px}.bm-il-mini-player{padding:3px 4px;gap:4px}.bm-il-team-row{min-height:41px}.bm-il-stat>span{font-size:8px}.bm-il-panel-icon{font-size:18px}}
+@media(max-width:1180px){.bm-il-main{grid-template-columns:195px minmax(0,1fr)}.bm-il-topbar{grid-template-columns:150px minmax(0,1fr) 95px}.bm-il-filters{gap:3px}.bm-il-filters button{padding:7px 7px}.bm-il-filters small{margin-left:4px}.bm-il-trade-button{padding:8px 7px}.bm-il-hero-logo{width:65px}.bm-il-hero{grid-template-columns:minmax(0,1fr) minmax(230px,.9fr);gap:5px}.bm-il-starter .bm-il-ring--lg{top:23%}.bm-il-starter-foot{min-height:35px}.bm-il-mini-player .bm-il-portrait--mini{width:25px;height:34px}.bm-il-mini-player .bm-il-ring--sm{width:29px;height:29px}.bm-il-mini-player .bm-il-ring strong{font-size:10px}}
+@media(max-height:825px){.bm-il-page{padding-top:4px;padding-bottom:5px;gap:5px}.bm-il-topbar{flex-basis:42px;min-height:42px}.bm-il-report{grid-template-rows:minmax(94px,1fr) minmax(152px,1.55fr) minmax(150px,1.5fr) minmax(119px,1fr);gap:5px}.bm-il-hero{padding:6px 9px}.bm-il-market-panel,.bm-il-fact-panel{gap:4px;padding:6px}.bm-il-lineup-panel{padding:6px;gap:5px}.bm-il-portrait--mini{height:29px;width:29px}.bm-il-starter-foot{min-height:30px;padding:3px 4px}.bm-il-panel-heading{gap:1px 3px}.bm-il-subtitle{font-size:8px}.bm-il-starter .bm-il-ring--lg{top:19%}.bm-il-mini-list{gap:3px}.bm-il-mini-player{padding:2px 4px}.bm-il-assets{gap:2px}.bm-il-team-row{min-height:36px;padding:3px 5px}.bm-il-team-details strong{font-size:10px}.bm-il-team-logo{height:26px;width:26px}.bm-il-team-logo img{height:25px;width:25px}}
+/* At unusually narrow or short windows, preserve access via local report
+   scrolling rather than allowing the entire app shell to overflow. */
+@media(max-width:900px),(max-height:610px){.bm-il-report{overflow-y:auto;scrollbar-width:thin;scrollbar-color:#f80 #162332;grid-template-rows:minmax(105px,auto) minmax(195px,auto) minmax(185px,auto) minmax(152px,auto)}.bm-il-main{grid-template-columns:165px minmax(620px,1fr);overflow-x:auto}.bm-il-topbar{min-width:0}.bm-il-hero{min-height:112px}}
+
+.bm-il-roster-modal{width:min(680px,100%)}.bm-il-roster-rows{display:flex;flex-direction:column;gap:4px;margin-top:14px;max-height:55vh;overflow-y:auto}.bm-il-roster-row{display:flex;align-items:center;gap:10px;padding:4px 9px;border-radius:9px;border:1px solid #354959;background:#152330;min-height:47px}.bm-il-roster-row>span:nth-child(2){flex:1;min-width:0;display:flex;flex-direction:column}.bm-il-roster-row>span strong{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px}.bm-il-roster-row>span small{color:#a2b6c7;font-size:10px}.bm-il-roster-salary{font-size:11px;min-width:65px;text-align:right;color:#f9c18d}
+
+/* CPU-evidence status: BANK is saved CPU activity, SCAN is an accepted hypothetical. */
+.bm-il-evidence-tag{flex:none;align-self:center;max-width:43px;overflow:hidden;text-overflow:ellipsis;border:1px solid #496275;background:#172d3c;color:#9cdbf7;border-radius:5px;padding:2px 4px;font-size:8px;font-weight:950;letter-spacing:.06em}
+.bm-il-roster-link:disabled{opacity:.55;cursor:wait}
+
+.bm-il-pick-icon{display:grid;place-items:center;flex:none;width:66px;height:36px;border-radius:7px;border:1px solid #8d794a;background:linear-gradient(135deg,#40351d,#172332);color:#ffd382;font-size:12px;font-weight:1000;letter-spacing:.05em}
+
+.bm-il-rumor-strip{display:block;flex:none;width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left;border:1px solid #724929;background:#37241680;color:#ffc79b;border-radius:6px;padding:2px 6px;font-size:9px;font-weight:700;line-height:1.25}.bm-il-rumor-strip:hover{border-color:#f80;background:#483020}
+
+/* -------------------------------------------------------------------------
+   LEAGUE INTEL · NEUTRAL COURT SKIN
+   Inspired by Draft Picks. Presentation-only; no layout or gameplay changes.
+   Do not recolor the persistent sidebar on any route other than /intel.
+   ------------------------------------------------------------------------- */
+
+/* The same grayscale basketball texture that Draft Picks uses. */
+.bmCourtPage.bm-il-page {
+  --il-orange: #f97316;
+  --il-edge: rgba(255, 255, 255, .115);
+  --il-muted: #aaa;
+  --il-dark: #0d0d0d;
+  background-color: #0d0d0d;
+  background-image:
+    url("../assets/basketball-pattern.svg"),
+    repeating-linear-gradient(45deg, rgba(255, 255, 255, .045) 0 1px, transparent 1px 28px),
+    repeating-linear-gradient(-45deg, rgba(255, 255, 255, .035) 0 1px, transparent 1px 22px),
+    radial-gradient(circle at 50% 30%, #252525 0%, #0d0d0d 80%);
+  background-repeat: repeat, repeat, repeat, no-repeat;
+  background-size: 340px 340px, auto, auto, cover;
+  background-position: center;
+  background-blend-mode: soft-light, normal, normal, normal;
+}
+
+/* Remove the former navy diagonal overlay (the court texture replaces it). */
+.bm-il-page::before {
+  opacity: 0;
+}
+
+/* Neutralize the shared left navigation only while League Intel is open. */
+body[data-bm-route="intel"] aside[aria-label="Basketball Manager navigation"] {
+  background: linear-gradient(180deg, #111 0%, #0b0b0b 56%, #080808 100%);
+  border-right-color: rgba(255, 255, 255, .09);
+  box-shadow: 12px 0 32px rgba(0, 0, 0, .3);
+}
+
+/* Core surfaces: flat charcoal instead of blue/navy gradients. */
+.bm-il-panel {
+  background: linear-gradient(180deg, rgba(19, 19, 19, .985), rgba(9, 9, 9, .985));
+  border-color: var(--il-edge);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .28);
+}
+.bm-il-hero {
+  background: linear-gradient(110deg, #212121 0%, #151515 48%, #090909 100%);
+  border-color: rgba(255, 255, 255, .14);
+  box-shadow: inset 0 0 22px rgba(0, 0, 0, .35);
+}
+.bm-il-hero::before {
+  background: linear-gradient(90deg, transparent 20%, rgba(0, 0, 0, .42));
+}
+.bm-il-stat {
+  background: rgba(9, 9, 9, .87);
+  border-color: rgba(255, 255, 255, .13);
+}
+.bm-il-stat > span { color: #c9c9c9; }
+.bm-il-stat > small { color: #a6a6a6; }
+
+/* Team list and main navigation controls. */
+.bm-il-filters button {
+  background: #191919;
+  border-color: rgba(255, 255, 255, .14);
+  color: #ececec;
+}
+.bm-il-filters button:hover { background: #292929; }
+.bm-il-filters button.is-active {
+  background: #df5d16;
+  border-color: #f97316;
+  box-shadow: none;
+}
+.bm-il-filters button.is-active:hover { background: #f06a1f; }
+.bm-il-filters small { background: rgba(0, 0, 0, .32); color: #ededed; }
+.bm-il-trade-button {
+  background: #1c1c1c;
+  border-color: rgba(249, 115, 22, .55);
+}
+.bm-il-trade-button:hover { background: #2b2b2b; }
+.bm-il-team-row {
+  background: #131313;
+  border-color: rgba(255, 255, 255, .14);
+}
+.bm-il-team-row:hover { background: #242424; border-color: #a0a0a0; }
+.bm-il-team-row.is-active {
+  background: linear-gradient(90deg, #303030, #181818);
+  border-color: #f97316;
+  box-shadow: inset 3px 0 0 #f97316;
+}
+.bm-il-team-logo { background: #202020; color: #ccc; }
+.bm-il-team-details small { color: #a8a8a8; }
+.bm-il-team-rank {
+  color: #ececec;
+  background: #101010;
+  border-color: rgba(255, 255, 255, .2);
+}
+.bm-il-team-scroll { scrollbar-color: #ed731f #191919; }
+.bm-il-sidebar-heading p { color: #aaa; }
+
+/* Lineup: keep the portraits and rating-ring colors, neutralize their cards. */
+.bm-il-starter {
+  background: linear-gradient(165deg, #242424, #151515 65%, #0b0b0b);
+  border-color: rgba(255, 255, 255, .17);
+}
+.bm-il-position {
+  color: #f3f3f3;
+  background: #292929;
+  border-color: #666;
+}
+.bm-il-portrait { background: radial-gradient(circle at 50% 22%, rgba(88, 88, 88, .55), transparent 69%); }
+.bm-il-portrait--hero { background: transparent; }
+.bm-il-portrait--mini { border-color: #525252; }
+.bm-il-starter-foot { background: linear-gradient(0deg, #0c0c0c 65%, rgba(12, 12, 12, .06)); }
+.bm-il-starter-foot span { color: #bbb; }
+.bm-il-ring-inner { background: #151515; }
+.bm-il-ring-inner small { color: #b8b8b8; }
+
+/* Scouting cards, contracts, empty states, and market evidence. */
+.bm-il-mini-player,
+.bm-il-expiring {
+  background: #202020;
+  border-color: rgba(255, 255, 255, .14);
+}
+.bm-il-mini-player:hover,
+.bm-il-expiring:hover,
+.bm-il-need:hover {
+  background: #303030;
+  border-color: rgba(249, 115, 22, .5);
+}
+.bm-il-need { background: #171717; color: #e3e3e3; }
+.bm-il-need > span { border-color: #666; }
+.bm-il-empty {
+  background: #151515;
+  border-color: rgba(255, 255, 255, .16);
+  color: #aaa;
+}
+.bm-il-mini-text small,
+.bm-il-expiring > span small,
+.bm-il-expiring > b small,
+.bm-il-assets li { color: #bebebe; }
+.bm-il-evidence-tag {
+  background: #303030;
+  border-color: #656565;
+  color: #eee;
+}
+.bm-il-pick-icon {
+  background: #2a2a2a;
+  border-color: #777;
+  color: #ffba7d;
+}
+.bm-il-rumor-strip {
+  background: #242424;
+  border-color: rgba(249, 115, 22, .46);
+  color: #ffbe89;
+}
+.bm-il-rumor-strip:hover { background: #303030; }
+.bm-il-roster-link { color: #ffa464; }
+.bm-il-subtitle,
+.bm-il-page-heading > span { color: #aaa; }
+.bm-il-hero-tags > span { background: #202020; border-color: #595959; }
+.bm-il-hero-tags > .bm-il-phase { color: #fff; border-color: #999; }
+
+/* Evidence and full-roster dialogs must match the page's neutral styling. */
+.bm-il-modal {
+  background: linear-gradient(155deg, #242424, #0f0f0f);
+  border-color: #626262;
+}
+.bm-il-modal-top button { background: #252525; border-color: #676767; }
+.bm-il-modal-section,
+.bm-il-modal-info,
+.bm-il-modal-warning { color: #bcbcbc; }
+.bm-il-modal-evidence { background: #202020; border-color: #555; }
+.bm-il-roster-row { background: #1f1f1f; border-color: #494949; }
+.bm-il-roster-row > span small { color: #aaa; }
+.bm-il-roster-salary { color: #ffae73; }
+
+/* Keep a neutral track for the compact report scrollbar at narrow sizes. */
+@media (max-width: 900px), (max-height: 610px) {
+  .bm-il-report { scrollbar-color: #ed731f #171717; }
+}
+
+/* ========================================================================
+   LEAGUE INTEL — SIMPLIFIED HEADER, ORANGE RINGS AND MANUAL VISUAL TUNING
+   Separate from all trade/gameplay logic and from Salary Table controls.
+   ======================================================================== */
+
+/* Opponent list logos should float freely, without dark square backplates. */
+.bm-il-team-logo {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+.bm-il-team-logo img {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+
+/* Header: just the team identity with unboxed Record + Payroll underneath. */
+.bm-il-hero {
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: start;
+  padding-inline: clamp(10px, 1.3vw, 22px);
+}
+.bm-il-hero-identity { width: 100%; }
+.bm-il-hero-copy { min-width: 0; }
+.bm-il-hero-copy h2 { font-size: clamp(22px, 2.55vw, 40px); }
+.bm-il-hero-essentials {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  column-gap: clamp(14px, 2vw, 30px);
+  row-gap: 4px;
+  margin-top: 10px;
+  color: #ededed;
+  font-size: clamp(11px, 1vw, 15px);
+}
+.bm-il-hero-essentials > span { display: inline-flex; gap: 6px; align-items: baseline; }
+.bm-il-essential-label { color: #b6b6b6; font-weight: 650; }
+.bm-il-hero-essentials strong { color: #ffad65; font-weight: 950; white-space: nowrap; }
+.bm-il-hero-watermark { right: 3%; width: 25%; opacity: .085; }
+
+/* Start-position is unboxed typography, not a second mini-card. */
+.bm-il-position {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  box-shadow: none;
+  left: 10px;
+  top: 9px;
+  color: #dedede;
+  font-size: clamp(12px, .95vw, 15px);
+  letter-spacing: .035em;
+  text-shadow: 0 1px 5px rgba(0,0,0,.6);
+}
+
+/* Use consistent amber/orange ratings at ALL overall levels. */
+.bm-il-ring,
+.bm-il-ring--high,
+.bm-il-ring--mid {
+  --bm-il-ring-color: #ffae0a;
+  background: conic-gradient(
+    from -90deg,
+    #ffa500 0%,
+    #ffd54f var(--bm-il-rating),
+    #4b4b4b var(--bm-il-rating),
+    #4b4b4b 100%
+  );
+}
+.bm-il-ring-inner { background: #151515; }
+
+/* The border marks the physical headshot/name division. */
+.bm-il-starter-foot {
+  border-top: 1px solid rgba(170, 170, 170, .52);
+  background: linear-gradient(0deg, #0c0c0c 88%, #151515 100%);
+}
+
+/* The tuning config supplies two transforms for EACH independent card family.
+   CSS container query units (cqw) scale offsets with the card on laptops. */
+.bm-il-starter,
+.bm-il-mini-player,
+.bm-il-expiring,
+.bm-il-roster-row {
+  container-type: inline-size;
+}
+.bm-il-starter .bm-il-portrait,
+.bm-il-mini-player .bm-il-portrait,
+.bm-il-expiring .bm-il-portrait,
+.bm-il-roster-row .bm-il-portrait {
+  transform: var(--bm-il-headshot-tune, none);
+  transform-origin: center bottom;
+}
+.bm-il-starter-foot strong,
+.bm-il-mini-text strong,
+.bm-il-expiring > span:nth-child(2) strong,
+.bm-il-roster-row > span:nth-child(2) strong {
+  display: block;
+  transform: var(--bm-il-name-tune, none);
+  transform-origin: left bottom;
+}
+
+@media (max-width: 1180px) {
+  .bm-il-hero { grid-template-columns: minmax(0, 1fr); }
+  .bm-il-hero-copy h2 { font-size: clamp(20px, 2.4vw, 32px); }
+}
+@media (max-height: 825px) {
+  .bm-il-hero-essentials { margin-top: 5px; font-size: 11px; }
+  .bm-il-starter-foot { border-top-color: rgba(160,160,160,.52); }
+}
+
+/* ========================================================================
+   LEAGUE INTEL — EXACT ROSTER VIEW OVR/POT RINGS + UNBOXED PORTRAITS
+   Independent manual tuning; CSS-only presentation, no gameplay changes.
+   ======================================================================== */
+
+/* PlayerRatingRing.jsx is the same SVG used by Roster View. The wrapper
+   reserves the old Intel slot so small rows and 1920x1080 cards do not grow. */
+.bm-il-rating-ring {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  transform: var(--bm-il-rating-tune, none);
+  transform-origin: center center;
+  isolation: isolate;
+}
+.bm-il-rating-ring--lg {
+  width: 76px;
+  height: 76px;
+}
+.bm-il-starter > .bm-il-rating-ring--lg {
+  position: absolute;
+  z-index: 3;
+  right: 5px;
+  top: 16%;
+}
+.bm-il-rating-ring--sm {
+  width: 37px;
+  height: 37px;
+}
+.bm-il-rating-ring--sm > .bm-il-rating-component {
+  transform: scale(.765);
+  transform-origin: center;
+}
+/* The wrapper's SVG/text is supplied by the exact shared rating component;
+   we never recolor it or invent a second potential calculation. */
+
+/* Headshots have no square, artificial dark backplate. Optional borderWidth
+   in leagueIntelLayout.js deliberately defaults to ZERO. */
+.bm-il-mini-player .bm-il-portrait--mini,
+.bm-il-expiring .bm-il-portrait--mini,
+.bm-il-need .bm-il-portrait--mini,
+.bm-il-roster-row .bm-il-portrait--mini {
+  background: transparent;
+  border: var(--bm-il-headshot-border-width, 0px) solid #6a6a6a;
+  border-radius: 0;
+  box-shadow: none;
+  overflow: visible;
+}
+.bm-il-starter .bm-il-portrait--hero {
+  border: var(--bm-il-headshot-border-width, 0px) solid #6a6a6a;
+}
+.bm-il-starter,
+.bm-il-mini-player,
+.bm-il-expiring,
+.bm-il-roster-row,
+.bm-il-need { border-width: var(--bm-il-card-border-width, 1px); }
+.bm-il-starter-foot { border-top-width: var(--bm-il-divider-border-width, 1px); }
+
+/* Starters: one clean name beneath the existing gray divider. No age label. */
+.bm-il-starter-foot {
+  justify-content: center;
+  min-height: 32px;
+  padding: 4px 7px;
+}
+.bm-il-starter-foot strong { font-size: clamp(9px, .84vw, 12px); }
+
+/* The Team Needs outer rows must keep their existing footprint. Inside their
+   former icon area, a compact portrait + exact OVR/POT ring represents players.
+   Draft assets instead get a transparent originating-team logo. */
+.bm-il-need { container-type: inline-size; }
+.bm-il-need--player, .bm-il-need--pick { padding-block: 2px; }
+.bm-il-need-player-visual {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 2px;
+  width: 57px;
+  height: 26px;
+}
+.bm-il-need-player-visual .bm-il-portrait--mini {
+  width: 25px;
+  height: 26px;
+  flex: none;
+  transform: var(--bm-il-headshot-tune, none);
+  transform-origin: center bottom;
+}
+.bm-il-need-player-visual .bm-il-rating-ring--sm {
+  width: 30px;
+  height: 30px;
+}
+.bm-il-need-player-visual .bm-il-rating-ring--sm > .bm-il-rating-component {
+  transform: scale(.625);
+}
+.bm-il-need > strong {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transform: var(--bm-il-name-tune, none);
+  transform-origin: left bottom;
+}
+.bm-il-need-pick-mark {
+  display: grid;
+  place-items: center;
+  position: relative;
+  flex: none;
+  width: 57px;
+  height: 26px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.bm-il-need-pick-mark img {
+  display: block;
+  width: 52px;
+  height: 26px;
+  object-fit: contain;
+  opacity: var(--bm-il-pick-logo-opacity, .36);
+}
+.bm-il-need-pick-mark span { font-size: 11px; color: #aaa; font-weight: 900; }
+.bm-il-need-generic-icon {
+  border-radius: 50%;
+  border: 1px solid #666;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  flex: none;
+  font-size: 11px;
+}
+/* Original `>span` styling applied a border to every first-child span; make
+   absolutely sure it cannot turn a logo/portrait group back into a box. */
+.bm-il-need > .bm-il-need-player-visual,
+.bm-il-need > .bm-il-need-pick-mark {
+  width: 57px;
+  height: 26px;
+  display: flex;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+@media (max-width: 1180px) {
+  .bm-il-starter > .bm-il-rating-ring--lg { right: 2px; top: 18%; }
+  .bm-il-mini-player .bm-il-rating-ring--sm { width: 32px; height: 32px; }
+  .bm-il-mini-player .bm-il-rating-ring--sm > .bm-il-rating-component { transform: scale(.67); }
+}
+@media (max-height: 825px) {
+  .bm-il-rating-ring--sm { height: 31px; width: 31px; }
+  .bm-il-rating-ring--sm > .bm-il-rating-component { transform: scale(.65); }
+  .bm-il-need-player-visual .bm-il-rating-ring--sm { height: 27px; width: 27px; }
+  .bm-il-need-player-visual .bm-il-rating-ring--sm > .bm-il-rating-component { transform: scale(.57); }
+  .bm-il-starter-foot { min-height: 28px; }
+}
+
+.bm-il-need > .bm-il-need-pick-mark { display: grid; place-items: center; }
+
+/* LEAGUE INTEL EVIDENCE HELP — same small round ? affordance as Settings.
+   The full player row is already a button; this span is deliberately NOT
+   a nested button. Enter/Space and pointer clicks use that row's handler. */
+.bm-il-mini-player .bm-il-evidence-help {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 23px;
+  height: 23px;
+  margin-left: auto;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,.22);
+  background: rgba(255,255,255,.06);
+  color: rgba(255,255,255,.9);
+  font-size: 13px;
+  font-weight: 1000;
+  line-height: 1;
+  transition: border-color .15s ease, background-color .15s ease;
+}
+.bm-il-mini-player:hover .bm-il-evidence-help,
+.bm-il-mini-player:focus-visible .bm-il-evidence-help {
+  border-color: rgba(249,115,22,.6);
+  background: rgba(249,115,22,.2);
+}
+.bm-il-evidence-explained p {
+  font-size: clamp(13px, .93vw, 15px);
+  line-height: 1.6;
+  color: #f0f0f0;
+  overflow-wrap: anywhere;
+}
+.bm-il-evidence-explained strong { color: #ffac50; font-size: 13px; letter-spacing: .02em; }
+.bm-il-evidence-confidence { color: #aaa; font-size: 12px; line-height: 1.5; }
+.bm-il-evidence-source-details { margin-top: 12px; border-top: 1px solid #383838; padding-top: 10px; color: #aaa; font-size: 12px; line-height: 1.55; }
+.bm-il-evidence-source-details summary { cursor: pointer; color: #ddd; font-weight: 700; }
+.bm-il-evidence-source-details p { overflow-wrap: anywhere; margin: 8px 0 0; }
+.bm-il-evidence-source-details code { word-break: break-all; }
+/* Independent, responsive X/Y/scale for originating-team draft-pick logo. */
+.bm-il-need-pick-mark img {
+  transform: var(--bm-il-pick-logo-tune, translate(0cqw, 0cqw) scale(1));
+  transform-origin: center;
+}
+
+/* TARGETS ONLY: remove inline team text and instead show the player's source
+   team as a subtle low-opacity logo watermark inside the pill background. */
+.bm-il-mini-player--target-logo {
+  position: relative;
+  isolation: isolate;
+}
+.bm-il-mini-player--target-logo > *:not(.bm-il-target-team-logo-bg) {
+  position: relative;
+  z-index: 1;
+}
+.bm-il-target-team-logo-bg {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 26px;
+  pointer-events: none;
+  z-index: 0;
+  overflow: hidden;
+}
+.bm-il-target-team-logo-bg img {
+  display: block;
+  width: 64px;
+  height: 64px;
+  object-fit: contain;
+  opacity: var(--bm-il-target-logo-opacity, .16);
+  transform: var(--bm-il-target-logo-tune, translate(0cqw, 0cqw) scale(1));
+  transform-origin: center;
+  filter: saturate(.95);
+}
+@media (max-height: 825px) {
+  .bm-il-mini-player .bm-il-evidence-help { width: 20px; height: 20px; font-size: 12px; }
+}
+
+
+/* =======================================================================
+   LEAGUE INTEL — COURT-CHECKER PORTRAIT PANELS & COMPACT CONTRACT RINGS
+   Visual only. The diamond hatch borrows Draft Picks' black/gray motif;
+   no portrait transform or previously tuned manual-control number changes.
+   ======================================================================= */
+
+/* Starter headshot region only; the name strip remains solid charcoal.
+   Pseudo-element sits beneath the portrait, position, and OVR/POT ring. */
+.bm-il-starter::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 32px 0;
+  z-index: 0;
+  pointer-events: none;
+  background-color: #191919;
+  background-image:
+    url("../assets/basketball-pattern.svg"),
+    repeating-linear-gradient(45deg, transparent 0 23px, rgba(210,210,210,.085) 23px 24px, transparent 24px 47px),
+    repeating-linear-gradient(-45deg, transparent 0 23px, rgba(210,210,210,.07) 23px 24px, transparent 24px 47px),
+    linear-gradient(165deg, #222, #101010);
+  background-size: 340px 340px, auto, auto, auto;
+  background-blend-mode: soft-light, normal, normal, normal;
+}
+.bm-il-starter-foot {
+  z-index: 3;
+  background: linear-gradient(0deg, #0a0a0a, #111);
+}
+/* Re-use the same subtle diagonal crosshatch on existing Intel rows/pills,
+   retaining contrast, rounded corners and current layout dimensions. */
+.bm-il-mini-player,
+.bm-il-expiring,
+.bm-il-need,
+.bm-il-roster-row {
+  background-color: #1c1c1c;
+  background-image:
+    url("../assets/basketball-pattern.svg"),
+    repeating-linear-gradient(45deg, transparent 0 23px, rgba(210,210,210,.065) 23px 24px, transparent 24px 47px),
+    repeating-linear-gradient(-45deg, transparent 0 23px, rgba(210,210,210,.055) 23px 24px, transparent 24px 47px),
+    linear-gradient(125deg, #232323, #141414);
+  background-size: 340px 340px, auto, auto, auto;
+  background-blend-mode: soft-light, normal, normal, normal;
+}
+.bm-il-mini-player:hover,
+.bm-il-expiring:hover,
+.bm-il-need:hover,
+.bm-il-roster-row:hover {
+  background-color: #292929;
+  background-image:
+    url("../assets/basketball-pattern.svg"),
+    repeating-linear-gradient(45deg, transparent 0 23px, rgba(210,210,210,.085) 23px 24px, transparent 24px 47px),
+    repeating-linear-gradient(-45deg, transparent 0 23px, rgba(210,210,210,.07) 23px 24px, transparent 24px 47px),
+    linear-gradient(125deg, #303030, #1b1b1b);
+  background-size: 340px 340px, auto, auto, auto;
+  background-blend-mode: soft-light, normal, normal, normal;
+}
+
+/* Move/scale positional and age metadata INDEPENDENTLY. cqw is tied to each
+   section's card width, preserving the existing laptop scaling approach. */
+.bm-il-player-position, .bm-il-player-age {
+  display: inline-block;
+  transform-origin: left center;
+  white-space: nowrap;
+}
+.bm-il-player-position { transform: var(--bm-il-position-tune, none); }
+.bm-il-player-age { transform: var(--bm-il-age-tune, none); }
+.bm-il-starter .bm-il-position {
+  transform: var(--bm-il-position-tune, none);
+  transform-origin: left top;
+}
+/* Needs: keep same row height, let a secondary position/age line use the
+   room already inside the current pill; don't invent missing metadata. */
+.bm-il-need-copy {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+}
+.bm-il-need-copy > strong {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.1;
+  transform: var(--bm-il-name-tune, none);
+  transform-origin: left bottom;
+}
+.bm-il-need-metadata {
+  display: block;
+  overflow: hidden;
+  color: #aaa;
+  font-size: 8px;
+  line-height: 1.1;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+/* A compact portrait and the exact shared Roster View POT/OVR ring. All
+   expiringDeals.headshot/name/ring controls continue to operate separately. */
+.bm-il-expiring .bm-il-expiring-visual {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+}
+.bm-il-expiring .bm-il-expiring-visual .bm-il-portrait--mini {
+  width: 30px;
+  height: 36px;
+}
+.bm-il-expiring .bm-il-expiring-visual .bm-il-rating-ring--sm {
+  width: 34px;
+  height: 34px;
+}
+.bm-il-expiring .bm-il-expiring-visual .bm-il-rating-ring--sm > .bm-il-rating-component {
+  transform: scale(.71);
+}
+.bm-il-expiring .bm-il-expiring-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.bm-il-expiring > .bm-il-expiring-copy > strong {
+  font-size: clamp(9px, .74vw, 11px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transform: var(--bm-il-name-tune, none);
+  transform-origin: left bottom;
+}
+.bm-il-expiring .bm-il-expiring-copy > small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #b8b8b8;
+}
+.bm-il-expiring > b { flex: none; font-size: 10px; }
+@media (max-width: 1180px), (max-height: 825px) {
+  .bm-il-expiring .bm-il-expiring-visual { gap: 1px; }
+  .bm-il-expiring .bm-il-expiring-visual .bm-il-portrait--mini { width: 25px; height: 29px; }
+  .bm-il-expiring .bm-il-expiring-visual .bm-il-rating-ring--sm { width: 28px; height: 28px; }
+  .bm-il-expiring .bm-il-expiring-visual .bm-il-rating-ring--sm > .bm-il-rating-component { transform: scale(.59); }
+}
+@media (max-height: 825px) {
+  .bm-il-starter::before { bottom: 28px; }
+}
+/* Beat the legacy .bm-il-need > span icon selector: this is a text column,
+   NOT a 24px round icon. Original pill and portrait sizes stay untouched. */
+.bm-il-need > .bm-il-need-copy {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: stretch;
+  gap: 1px;
+  min-width: 0;
+  width: auto;
+  height: auto;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+}
+
+/* ====================================================================
+   LEAGUE INTEL — INNER OVR/POT TEXT TUNING (page scoped, shared SVG safe)
+   Every rating SVG remains the EXACT shared PlayerRatingRing component.
+   Move the text OVER the ring without affecting the ring's circumference.
+   ==================================================================== */
+.bm-il-rating-ring .bm-il-rating-component > div {
+  transform: var(--bm-il-ring-text-tune, none);
+  transform-origin: center center;
+}
+.bm-il-rating-ring .bm-il-rating-component > div > span {
+  display: inline-block; /* CSS transforms require an inline-block, not inline */
+}
+.bm-il-rating-ring .bm-il-rating-component > div > span:nth-child(1) {
+  transform: var(--bm-il-ring-label-tune, none);
+  transform-origin: center center;
+}
+.bm-il-rating-ring .bm-il-rating-component > div > span:nth-child(2) {
+  transform: var(--bm-il-ring-value-tune, none);
+  transform-origin: center center;
+}
+.bm-il-rating-ring .bm-il-rating-component > div > span:nth-child(3) {
+  transform: var(--bm-il-ring-pot-tune, none);
+  transform-origin: center center;
+}
+
+/* STARTERS ONLY: genuinely centre each name, regardless of its width.
+   Preserve the user's configured name.x=45 as the old visual centre, so
+   the existing value does not become an extra 45px translation. A change
+   to name.x now nudges left/right relative to that stable centre. */
+.bm-il-starter-foot {
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.bm-il-starter-foot strong {
+  display: block;
+  flex: 0 0 auto;
+  width: max-content;
+  max-width: none;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: nowrap;
+  text-align: center;
+  transform-origin: center center;
+  transform: var(--bm-il-starter-name-shift, translate(0, 0))
+    scale(var(--bm-il-starter-name-final-scale, 1));
+}
+
+/* Two independent Team Needs panels. Preserve the overall bottom-grid size,
+   background, and user-adjusted teamNeeds CSS transforms. When one or two
+   assets are present, fill each panel consistently without making new rows. */
+.bm-il-bottom-grid .bm-il-fact-panel:has(.bm-il-need--split) .bm-il-facts {
+  display: grid;
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  align-content: start;
+}
+.bm-il-need--split {
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+}
+.bm-il-need--split > .bm-il-need-copy > strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+
+/* ========================================================================
+   TEAM NEEDS PLAYERS — USE THE EXACT SAME MINI SCOUTING ROW COMPONENT
+   Existing hand-tuned numbers live separately in teamNeedsPlayers; the
+   Team Needs: Picks pill and origin-logo controls are not modified.
+   ======================================================================== */
+.bm-il-bottom-grid .bm-il-need-player-mirror {
+  height: 100%;
+  min-height: 0;
+  width: 100%;
+  padding: 4px 6px;
+  overflow: hidden;
+}
+/* Unlike the old 8px metadata slot, the shared scouting text row has enough
+   line box height for descending glyphs (e.g., the 'g' in 'Age'). */
+.bm-il-bottom-grid .bm-il-need-player-mirror .bm-il-mini-text small {
+  line-height: 1.45;
+  min-height: 1.45em;
+  padding-block: 1px;
+}
+.bm-il-bottom-grid .bm-il-need-player-mirror .bm-il-mini-text strong {
+  line-height: 1.25;
+}
+
+/* LEAGUE INTEL — MATCH PLAYER METADATA TYPOGRAPHY TO PLAYER NAMES
+   Four player panels only: Protected Core, Likely Available, Targets,
+   Team Needs: Players. Does not alter font sizing for starter name strips,
+   picks, modal dialogs or other screens. Existing X/Y/scale manual controls
+   are intentionally untouched. */
+.bm-il-mini-player .bm-il-mini-text > strong,
+.bm-il-mini-player .bm-il-mini-text > small,
+.bm-il-mini-player .bm-il-mini-text .bm-il-player-position,
+.bm-il-mini-player .bm-il-mini-text .bm-il-player-age {
+  font-family: inherit;
+  font-weight: 950;
+  letter-spacing: normal;
+}
+.bm-il-mini-player .bm-il-mini-text > small {
+  /* Slightly smaller than names to preserve compact-row spacing. */
+  font-size: clamp(9px, .74vw, 10.5px);
+  line-height: 1.35;
+  color: #e0e0e0;
+}

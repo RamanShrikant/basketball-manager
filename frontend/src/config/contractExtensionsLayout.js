@@ -21,7 +21,7 @@ export const CONTRACT_EXTENSIONS_LAYOUT = {
     overallRing: {
       x: 9,
       y: 0,
-      scale: 1,
+      scale: 0.8,
       // Text inside the LEFT OVR/POT ring.
       ovrLabelSize: 6,
       ovrLabelX: 0,
@@ -50,7 +50,7 @@ export const CONTRACT_EXTENSIONS_LAYOUT = {
     overallRing: {
       x: 0,
       y: 0,
-      scale: 1.3,
+      scale: 1.2,
       // Text inside the TOP selected-player OVR/POT ring.
       ovrLabelSize: 8,
       ovrLabelX: 0,
