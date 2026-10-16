@@ -1,0 +1,26 @@
+.bmAuthScreen{min-height:100vh;background:radial-gradient(ellipse at 50% 0%,#2e2118 0%,#151515 42%,#080808 100%);color:#f6f6f6;display:flex;align-items:center;justify-content:center;padding:30px 16px;font-family:inherit}
+.bmAuthPanel{width:min(100%,460px);background:linear-gradient(155deg,#191919,#101010);border:1px solid #38312b;border-radius:18px;padding:clamp(22px,4vw,42px);box-shadow:0 28px 80px #000a}
+.bmAuthBrand{font-size:33px;font-weight:1000;font-style:italic;line-height:1;color:#f4772d;display:flex;align-items:center;gap:12px}
+.bmAuthBrand span{font-style:normal;font-size:11px;font-weight:900;line-height:1.1;letter-spacing:.08em;max-width:97px;color:#fff}
+.bmAuthEyebrow{font-weight:800;font-size:11px;letter-spacing:.16em;color:#d38e60;margin:32px 0 8px}
+.bmAuthPanel h1{font-size:clamp(25px,4vw,32px);margin:0 0 8px;font-weight:900;letter-spacing:-.03em;color:#fff}
+.bmAuthSubtext{color:#acacac;font-size:14px;margin:0 0 24px;line-height:1.6}
+.bmAuthForm{display:flex;flex-direction:column;gap:9px}
+.bmAuthForm label{font-size:12px;font-weight:800;color:#dedede;margin-top:9px}
+.bmAuthForm input{height:46px;width:100%;box-sizing:border-box;border-radius:8px;padding:12px 13px;background:#0c0c0c;border:1px solid #48403a;color:#fff;font-size:15px;outline:none}
+.bmAuthForm input:focus{border-color:#f4772d;box-shadow:0 0 0 2px #f4772d28}
+.bmAuthPrimary,.bmAuthAdoptButtons button{width:100%;min-height:46px;border:0;border-radius:8px;background:#e96720;color:#fff;font-size:13px;font-weight:950;cursor:pointer;margin-top:16px}
+.bmAuthPrimary:disabled{opacity:.55;cursor:wait}
+.bmAuthAdoptButtons{display:flex;flex-direction:column;gap:8px}
+.bmAuthAdoptButtons button{margin:0}
+.bmAuthAdoptButtons button+button{background:#2c2c2c;border:1px solid #555}
+.bmAuthSwitch{margin:19px auto 0;display:block;border:0;background:transparent;color:#ff9a5a;font-size:13px;font-weight:800;cursor:pointer}
+.bmAuthNote{color:#888;font-size:11px;line-height:1.5;text-align:center;margin:27px 0 0}
+.bmAuthError,.bmAuthInfo{border-radius:8px;padding:11px 13px;font-size:13px;line-height:1.5;margin:12px 0;background:#3b1717;color:#ffc2ba;border:1px solid #7e3636;overflow-wrap:anywhere}
+.bmAuthInfo{background:#143022;border-color:#306347;color:#9bedbc}
+.bmAccountChip{position:fixed;right:16px;bottom:16px;z-index:2147483000;display:flex;max-width:min(440px,calc(100vw - 32px));align-items:center;gap:10px;border:1px solid #4b3323;border-radius:9px;background:#121212f2;box-shadow:0 8px 28px #0008;padding:7px 9px;color:#dedede;font-size:11px}
+.bmAccountChipLabel{max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bmAccountChip button{background:#402213;border:1px solid #9e4917;color:#ffa772;border-radius:6px;font-size:11px;font-weight:800;padding:6px 9px;cursor:pointer}
+.bmAccountChip button:disabled{opacity:.5;cursor:wait}
+.bmAccountChipError{color:#ffb4a4;overflow-wrap:anywhere;max-width:200px}
+@media(max-width:560px){.bmAccountChipLabel{display:none}.bmAccountChip{right:8px;bottom:8px}}

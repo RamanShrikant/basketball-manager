@@ -1,0 +1,105 @@
+:root {
+  --accent: #ffa500;
+}
+
+.bmCourtPage {
+  width: 100%;
+  position: relative;
+  overflow-x: hidden;
+  isolation: isolate;
+
+  background-image:
+    url("../assets/basketball-pattern.svg"),
+    repeating-linear-gradient(45deg, rgba(255, 255, 255, 0.045) 0 1px, transparent 1px 28px),
+    repeating-linear-gradient(-45deg, rgba(255, 255, 255, 0.035) 0 1px, transparent 1px 22px),
+    radial-gradient(circle at 50% 30%, #2b2b2b 0%, #0d0d0d 80%);
+  background-repeat: repeat, repeat, repeat, no-repeat;
+  background-size: 340px 340px, auto, auto, cover;
+  background-position: center;
+  background-blend-mode: soft-light, normal, normal, normal;
+}
+
+.bmCourtPage > * {
+  position: relative;
+  z-index: 1;
+}
+
+.bmSolidPanel,
+.bmTablePanel {
+  background: rgba(12, 12, 12, 0.92);
+  box-shadow: 0 18px 55px rgba(0, 0, 0, 0.28);
+}
+
+.bmTablePanel table {
+  background: rgba(12, 12, 12, 0.92);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bmCourtPage {
+    background-blend-mode: soft-light, normal, normal, normal;
+  }
+}
+
+/* Both axes scroll in the same container so headers share column geometry. */
+.bmTablePanel table { border-collapse: separate; border-spacing: 0; }
+.bmTablePanel thead th { position: sticky; top: 0; z-index: 20; background: #191919; box-shadow: 0 1px 0 #393939; }
+.bmTablePanel th:first-child { min-width: 260px; }
+.bmTablePanel th:not(:first-child) { min-width: 88px; }
+
+
+/* V14.16 SALARY TABLE 15 ROW FIT START */
+/* Keep the salary page compact enough to show about 15 players, while keeping rows readable and scrollable for deeper rosters. */
+.bmTablePanel {
+  min-height: 0;
+}
+
+.bmTablePanel thead th {
+  padding-top: 8px !important;
+  padding-bottom: 8px !important;
+  line-height: 1.05 !important;
+}
+
+.bmTablePanel tbody td {
+  line-height: 1.08 !important;
+}
+
+.bmTablePanel tbody tr:last-child td {
+  padding-top: 9px !important;
+  padding-bottom: 9px !important;
+}
+
+@media (max-height: 820px) {
+  .bmTablePanel thead th {
+    padding-top: 7px !important;
+    padding-bottom: 7px !important;
+  }
+}
+/* V14.16 SALARY TABLE 15 ROW FIT END */
+
+/* V14.17 SALARY TABLE FULL-FIT TUNE START */
+.bmTablePanel {
+  min-height: 0;
+}
+
+.bmTablePanel :global(.bmTableScroller) {
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.bmTablePanel thead th {
+  padding-top: 6px !important;
+  padding-bottom: 6px !important;
+}
+
+.bmTablePanel tbody tr:last-child td {
+  padding-top: 8px !important;
+  padding-bottom: 8px !important;
+}
+
+@media (max-height: 820px) {
+  .bmTablePanel thead th {
+    padding-top: 5px !important;
+    padding-bottom: 5px !important;
+  }
+}
+/* V14.17 SALARY TABLE FULL-FIT TUNE END */

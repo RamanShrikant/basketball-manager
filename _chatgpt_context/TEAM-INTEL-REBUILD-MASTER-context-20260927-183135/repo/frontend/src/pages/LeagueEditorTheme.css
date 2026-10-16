@@ -1,0 +1,1046 @@
+.league-editor-theme {
+  min-height: calc(100vh - 66px);
+  color: #f8fafc;
+  background:
+    radial-gradient(circle at 16% 0%, rgba(37, 99, 235, 0.18), transparent 34%),
+    radial-gradient(circle at 84% 8%, rgba(124, 58, 237, 0.15), transparent 32%),
+    linear-gradient(135deg, #050a12 0%, #07111f 48%, #030712 100%);
+  font-family:
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+}
+
+.league-editor-theme > * {
+  max-width: 1280px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.league-editor-intro,
+.league-editor-control-row,
+.league-editor-tab-row,
+.league-editor-subtab-row,
+.league-editor-team-form {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(8, 15, 28, 0.78);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(18px);
+}
+
+.league-editor-intro::before,
+.league-editor-control-row::before,
+.league-editor-tab-row::before,
+.league-editor-subtab-row::before,
+.league-editor-team-form::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.022) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.016) 1px, transparent 1px);
+  background-size: 46px 46px;
+  mask-image: radial-gradient(circle at 50% 50%, black 0%, transparent 78%);
+}
+
+.league-editor-intro {
+  border-radius: 24px;
+  min-height: 188px;
+  padding: clamp(24px, 3.2vw, 40px);
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-start;
+  gap: 24px;
+  background:
+    radial-gradient(circle at 88% 20%, rgba(59, 130, 246, 0.32), transparent 28%),
+    linear-gradient(135deg, rgba(30, 64, 175, 0.58), rgba(8, 15, 28, 0.92) 62%),
+    rgba(8, 15, 28, 0.84);
+  border-color: rgba(96, 165, 250, 0.3);
+}
+
+.league-editor-intro > * {
+  position: relative;
+  z-index: 1;
+}
+
+.league-editor-kicker {
+  display: inline-flex;
+  margin-bottom: 10px;
+  color: rgba(196, 181, 253, 0.9);
+  font-size: 0.78rem;
+  line-height: 1;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-weight: 900;
+}
+
+.league-editor-intro h1 {
+  margin: 0;
+  color: #ffffff;
+  font-size: clamp(3rem, 6.2vw, 5.8rem);
+  line-height: 0.9;
+  letter-spacing: -0.065em;
+  font-weight: 950;
+}
+
+.league-editor-intro p {
+  margin: clamp(12px, 1.5vw, 18px) 0 0;
+  max-width: 720px;
+  color: rgba(226, 232, 240, 0.76);
+  font-size: clamp(0.98rem, 1.2vw, 1.08rem);
+  line-height: 1.48;
+  font-weight: 550;
+}
+
+.league-editor-control-row,
+.league-editor-team-form {
+  border-radius: 18px;
+  padding: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.league-editor-button-row {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.league-editor-input {
+  position: relative;
+  z-index: 1;
+  width: min(100%, 260px);
+  color: #f8fafc;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(15, 23, 42, 0.78);
+  border-radius: 12px;
+  padding: 11px 13px;
+  outline: none;
+  font-weight: 650;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.league-editor-input::placeholder {
+  color: rgba(203, 213, 225, 0.48);
+}
+
+.league-editor-input:focus {
+  border-color: rgba(147, 197, 253, 0.72);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.16);
+}
+
+select.league-editor-input,
+.league-editor-theme select {
+  color: #f8fafc !important;
+  background-color: #0f172a !important;
+  border-color: rgba(147, 197, 253, 0.34) !important;
+  color-scheme: dark;
+}
+
+select.league-editor-input option,
+.league-editor-theme select option,
+.league-editor-theme select optgroup {
+  color: #f8fafc !important;
+  background-color: #111827 !important;
+}
+
+select.league-editor-input option:hover,
+.league-editor-theme select option:hover,
+select.league-editor-input option:focus,
+.league-editor-theme select option:focus {
+  color: #ffffff !important;
+  background-color: #1d4ed8 !important;
+}
+
+select.league-editor-input option:checked,
+.league-editor-theme select option:checked {
+  color: #ffffff !important;
+  background-color: #2563eb !important;
+}
+
+.league-editor-secondary-button,
+.league-editor-trades-button,
+.league-editor-primary-button,
+.league-editor-add-team,
+.league-editor-tab,
+.league-editor-conference-tab {
+  position: relative;
+  z-index: 1;
+  appearance: none;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 12px;
+  color: rgba(248, 250, 252, 0.92);
+  background: rgba(15, 23, 42, 0.76);
+  padding: 11px 15px;
+  font-weight: 850;
+  cursor: pointer;
+  transition: transform 160ms ease, background 160ms ease, border-color 160ms ease, color 160ms ease;
+}
+
+.league-editor-secondary-button:hover,
+.league-editor-trades-button:hover,
+.league-editor-primary-button:hover,
+.league-editor-add-team:hover,
+.league-editor-tab:hover,
+.league-editor-conference-tab:hover,
+.league-editor-secondary-button:focus-visible,
+.league-editor-trades-button:focus-visible,
+.league-editor-primary-button:focus-visible,
+.league-editor-add-team:focus-visible,
+.league-editor-tab:focus-visible,
+.league-editor-conference-tab:focus-visible {
+  transform: translateY(-1px);
+  border-color: rgba(147, 197, 253, 0.52);
+  background: rgba(30, 64, 175, 0.38);
+  color: #ffffff;
+  outline: none;
+}
+
+.league-editor-trades-button {
+  background: rgba(109, 40, 217, 0.66);
+  border-color: rgba(196, 181, 253, 0.24);
+}
+
+.league-editor-primary-button,
+.league-editor-add-team {
+  background: rgba(37, 99, 235, 0.72);
+  border-color: rgba(147, 197, 253, 0.26);
+}
+
+.league-editor-tab-row,
+.league-editor-subtab-row {
+  width: fit-content;
+  border-radius: 999px;
+  padding: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.league-editor-tab,
+.league-editor-conference-tab {
+  border-radius: 999px;
+  padding: 10px 16px;
+}
+
+.league-editor-tab.is-active,
+.league-editor-conference-tab.is-active {
+  color: #ffffff;
+  border-color: rgba(147, 197, 253, 0.48);
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.84), rgba(109, 40, 217, 0.72));
+  box-shadow: 0 12px 32px rgba(37, 99, 235, 0.18);
+}
+
+.league-editor-theme .bg-white {
+  color: #f8fafc;
+  background: rgba(8, 15, 28, 0.84) !important;
+}
+
+.league-editor-theme .border,
+.league-editor-theme .border-b,
+.league-editor-theme .border-slate-200,
+.league-editor-theme .border-purple-200 {
+  border-color: rgba(148, 163, 184, 0.16) !important;
+}
+
+.league-editor-theme .shadow-lg {
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.28) !important;
+}
+
+.league-editor-theme > .league-editor-modal-backdrop {
+  max-width: none;
+  margin: 0;
+}
+
+.league-editor-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: clamp(16px, 3vh, 28px) 16px;
+  overflow-y: auto;
+  background: rgba(2, 6, 23, 0.76);
+  backdrop-filter: blur(10px);
+}
+
+.league-editor-modal-panel {
+  position: relative;
+  width: min(100%, var(--league-editor-modal-width, 760px));
+  max-height: calc(100vh - clamp(32px, 6vh, 56px));
+  overflow-y: auto !important;
+  overscroll-behavior: contain;
+  color: #f8fafc;
+  background:
+    radial-gradient(circle at 18% 0%, rgba(59, 130, 246, 0.18), transparent 34%),
+    linear-gradient(135deg, rgba(8, 15, 28, 0.96), rgba(15, 23, 42, 0.98)) !important;
+  border: 1px solid rgba(147, 197, 253, 0.2);
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.5);
+}
+
+.league-editor-modal-panel.w-\[900px\] {
+  --league-editor-modal-width: 900px;
+}
+
+.league-editor-modal-panel.w-\[980px\] {
+  --league-editor-modal-width: 980px;
+}
+
+.league-editor-player-modal {
+  --league-editor-modal-width: 760px;
+}
+
+.league-editor-modal-title-row {
+  position: sticky;
+  top: -1.5rem;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: -1.5rem -1.5rem 1rem;
+  padding: 1.1rem 1.25rem;
+  background: rgba(8, 15, 28, 0.96);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+  backdrop-filter: blur(16px);
+}
+
+.league-editor-modal-title-row h2 {
+  margin: 0;
+}
+
+.league-editor-modal-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.35rem;
+  height: 2.35rem;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  color: rgba(248, 250, 252, 0.92);
+  background: rgba(15, 23, 42, 0.88);
+  font-size: 1.45rem;
+  line-height: 1;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.league-editor-modal-close:hover,
+.league-editor-modal-close:focus-visible {
+  color: #ffffff;
+  border-color: rgba(147, 197, 253, 0.62);
+  background: rgba(37, 99, 235, 0.42);
+  outline: none;
+}
+
+.league-editor-modal-panel label,
+.league-editor-modal-panel .text-xs,
+.league-editor-modal-panel .text-sm {
+  color: rgba(226, 232, 240, 0.8) !important;
+}
+
+.league-editor-modal-panel input:not([type="file"]):not([type="range"]):not([type="checkbox"]),
+.league-editor-modal-panel select,
+.league-editor-modal-panel textarea {
+  color: #f8fafc !important;
+  background-color: rgba(15, 23, 42, 0.92) !important;
+  border-color: rgba(148, 163, 184, 0.26) !important;
+}
+
+.league-editor-modal-panel input:not([type="file"]):not([type="range"]):not([type="checkbox"]):focus,
+.league-editor-modal-panel select:focus,
+.league-editor-modal-panel textarea:focus {
+  border-color: rgba(147, 197, 253, 0.72) !important;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.18);
+  outline: none;
+}
+
+.league-editor-modal-panel input:disabled,
+.league-editor-modal-panel input[readonly] {
+  opacity: 0.72;
+  cursor: not-allowed;
+}
+
+.league-editor-modal-panel .bg-slate-50,
+.league-editor-modal-panel .bg-gray-100,
+.league-editor-modal-panel .bg-gray-200,
+.league-editor-modal-panel .bg-gray-300 {
+  background: rgba(15, 23, 42, 0.68) !important;
+}
+
+.league-editor-modal-panel input[type="range"],
+.league-editor-modal-panel input[type="checkbox"] {
+  accent-color: #60a5fa;
+}
+
+.league-editor-theme h2,
+.league-editor-theme .font-bold,
+.league-editor-theme .font-semibold {
+  color: rgba(248, 250, 252, 0.96);
+}
+
+.league-editor-theme table {
+  color: rgba(226, 232, 240, 0.82);
+}
+
+.league-editor-theme th {
+  color: rgba(196, 181, 253, 0.9);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-size: 0.74rem;
+}
+
+.league-editor-theme td {
+  color: rgba(226, 232, 240, 0.82);
+}
+
+.league-editor-theme .text-slate-500,
+.league-editor-theme .text-slate-600,
+.league-editor-theme .text-slate-700,
+.league-editor-theme .text-slate-900 {
+  color: rgba(226, 232, 240, 0.64) !important;
+}
+
+.league-editor-theme .bg-gray-100,
+.league-editor-theme .bg-gray-200,
+.league-editor-theme .bg-gray-300,
+.league-editor-theme .bg-slate-100,
+.league-editor-theme .bg-purple-50 {
+  color: rgba(248, 250, 252, 0.9) !important;
+  background: rgba(15, 23, 42, 0.76) !important;
+}
+
+.league-editor-theme .text-blue-600 {
+  color: #93c5fd !important;
+}
+
+.league-editor-theme .text-red-600 {
+  color: #fca5a5 !important;
+}
+
+.league-editor-theme .text-purple-900,
+.league-editor-theme .text-purple-800 {
+  color: #c4b5fd !important;
+}
+
+.league-editor-theme input:not([type="file"]),
+.league-editor-theme select,
+.league-editor-theme textarea {
+  color: #f8fafc;
+  background-color: rgba(15, 23, 42, 0.78);
+  border-color: rgba(148, 163, 184, 0.2);
+}
+
+.league-editor-theme input:not([type="file"])::placeholder,
+.league-editor-theme textarea::placeholder {
+  color: rgba(203, 213, 225, 0.46);
+}
+
+.league-editor-theme select option {
+  color: #f8fafc !important;
+  background-color: #111827 !important;
+}
+
+.league-editor-theme select option:checked {
+  color: #ffffff !important;
+  background-color: #2563eb !important;
+}
+
+.league-editor-theme button:not(.league-editor-tab):not(.league-editor-conference-tab):not(.league-editor-trades-button):not(.league-editor-primary-button):not(.league-editor-add-team) {
+  border-color: rgba(148, 163, 184, 0.16);
+}
+
+@media (max-width: 760px) {
+  .league-editor-intro {
+    min-height: 0;
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .league-editor-intro h1 {
+    font-size: 3.2rem;
+  }
+}
+
+/* V14.2 Save UI polish: keep the hero blue, but make the working editor match the in-game black/orange surfaces. */
+.league-editor-control-row,
+.league-editor-tab-row,
+.league-editor-subtab-row,
+.league-editor-team-form {
+  border-color: rgba(249, 115, 22, 0.12) !important;
+  background:
+    radial-gradient(circle at 18% 0%, rgba(249, 115, 22, 0.08), transparent 32%),
+    rgba(8, 8, 8, 0.9) !important;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.34) !important;
+}
+
+.league-editor-control-row::before,
+.league-editor-tab-row::before,
+.league-editor-subtab-row::before,
+.league-editor-team-form::before {
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.014) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.012) 1px, transparent 1px) !important;
+}
+
+.league-editor-input {
+  border-color: rgba(148, 163, 184, 0.16) !important;
+  background: rgba(17, 17, 17, 0.9) !important;
+}
+
+.league-editor-input:focus {
+  border-color: rgba(251, 146, 60, 0.72) !important;
+  box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.16) !important;
+}
+
+select.league-editor-input,
+.league-editor-theme select {
+  background-color: #111111 !important;
+  border-color: rgba(251, 146, 60, 0.28) !important;
+}
+
+select.league-editor-input option,
+.league-editor-theme select option,
+.league-editor-theme select optgroup {
+  background-color: #111111 !important;
+}
+
+select.league-editor-input option:checked,
+.league-editor-theme select option:checked {
+  background-color: #ea580c !important;
+}
+
+.league-editor-secondary-button,
+.league-editor-trades-button,
+.league-editor-primary-button,
+.league-editor-add-team,
+.league-editor-tab,
+.league-editor-conference-tab {
+  border-color: rgba(148, 163, 184, 0.14) !important;
+  background: rgba(20, 20, 20, 0.82) !important;
+}
+
+.league-editor-secondary-button:hover,
+.league-editor-trades-button:hover,
+.league-editor-primary-button:hover,
+.league-editor-add-team:hover,
+.league-editor-tab:hover,
+.league-editor-conference-tab:hover,
+.league-editor-secondary-button:focus-visible,
+.league-editor-trades-button:focus-visible,
+.league-editor-primary-button:focus-visible,
+.league-editor-add-team:focus-visible,
+.league-editor-tab:focus-visible,
+.league-editor-conference-tab:focus-visible {
+  border-color: rgba(251, 146, 60, 0.52) !important;
+  background: rgba(249, 115, 22, 0.16) !important;
+}
+
+.league-editor-primary-button,
+.league-editor-add-team,
+.league-editor-tab.is-active,
+.league-editor-conference-tab.is-active {
+  border-color: rgba(251, 146, 60, 0.42) !important;
+  background: linear-gradient(135deg, rgba(249, 115, 22, 0.86), rgba(194, 65, 12, 0.74)) !important;
+  box-shadow: 0 12px 32px rgba(249, 115, 22, 0.18) !important;
+}
+
+.league-editor-trades-button {
+  border-color: rgba(251, 146, 60, 0.26) !important;
+  background: rgba(154, 52, 18, 0.48) !important;
+}
+
+.league-editor-kicker {
+  color: rgba(147, 197, 253, 0.92) !important;
+}
+
+/* V14.4 design consistency: keep the hero blue, make all editor work surfaces match Team Hub. */
+.league-editor-theme {
+  background: linear-gradient(180deg, #06101b 0%, #07111c 46%, #050d16 100%) !important;
+}
+
+.league-editor-intro {
+  background:
+    radial-gradient(circle at 88% 20%, rgba(59, 130, 246, 0.24), transparent 28%),
+    linear-gradient(135deg, rgba(30, 64, 175, 0.55), rgba(8, 15, 28, 0.94) 62%),
+    #080f18 !important;
+  border-color: rgba(96, 165, 250, 0.3) !important;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.22) !important;
+}
+
+.league-editor-control-row,
+.league-editor-tab-row,
+.league-editor-subtab-row,
+.league-editor-team-form {
+  border-color: #223047 !important;
+  background: #080f18 !important;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.22) !important;
+  backdrop-filter: none !important;
+}
+
+.league-editor-control-row::before,
+.league-editor-tab-row::before,
+.league-editor-subtab-row::before,
+.league-editor-team-form::before {
+  display: none !important;
+}
+
+.league-editor-control-row,
+.league-editor-team-form {
+  border-radius: 12px !important;
+}
+
+.league-editor-tab-row,
+.league-editor-subtab-row {
+  border-radius: 12px !important;
+  padding: 6px !important;
+  background: #0a111c !important;
+}
+
+.league-editor-input,
+.league-editor-theme input:not([type="file"]),
+.league-editor-theme select,
+.league-editor-theme textarea {
+  color: #f8fafc !important;
+  border-color: #26344a !important;
+  background-color: #101b2a !important;
+  box-shadow: none !important;
+}
+
+.league-editor-input:focus,
+.league-editor-theme input:not([type="file"]):focus,
+.league-editor-theme select:focus,
+.league-editor-theme textarea:focus {
+  border-color: rgba(249, 115, 22, 0.78) !important;
+  box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.16) !important;
+  outline: none !important;
+}
+
+select.league-editor-input,
+.league-editor-theme select {
+  background-color: #101b2a !important;
+  border-color: #26344a !important;
+}
+
+select.league-editor-input option,
+.league-editor-theme select option,
+.league-editor-theme select optgroup {
+  background-color: #0b1220 !important;
+  color: #f8fafc !important;
+}
+
+select.league-editor-input option:checked,
+.league-editor-theme select option:checked {
+  background-color: #d65316 !important;
+  color: #ffffff !important;
+}
+
+.league-editor-secondary-button,
+.league-editor-trades-button,
+.league-editor-primary-button,
+.league-editor-add-team,
+.league-editor-tab,
+.league-editor-conference-tab,
+.league-editor-theme button:not(.league-editor-tab):not(.league-editor-conference-tab):not(.league-editor-trades-button):not(.league-editor-primary-button):not(.league-editor-add-team) {
+  color: rgba(241, 245, 249, 0.9) !important;
+  border-color: #26344a !important;
+  background: #0c121c !important;
+  box-shadow: none !important;
+}
+
+.league-editor-secondary-button:hover,
+.league-editor-trades-button:hover,
+.league-editor-primary-button:hover,
+.league-editor-add-team:hover,
+.league-editor-tab:hover,
+.league-editor-conference-tab:hover,
+.league-editor-secondary-button:focus-visible,
+.league-editor-trades-button:focus-visible,
+.league-editor-primary-button:focus-visible,
+.league-editor-add-team:focus-visible,
+.league-editor-tab:focus-visible,
+.league-editor-conference-tab:focus-visible {
+  color: #ffffff !important;
+  border-color: rgba(249, 115, 22, 0.5) !important;
+  background: rgba(249, 115, 22, 0.1) !important;
+  transform: none !important;
+}
+
+.league-editor-primary-button,
+.league-editor-add-team,
+.league-editor-tab.is-active,
+.league-editor-conference-tab.is-active {
+  color: #ffffff !important;
+  border-color: rgba(251, 146, 60, 0.35) !important;
+  background: #d65316 !important;
+  box-shadow:
+    inset 0 0 0 1px rgba(251, 146, 60, 0.12),
+    0 7px 18px rgba(67, 20, 7, 0.24) !important;
+}
+
+.league-editor-trades-button {
+  color: #fff7ed !important;
+  border-color: rgba(251, 146, 60, 0.24) !important;
+  background: #6f2b12 !important;
+}
+
+.league-editor-modal-backdrop {
+  background: rgba(0, 0, 0, 0.68) !important;
+}
+
+.league-editor-modal-panel {
+  background: #080f18 !important;
+  border-color: #223047 !important;
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.55) !important;
+}
+
+.league-editor-modal-title-row {
+  background: #0a111c !important;
+  border-bottom-color: #223047 !important;
+}
+
+.league-editor-modal-close:hover,
+.league-editor-modal-close:focus-visible {
+  border-color: rgba(249, 115, 22, 0.58) !important;
+  background: rgba(249, 115, 22, 0.16) !important;
+}
+
+.league-editor-modal-panel input[type="range"],
+.league-editor-modal-panel input[type="checkbox"] {
+  accent-color: #f97316 !important;
+}
+
+/* V14.5 Team Hub unification: studio header may stay branded; the editor workspace should read like the game. */
+.league-editor-theme {
+  background: #050505 !important;
+}
+
+.league-editor-intro {
+  background: linear-gradient(135deg, #152a60 0%, #0b182b 58%, #080b10 100%) !important;
+  border-color: rgba(96, 165, 250, 0.26) !important;
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.35) !important;
+}
+
+.league-editor-control-row,
+.league-editor-tab-row,
+.league-editor-subtab-row,
+.league-editor-team-form {
+  border-color: #252525 !important;
+  background: #090909 !important;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.3) !important;
+}
+
+.league-editor-control-row,
+.league-editor-team-form {
+  border-radius: 14px !important;
+}
+
+.league-editor-tab-row,
+.league-editor-subtab-row {
+  background: #080808 !important;
+  border-radius: 999px !important;
+}
+
+.league-editor-input,
+.league-editor-theme input:not([type="file"]),
+.league-editor-theme select,
+.league-editor-theme textarea,
+.league-editor-modal-panel input:not([type="file"]):not([type="range"]):not([type="checkbox"]),
+.league-editor-modal-panel select,
+.league-editor-modal-panel textarea {
+  background-color: #111111 !important;
+  border-color: #303030 !important;
+  color: #f8fafc !important;
+  box-shadow: none !important;
+}
+
+.league-editor-input:focus,
+.league-editor-theme input:not([type="file"]):focus,
+.league-editor-theme select:focus,
+.league-editor-theme textarea:focus,
+.league-editor-modal-panel input:not([type="file"]):not([type="range"]):not([type="checkbox"]):focus,
+.league-editor-modal-panel select:focus,
+.league-editor-modal-panel textarea:focus {
+  border-color: rgba(249, 115, 22, 0.76) !important;
+  box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.14) !important;
+}
+
+.league-editor-secondary-button,
+.league-editor-trades-button,
+.league-editor-primary-button,
+.league-editor-add-team,
+.league-editor-tab,
+.league-editor-conference-tab,
+.league-editor-theme button:not(.league-editor-tab):not(.league-editor-conference-tab):not(.league-editor-trades-button):not(.league-editor-primary-button):not(.league-editor-add-team) {
+  background: #111111 !important;
+  border-color: #303030 !important;
+  color: rgba(248, 250, 252, 0.9) !important;
+  box-shadow: none !important;
+}
+
+.league-editor-secondary-button:hover,
+.league-editor-trades-button:hover,
+.league-editor-primary-button:hover,
+.league-editor-add-team:hover,
+.league-editor-tab:hover,
+.league-editor-conference-tab:hover,
+.league-editor-secondary-button:focus-visible,
+.league-editor-trades-button:focus-visible,
+.league-editor-primary-button:focus-visible,
+.league-editor-add-team:focus-visible,
+.league-editor-tab:focus-visible,
+.league-editor-conference-tab:focus-visible {
+  background: rgba(249, 115, 22, 0.11) !important;
+  border-color: rgba(249, 115, 22, 0.5) !important;
+  color: #ffffff !important;
+  transform: none !important;
+}
+
+.league-editor-primary-button,
+.league-editor-add-team,
+.league-editor-tab.is-active,
+.league-editor-conference-tab.is-active {
+  background: #e9540d !important;
+  border-color: rgba(255, 146, 60, 0.36) !important;
+  color: #ffffff !important;
+  box-shadow: 0 8px 18px rgba(67, 20, 7, 0.25) !important;
+}
+
+.league-editor-trades-button {
+  background: #5f2410 !important;
+  border-color: rgba(249, 115, 22, 0.28) !important;
+}
+
+.league-editor-modal-panel {
+  background: #090909 !important;
+  border-color: #252525 !important;
+}
+
+.league-editor-modal-title-row {
+  background: #0c0c0c !important;
+  border-bottom-color: #252525 !important;
+}
+
+
+/* V14.6 full editor unification: hero and working area now share the in-game black/orange language. */
+.league-editor-intro {
+  min-height: 170px !important;
+  background:
+    linear-gradient(
+      100deg,
+      rgba(77, 37, 22, 0.30) 0%,
+      rgba(42, 23, 14, 0.22) 26%,
+      rgba(12, 13, 16, 0.98) 64%,
+      rgba(7, 8, 10, 0.995) 100%
+    ),
+    #08090b !important;
+  border-color: rgba(255, 255, 255, 0.055) !important;
+  border-radius: 16px !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.018),
+    0 8px 22px rgba(0,0,0,0.20) !important;
+}
+
+.league-editor-intro::before {
+  display: none !important;
+}
+
+.league-editor-kicker {
+  color: #ffb26d !important;
+}
+
+.league-editor-intro h1 {
+  text-transform: uppercase;
+  letter-spacing: -0.055em !important;
+}
+
+.league-editor-intro p {
+  color: rgba(255,255,255,0.58) !important;
+}
+
+.league-editor-theme select,
+.league-editor-theme .league-editor-input,
+.league-editor-modal-panel select,
+.league-editor-modal-panel input:not([type="file"]):not([type="range"]):not([type="checkbox"]),
+.league-editor-modal-panel textarea {
+  background: #111111 !important;
+  color: #f8fafc !important;
+  border-color: #3a3a3a !important;
+  color-scheme: dark !important;
+}
+
+.league-editor-theme select:hover,
+.league-editor-theme .league-editor-input:hover,
+.league-editor-modal-panel select:hover,
+.league-editor-modal-panel input:not([type="file"]):not([type="range"]):not([type="checkbox"]):hover,
+.league-editor-modal-panel textarea:hover {
+  border-color: rgba(249,115,22,0.44) !important;
+}
+
+.league-editor-theme select option,
+.league-editor-theme select optgroup,
+.league-editor-modal-panel select option,
+.league-editor-modal-panel select optgroup {
+  background: #0d0d0d !important;
+  color: #f8fafc !important;
+}
+
+.league-editor-theme select option:checked,
+.league-editor-modal-panel select option:checked {
+  background: linear-gradient(#e9540d, #e9540d) !important;
+  color: #ffffff !important;
+}
+
+.league-editor-theme label.bg-green-600,
+.league-editor-theme .bg-green-600,
+.league-editor-theme .bg-blue-600,
+.league-editor-theme .bg-purple-600,
+.league-editor-theme .bg-indigo-600 {
+  background: #111111 !important;
+  border: 1px solid #303030 !important;
+  color: rgba(248,250,252,0.92) !important;
+  box-shadow: none !important;
+}
+
+.league-editor-theme label.bg-green-600:hover,
+.league-editor-theme .bg-green-600:hover,
+.league-editor-theme .bg-blue-600:hover,
+.league-editor-theme .bg-purple-600:hover,
+.league-editor-theme .bg-indigo-600:hover {
+  background: rgba(249,115,22,0.14) !important;
+  border-color: rgba(249,115,22,0.52) !important;
+  color: #fff !important;
+}
+
+.league-editor-theme .bg-blue-600:not(label),
+.league-editor-theme .league-editor-add-team,
+.league-editor-theme .league-editor-primary-button {
+  background: #e9540d !important;
+  border-color: rgba(255,146,60,0.36) !important;
+  color: #fff !important;
+}
+
+.league-editor-theme .league-editor-control-row,
+.league-editor-theme .league-editor-tab-row,
+.league-editor-theme .league-editor-subtab-row,
+.league-editor-theme .league-editor-team-form {
+  background: #090909 !important;
+  border-color: rgba(255,255,255,0.06) !important;
+}
+
+.league-editor-theme .league-editor-tab-row,
+.league-editor-theme .league-editor-subtab-row {
+  box-shadow: 0 7px 20px rgba(0,0,0,0.28) !important;
+}
+
+/* V14.7 editor import/dropdown polish:
+   Imported rosters and Tailwind utility cards should remain in the same BM
+   black/orange editor language instead of falling back to blue/white surfaces. */
+.league-editor-theme {
+  background: linear-gradient(180deg, #050607 0%, #06080a 52%, #050607 100%) !important;
+}
+
+.league-editor-theme .league-editor-intro {
+  background:
+    linear-gradient(100deg, rgba(72, 31, 12, 0.52) 0%, rgba(28, 17, 12, 0.92) 36%, rgba(8, 9, 11, 0.995) 100%),
+    #08090b !important;
+  border-color: rgba(249, 115, 22, 0.22) !important;
+}
+
+.league-editor-theme :where(section, article, div).bg-white,
+.league-editor-theme :where(section, article, div).bg-slate-50,
+.league-editor-theme :where(section, article, div).bg-slate-100,
+.league-editor-theme :where(section, article, div).bg-slate-800,
+.league-editor-theme :where(section, article, div).bg-slate-900,
+.league-editor-theme :where(section, article, div).bg-blue-50,
+.league-editor-theme :where(section, article, div).bg-blue-100,
+.league-editor-theme :where(section, article, div).bg-blue-900,
+.league-editor-theme :where(section, article, div).bg-indigo-900,
+.league-editor-theme :where(section, article, div).bg-purple-50,
+.league-editor-theme :where(section, article, div).bg-purple-100 {
+  color: #f8fafc !important;
+  background: #090909 !important;
+  border-color: rgba(255, 255, 255, 0.075) !important;
+}
+
+.league-editor-theme .bg-white:not(button):not(label):not(input):not(select):not(textarea),
+.league-editor-theme .shadow-lg,
+.league-editor-theme .rounded-2xl,
+.league-editor-theme .rounded-xl {
+  background-color: #090909 !important;
+  border-color: rgba(255, 255, 255, 0.075) !important;
+}
+
+.league-editor-theme .text-slate-700,
+.league-editor-theme .text-slate-800,
+.league-editor-theme .text-purple-900,
+.league-editor-theme .text-blue-800 {
+  color: rgba(248, 250, 252, 0.88) !important;
+}
+
+.league-editor-theme .text-blue-600,
+.league-editor-theme .hover\:underline:hover {
+  color: #ffb26d !important;
+}
+
+.league-editor-theme select,
+.league-editor-theme .league-editor-input,
+.league-editor-modal-panel select,
+.league-editor-modal-panel input:not([type="file"]):not([type="range"]):not([type="checkbox"]),
+.league-editor-modal-panel textarea,
+.league-editor-theme input:not([type="file"]):not([type="range"]):not([type="checkbox"]),
+.league-editor-theme textarea {
+  background-color: #101010 !important;
+  color: #f8fafc !important;
+  border-color: #373737 !important;
+  color-scheme: dark !important;
+}
+
+.league-editor-theme select:focus,
+.league-editor-theme .league-editor-input:focus,
+.league-editor-modal-panel select:focus,
+.league-editor-modal-panel input:not([type="file"]):not([type="range"]):not([type="checkbox"]):focus,
+.league-editor-modal-panel textarea:focus,
+.league-editor-theme input:not([type="file"]):not([type="range"]):not([type="checkbox"]):focus,
+.league-editor-theme textarea:focus {
+  border-color: rgba(249, 115, 22, 0.78) !important;
+  box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.14) !important;
+  outline: none !important;
+}
+
+.league-editor-theme select option,
+.league-editor-theme select optgroup,
+.league-editor-modal-panel select option,
+.league-editor-modal-panel select optgroup {
+  background-color: #0c0c0c !important;
+  color: #f8fafc !important;
+}
+
+.league-editor-theme select option:checked,
+.league-editor-modal-panel select option:checked {
+  background-color: #e9540d !important;
+  color: #ffffff !important;
+}
+
+.league-editor-theme .border-purple-200,
+.league-editor-theme .border-slate-200,
+.league-editor-theme .border-slate-300,
+.league-editor-theme .border-blue-200 {
+  border-color: rgba(255,255,255,0.075) !important;
+}

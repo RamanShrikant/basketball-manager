@@ -1,0 +1,52 @@
+:root {
+  --accent: #ffa500;
+}
+
+.retirementsPage {
+  width: 100%;
+  position: relative;
+  overflow-x: hidden;
+  isolation: isolate;
+
+  background-image:
+    url("../assets/basketball-pattern.svg"),
+    repeating-linear-gradient(45deg, rgba(255,255,255,0.045) 0 1px, transparent 1px 28px),
+    repeating-linear-gradient(-45deg, rgba(255,255,255,0.035) 0 1px, transparent 1px 22px),
+    radial-gradient(circle at 50% 30%, #2b2b2b 0%, #0d0d0d 80%);
+  background-repeat: repeat, repeat, repeat, no-repeat;
+  background-size: 340px 340px, auto, auto, cover;
+  background-position: center;
+  background-blend-mode: soft-light, normal, normal, normal;
+}
+
+.retirementsPage > * {
+  position: relative;
+  z-index: 1;
+}
+
+.storyBox {
+  backdrop-filter: blur(3px);
+}
+
+.storyScroller {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(249, 115, 22, 0.9) rgba(255, 255, 255, 0.05);
+}
+
+.storyScroller::-webkit-scrollbar {
+  width: 6px;
+}
+
+.storyScroller::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 999px;
+}
+
+.storyScroller::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(251, 146, 60, 0.95), rgba(234, 88, 12, 0.9));
+  border-radius: 999px;
+}
+
+.storyScroller::-webkit-scrollbar-thumb:hover {
+  background: rgba(249, 115, 22, 1);
+}

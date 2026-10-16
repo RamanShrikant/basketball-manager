@@ -1,0 +1,949 @@
+{
+  "version": "bm_portrait_studio_manifest_v1",
+  "canvas": {
+    "width": 1040,
+    "height": 760
+  },
+  "paths": {
+    "draftReferences": "/assets/rookie_faces/",
+    "jerseylessBases": "/assets/portrait_studio/base/",
+    "jerseys": "/assets/jerseys/v1/"
+  },
+  "naming": {
+    "basePattern": "rookie_face_####_base.png",
+    "existingIdentityRule": "Use the same rookie_face_#### ID as the draft reference.",
+    "nextNewIdentity": "rookie_face_0135"
+  },
+  "counts": {
+    "identities": 44,
+    "draftReferences": 44,
+    "baseReady": 44,
+    "needsBase": 0
+  },
+  "entries": [
+    {
+      "id": "rookie_face_0003",
+      "baseFilename": "rookie_face_0003_base.png",
+      "baseUrl": "/assets/portrait_studio/base/rookie_face_0003_base.png",
+      "draftUrl": "/assets/rookie_faces/rookie_face_0003.png",
+      "baseReady": true,
+      "needsBase": false,
+      "fitReference": false,
+      "canvas": {
+        "width": 1040,
+        "height": 760,
+        "alpha": true
+      },
+      "appearancePool": "Black",
+      "skinTone": "medium-dark",
+      "hairTextureGroup": "coily",
+      "defaultHairStyle": "short fade",
+      "defaultFacialHair": "none",
+      "expression": "neutral",
+      "quality": "strong"
+    },
+    {
+      "id": "rookie_face_0004",
+      "baseFilename": "rookie_face_0004_base.png",
+      "baseUrl": "/assets/portrait_studio/base/rookie_face_0004_base.png",
+      "draftUrl": "/assets/rookie_faces/rookie_face_0004.png",
+      "baseReady": true,
+      "needsBase": false,
+      "fitReference": false,
+      "canvas": {
+        "width": 1040,
+        "height": 760,
+        "alpha": true
+      },
+      "appearancePool": "Black",
+      "skinTone": "dark",
+      "hairTextureGroup": "coily",
+      "defaultHairStyle": "short twists",
+      "defaultFacialHair": "light goatee",
+      "expression": "neutral",
+      "quality": "strong"
+    },
+    {
+      "id": "rookie_face_0005",
+      "baseFilename": "rookie_face_0005_base.png",
+      "baseUrl": "/assets/portrait_studio/base/rookie_face_0005_base.png",
+      "draftUrl": "/assets/rookie_faces/rookie_face_0005.png",
+      "baseReady": true,
+      "needsBase": false,
+      "fitReference": false,
+      "canvas": {
+        "width": 1040,
+        "height": 760,
+        "alpha": true
+      },
+      "appearancePool": "Black",
+      "skinTone": "dark",
+      "hairTextureGroup": "coily",
+      "defaultHairStyle": "buzz cut",
+      "defaultFacialHair": "none",
+      "expression": "smile",
+      "quality": "strong"
+    },
+    {
+      "id": "rookie_face_0006",
+      "baseFilename": "rookie_face_0006_base.png",
+      "baseUrl": "/assets/portrait_studio/base/rookie_face_0006_base.png",
+      "draftUrl": "/assets/rookie_faces/rookie_face_0006.png",
+      "baseReady": true,
+      "needsBase": false,
+      "fitReference": false,
+      "canvas": {
+        "width": 1040,
+        "height": 760,
+        "alpha": true
+      },
+      "appearancePool": "Black",
+      "skinTone": "medium-dark",
+      "hairTextureGroup": "coily",
+      "defaultHairStyle": "short twists",
+      "defaultFacialHair": "none",
+      "expression": "smile",
+      "quality": "strong"
+    },
+    {
+      "id": "rookie_face_0033",
+      "baseFilename": "rookie_face_0033_base.png",
+      "baseUrl": "/assets/portrait_studio/base/rookie_face_0033_base.png",
+      "draftUrl": "/assets/rookie_faces/rookie_face_0033.png",
+      "baseReady": true,
+      "needsBase": false,
+      "fitReference": false,
+      "canvas": {
+        "width": 1040,
+        "height": 760,
+        "alpha": true
+      },
+      "appearancePool": "Mixed / Black",
+      "skinTone": "light-brown",
+      "hairTextureGroup": "coily",
+      "defaultHairStyle": "braids",
+      "defaultFacialHair": "none",
+      "expression": "smile",
+      "quality": "strong"
+    },
+    {
+      "id": "rookie_face_0034",
+      "baseFilename": "rookie_face_0034_base.png",
+      "baseUrl": "/assets/portrait_studio/base/rookie_face_0034_base.png",
+      "draftUrl": "/assets/rookie_faces/rookie_face_0034.png",
+      "baseReady": true,
+      "needsBase": false,
+      "fitReference": false,
+      "canvas": {
+        "width": 1040,
+        "height": 760,
+        "alpha": true
+      },
+      "appearancePool": "Latino / Mixed",
+      "skinTone": "tan",
+      "hairTextureGroup": "curly/coily",
+      "defaultHairStyle": "short curls",
+      "defaultFacialHair": "light stubble",
+      "expression": "neutral",
+      "quality": "strong"
+    },
+    {
+      "id": "rookie_face_0035",
+      "baseFilename": "rookie_face_0035_base.png",
+      "baseUrl": "/assets/portrait_studio/base/rookie_face_0035_base.png",
+      "draftUrl": "/assets/rookie_faces/rookie_face_0035.png",
+      "baseReady": true,
+      "needsBase": false,
+      "fitReference": false,
+      "canvas": {
+        "width": 1040,
+        "height": 760,
+        "alpha": true
+      },
+      "appearancePool": "Mixed / Black",
+      "skinTone": "light-brown",
+      "hairTextureGroup": "coily",
+      "defaultHairStyle": "braids",
+      "defaultFacialHair": "light goatee",
+      "expression": "smile",
+      "quality": "strong"
+    },
+    {
+      "id": "rookie_face_0036",
+      "baseFilename": "rookie_face_0036_base.png",
+      "baseUrl": "/assets/portrait_studio/base/rookie_face_0036_base.png",
+      "draftUrl": "/assets/rookie_faces/rookie_face_0036.png",
+      "baseReady": true,
+      "needsBase": false,
+      "fitReference": false,
+      "canvas": {
+        "width": 1040,
+        "height": 760,
+        "alpha": true
+      },
+      "appearancePool": "Latino / Mixed",
+      "skinTone": "tan",
+      "hairTextureGroup": "curly/coily",
+      "defaultHairStyle": "short curls",
+      "defaultFacialHair": "light beard",
+      "expression": "neutral",
+      "quality": "strong"
+    },
+    {
+      "id": "rookie_face_0047",
+      "baseFilename": "rookie_face_0047_base.png",
+      "baseUrl": "/assets/portrait_studio/base/rookie_face_0047_base.png",
+      "draftUrl": "/assets/rookie_faces/rookie_face_0047.png",
+      "baseReady": true,
+      "needsBase": false,
+      "fitReference": false,
+      "canvas": {
+        "width": 1040,
+        "height": 760,
+        "alpha": true
+      },
+      "appearancePool": "African / International",
+      "skinTone": "dark",
+      "hairTextureGroup": "coily",
+      "defaultHairStyle": "close-cropped hair",
+      "defaultFacialHair": "none",
+      "expression": "neutral",
+      "quality": "strong"
+    },
+    {
+      "id": "rookie_face_0048",
+      "baseFilename": "rookie_face_0048_base.png",
+      "baseUrl": "/assets/portrait_studio/base/rookie_face_0048_base.png",
+      "draftUrl": "/assets/rookie_faces/rookie_face_0048.png",
+      "baseReady": true,
+      "needsBase": false,
+      "fitReference": false,
+      "canvas": {
+        "width": 1040,
+        "height": 760,
+        "alpha": true
+      },
+      "appearancePool": "African / International",
+      "skinTone": "dark",
+      "hairTextureGroup": "coily",
+      "defaultHairStyle": "close-cropped hair",
+      "defaultFacialHair": "none",
+      "expression": "smile",
+      "quality": "strong"
+    },
+    {
+      "id": "rookie_face_0059",
+      "baseFilename": "rookie_face_0059_base.png",
+      "baseUrl": "/assets/portrait_studio/base/rookie_face_0059_base.png",
+      "draftUrl": "/assets/rookie_faces/rookie_face_0059.png",
+      "baseReady": true,
+      "needsBase": false,
+      "fitReference": false,
+      "canvas": {
+        "width": 1040,
+        "height": 760,
+        "alpha": true
+      },
+      "appearancePool": "White",
+      "skinTone": "light",
+      "hairTextureGroup": "straight/wavy",
+      "defaultHairStyle": "short brown hair",
+      "defaultFacialHair": "none",
+      "expression": "neutral",
+      "quality": "strong"
+    },
+    {
+      "id": "rookie_face_0060",
+      "baseFilename": "rookie_face_0060_base.png",
+      "baseUrl": "/assets/portrait_studio/base/rookie_face_0060_base.png",
+      "draftUrl": "/assets/rookie_faces/rookie_face_0060.png",
+      "baseReady": true,
+      "needsBase": false,
+      "fitReference": false,
+      "canvas": {
+        "width": 1040,
+        "height": 760,
+        "alpha": true
+      },
+      "appearancePool": "White",
+      "skinTone": "light",
+      "hairTextureGroup": "straight/wavy",
+      "defaultHairStyle": "short blond hair",
+      "defaultFacialHair": "none",
+      "expression": "smile",
+      "quality": "strong"
+    },
+    {
+      "id": "rookie_face_0061",
+      "baseFilename": "rookie_face_0061_base.png",
+      "baseUrl": "/assets/portrait_studio/base/rookie_face_0061_base.png",
+      "draftUrl": "/assets/rookie_faces/rookie_face_0061.png",
+      "baseReady": true,
+      "needsBase": false,
+      "fitReference": false,
+      "canvas": {
+        "width": 1040,
+        "height": 760,
+        "alpha": true
+      },
+      "appearancePool": "White",
+      "skinTone": "light",
+      "hairTextureGroup": "straight/wavy",
+      "defaultHairStyle": "medium brown hair",
+      "defaultFacialHair": "light beard",
+      "expression": "neutral",
+      "quality": "usable - crop slightly larger"
+    },
+    {
+      "id": "rookie_face_0062",
+      "baseFilename": "rookie_face_0062_base.png",
+      "baseUrl": "/assets/portrait_studio/base/rookie_face_0062_base.png",
+      "draftUrl": "/assets/rookie_faces/rookie_face_0062.png",
+      "baseReady": true,
+      "needsBase": false,
+      "fitReference": false,
+      "canvas": {
+        "width": 1040,
+        "height": 760,
+        "alpha": true
+      },
+      "appearancePool": "White",
+      "skinTone": "light",
+      "hairTextureGroup": "straight/wavy",
+      "defaultHairStyle": "short brown hair",
+      "defaultFacialHair": "none",
+      "expression": "smile",
+      "quality": "strong"
+    },
+    {
+      "id": "rookie_face_0063",
+      "baseFilename": "rookie_face_0063_base.png",
+      "baseUrl": "/assets/portrait_studio/base/rookie_face_0063_base.png",
+      "draftUrl": "/assets/rookie_faces/rookie_face_0063.png",
+      "baseReady": true,
+      "needsBase": false,
+      "fitReference": false,
+      "canvas": {
+        "width": 1040,
+        "height": 760,
+        "alpha": true
+      },
+      "appearancePool": "White",
+      "skinTone": "light",
+      "hairTextureGroup": "straight/wavy",
+      "defaultHairStyle": "short brown hair",
+      "defaultFacialHair": "none",
+      "expression": "neutral",
+      "quality": "strong"
+    },
+    {
+      "id": "rookie_face_0064",
+      "baseFilename": "rookie_face_0064_base.png",
+      "baseUrl": "/assets/portrait_studio/base/rookie_face_0064_base.png",
+      "draftUrl": "/assets/rookie_faces/rookie_face_0064.png",
+      "baseReady": true,
+      "needsBase": false,
+      "fitReference": false,
+      "canvas": {
+        "width": 1040,
+        "height": 760,
+        "alpha": true
+      },
+      "appearancePool": "White",
+      "skinTone": "light",
+      "hairTextureGroup": "straight/wavy",
+      "defaultHairStyle": "short brown hair",
+      "defaultFacialHair": "none",
+      "expression": "smile",
+      "quality": "strong"
+    },
+    {
+      "id": "rookie_face_0084",
+      "baseFilename": "rookie_face_0084_base.png",
+      "baseUrl": "/assets/portrait_studio/base/rookie_face_0084_base.png",
+      "draftUrl": "/assets/rookie_faces/rookie_face_0084.png",
+      "baseReady": true,
+      "needsBase": false,
+      "fitReference": false,
+      "canvas": {
+        "width": 1040,
+        "height": 760,
+        "alpha": true
+      },
+      "appearancePool": "Mixed / Pacific Islander",
+      "skinTone": "medium",
+      "hairTextureGroup": "straight/wavy",
+      "defaultHairStyle": "short black hair",
+      "defaultFacialHair": "none",
+      "expression": "neutral",
+      "quality": "strong"
+    },
+    {
+      "id": "rookie_face_0085",
+      "baseFilename": "rookie_face_0085_base.png",
+      "baseUrl": "/assets/portrait_studio/base/rookie_face_0085_base.png",
+      "draftUrl": "/assets/rookie_faces/rookie_face_0085.png",
+      "baseReady": true,
+      "needsBase": false,
+      "fitReference": false,
+      "canvas": {
+        "width": 1040,
+        "height": 760,
+        "alpha": true
+      },
+      "appearancePool": "Mixed / Black",
+      "skinTone": "light-brown",
+      "hairTextureGroup": "curly/coily",
+      "defaultHairStyle": "short curls",
+      "defaultFacialHair": "light mustache",
+      "expression": "neutral",
+      "quality": "strong"
+    },
+    {
+      "id": "rookie_face_0094",
+      "baseFilename": "rookie_face_0094_base.png",
+      "baseUrl": "/assets/portrait_studio/base/rookie_face_0094_base.png",
+      "draftUrl": "/assets/rookie_faces/rookie_face_0094.png",
+      "baseReady": true,
+      "needsBase": false,
+      "fitReference": false,
+      "canvas": {
+        "width": 1040,
+        "height": 760,
+        "alpha": true
+      },
+      "appearancePool": "East Asian",
+      "skinTone": "light-medium",
+      "hairTextureGroup": "straight",
+      "defaultHairStyle": "short black hair",
+      "defaultFacialHair": "none",
+      "expression": "neutral",
+      "quality": "strong"
+    },
+    {
+      "id": "rookie_face_0095",
+      "baseFilename": "rookie_face_0095_base.png",
+      "baseUrl": "/assets/portrait_studio/base/rookie_face_0095_base.png",
+      "draftUrl": "/assets/rookie_faces/rookie_face_0095.png",
+      "baseReady": true,
+      "needsBase": false,
+      "fitReference": false,
+      "canvas": {
+        "width": 1040,
+        "height": 760,
+        "alpha": true
+      },
+      "appearancePool": "East Asian",
+      "skinTone": "light-medium",
+      "hairTextureGroup": "straight",
+      "defaultHairStyle": "short black hair",
+      "defaultFacialHair": "none",
+      "expression": "smile",
+      "quality": "strong"
+    },
+    {
+      "id": "rookie_face_0106",
+      "baseFilename": "rookie_face_0106_base.png",
+      "baseUrl": "/assets/portrait_studio/base/rookie_face_0106_base.png",
+      "draftUrl": "/assets/rookie_faces/rookie_face_0106.png",
+      "baseReady": true,
+      "needsBase": false,
+      "fitReference": false,
+      "canvas": {
+        "width": 1040,
+        "height": 760,
+        "alpha": true
+      },
+      "appearancePool": "Black",
+      "skinTone": "medium-dark",
+      "hairTextureGroup": "coily",
+      "defaultHairStyle": "short locs/twists",
+      "defaultFacialHair": "light facial hair",
+      "expression": "smile",
+      "quality": "strong"
+    },
+    {
+      "id": "rookie_face_0107",
+      "baseFilename": "rookie_face_0107_base.png",
+      "baseUrl": "/assets/portrait_studio/base/rookie_face_0107_base.png",
+      "draftUrl": "/assets/rookie_faces/rookie_face_0107.png",
+      "baseReady": true,
+      "needsBase": false,
+      "fitReference": false,
+      "canvas": {
+        "width": 1040,
+        "height": 760,
+        "alpha": true
+      },
+      "appearancePool": "Black",
+      "skinTone": "dark",
+      "hairTextureGroup": "coily",
+      "defaultHairStyle": "short fade",
+      "defaultFacialHair": "none",
+      "expression": "smile",
+      "quality": "strong"
+    },
+    {
+      "id": "rookie_face_0108",
+      "baseFilename": "rookie_face_0108_base.png",
+      "baseUrl": "/assets/portrait_studio/base/rookie_face_0108_base.png",
+      "draftUrl": "/assets/rookie_faces/rookie_face_0108.png",
+      "baseReady": true,
+      "needsBase": false,
+      "fitReference": false,
+      "canvas": {
+        "width": 1040,
+        "height": 760,
+        "alpha": true
+      },
+      "appearancePool": "Mixed / Black",
+      "skinTone": "light-brown",
+      "hairTextureGroup": "coily",
+      "defaultHairStyle": "cornrows/braids",
+      "defaultFacialHair": "light goatee",
+      "expression": "smile",
+      "quality": "strong"
+    },
+    {
+      "id": "rookie_face_0109",
+      "baseFilename": "rookie_face_0109_base.png",
+      "baseUrl": "/assets/portrait_studio/base/rookie_face_0109_base.png",
+      "draftUrl": "/assets/rookie_faces/rookie_face_0109.png",
+      "baseReady": true,
+      "needsBase": false,
+      "fitReference": false,
+      "canvas": {
+        "width": 1040,
+        "height": 760,
+        "alpha": true
+      },
+      "appearancePool": "Black",
+      "skinTone": "medium-dark",
+      "hairTextureGroup": "coily",
+      "defaultHairStyle": "high curls",
+      "defaultFacialHair": "none",
+      "expression": "neutral",
+      "quality": "strong"
+    },
+    {
+      "id": "rookie_face_0110",
+      "baseFilename": "rookie_face_0110_base.png",
+      "baseUrl": "/assets/portrait_studio/base/rookie_face_0110_base.png",
+      "draftUrl": "/assets/rookie_faces/rookie_face_0110.png",
+      "baseReady": true,
+      "needsBase": false,
+      "fitReference": false,
+      "canvas": {
+        "width": 1040,
+        "height": 760,
+        "alpha": true
+      },
+      "appearancePool": "African / International",
+      "skinTone": "very-dark",
+      "hairTextureGroup": "coily",
+      "defaultHairStyle": "close-cropped hair",
+      "defaultFacialHair": "none",
+      "expression": "smile",
+      "quality": "strong"
+    },
+    {
+      "id": "rookie_face_0111",
+      "baseFilename": "rookie_face_0111_base.png",
+      "baseUrl": "/assets/portrait_studio/base/rookie_face_0111_base.png",
+      "draftUrl": "/assets/rookie_faces/rookie_face_0111.png",
+      "baseReady": true,
+      "needsBase": false,
+      "fitReference": false,
+      "canvas": {
+        "width": 1040,
+        "height": 760,
+        "alpha": true
+      },
+      "appearancePool": "White",
+      "skinTone": "light",
+      "hairTextureGroup": "straight/wavy",
+      "defaultHairStyle": "short brown hair",
+      "defaultFacialHair": "none",
+      "expression": "neutral",
+      "quality": "strong"
+    },
+    {
+      "id": "rookie_face_0112",
+      "baseFilename": "rookie_face_0112_base.png",
+      "baseUrl": "/assets/portrait_studio/base/rookie_face_0112_base.png",
+      "draftUrl": "/assets/rookie_faces/rookie_face_0112.png",
+      "baseReady": true,
+      "needsBase": false,
+      "fitReference": false,
+      "canvas": {
+        "width": 1040,
+        "height": 760,
+        "alpha": true
+      },
+      "appearancePool": "Black",
+      "skinTone": "light-brown",
+      "hairTextureGroup": "coily",
+      "defaultHairStyle": "short fade",
+      "defaultFacialHair": "goatee",
+      "expression": "smile",
+      "quality": "strong"
+    },
+    {
+      "id": "rookie_face_0113",
+      "baseFilename": "rookie_face_0113_base.png",
+      "baseUrl": "/assets/portrait_studio/base/rookie_face_0113_base.png",
+      "draftUrl": "/assets/rookie_faces/rookie_face_0113.png",
+      "baseReady": true,
+      "needsBase": false,
+      "fitReference": false,
+      "canvas": {
+        "width": 1040,
+        "height": 760,
+        "alpha": true
+      },
+      "appearancePool": "White",
+      "skinTone": "light",
+      "hairTextureGroup": "straight/wavy",
+      "defaultHairStyle": "dyed blond messy hair",
+      "defaultFacialHair": "none",
+      "expression": "smile",
+      "quality": "strong"
+    },
+    {
+      "id": "rookie_face_0114",
+      "baseFilename": "rookie_face_0114_base.png",
+      "baseUrl": "/assets/portrait_studio/base/rookie_face_0114_base.png",
+      "draftUrl": "/assets/rookie_faces/rookie_face_0114.png",
+      "baseReady": true,
+      "needsBase": false,
+      "fitReference": false,
+      "canvas": {
+        "width": 1040,
+        "height": 760,
+        "alpha": true
+      },
+      "appearancePool": "East Asian",
+      "skinTone": "light-medium",
+      "hairTextureGroup": "straight",
+      "defaultHairStyle": "medium black hair",
+      "defaultFacialHair": "none",
+      "expression": "neutral",
+      "quality": "strong"
+    },
+    {
+      "id": "rookie_face_0115",
+      "baseFilename": "rookie_face_0115_base.png",
+      "baseUrl": "/assets/portrait_studio/base/rookie_face_0115_base.png",
+      "draftUrl": "/assets/rookie_faces/rookie_face_0115.png",
+      "baseReady": true,
+      "needsBase": false,
+      "fitReference": false,
+      "canvas": {
+        "width": 1040,
+        "height": 760,
+        "alpha": true
+      },
+      "appearancePool": "East Asian",
+      "skinTone": "light-medium",
+      "hairTextureGroup": "straight",
+      "defaultHairStyle": "medium black hair",
+      "defaultFacialHair": "none",
+      "expression": "smile",
+      "quality": "strong"
+    },
+    {
+      "id": "rookie_face_0121",
+      "baseFilename": "rookie_face_0121_base.png",
+      "baseUrl": "/assets/portrait_studio/base/rookie_face_0121_base.png",
+      "draftUrl": "/assets/rookie_faces/rookie_face_0121.png",
+      "baseReady": true,
+      "needsBase": false,
+      "fitReference": false,
+      "canvas": {
+        "width": 1040,
+        "height": 760,
+        "alpha": true
+      },
+      "appearancePool": "Black",
+      "skinTone": "medium-dark",
+      "hairTextureGroup": "coily",
+      "defaultHairStyle": "short dreads/twists",
+      "defaultFacialHair": "none",
+      "expression": "neutral",
+      "quality": "realistic - average/rougher face"
+    },
+    {
+      "id": "rookie_face_0122",
+      "baseFilename": "rookie_face_0122_base.png",
+      "baseUrl": "/assets/portrait_studio/base/rookie_face_0122_base.png",
+      "draftUrl": "/assets/rookie_faces/rookie_face_0122.png",
+      "baseReady": true,
+      "needsBase": false,
+      "fitReference": false,
+      "canvas": {
+        "width": 1040,
+        "height": 760,
+        "alpha": true
+      },
+      "appearancePool": "Black",
+      "skinTone": "dark",
+      "hairTextureGroup": "coily",
+      "defaultHairStyle": "short dreads/twists",
+      "defaultFacialHair": "none",
+      "expression": "neutral",
+      "quality": "realistic - average/rougher face"
+    },
+    {
+      "id": "rookie_face_0123",
+      "baseFilename": "rookie_face_0123_base.png",
+      "baseUrl": "/assets/portrait_studio/base/rookie_face_0123_base.png",
+      "draftUrl": "/assets/rookie_faces/rookie_face_0123.png",
+      "baseReady": true,
+      "needsBase": false,
+      "fitReference": false,
+      "canvas": {
+        "width": 1040,
+        "height": 760,
+        "alpha": true
+      },
+      "appearancePool": "Black",
+      "skinTone": "medium-dark",
+      "hairTextureGroup": "coily",
+      "defaultHairStyle": "freeform dreads",
+      "defaultFacialHair": "none",
+      "expression": "neutral",
+      "quality": "realistic - average/rougher face"
+    },
+    {
+      "id": "rookie_face_0124",
+      "baseFilename": "rookie_face_0124_base.png",
+      "baseUrl": "/assets/portrait_studio/base/rookie_face_0124_base.png",
+      "draftUrl": "/assets/rookie_faces/rookie_face_0124.png",
+      "baseReady": true,
+      "needsBase": false,
+      "fitReference": false,
+      "canvas": {
+        "width": 1040,
+        "height": 760,
+        "alpha": true
+      },
+      "appearancePool": "Mixed / Black",
+      "skinTone": "light-brown",
+      "hairTextureGroup": "coily",
+      "defaultHairStyle": "cornrows",
+      "defaultFacialHair": "none",
+      "expression": "neutral",
+      "quality": "realistic - average/rougher face"
+    },
+    {
+      "id": "rookie_face_0125",
+      "baseFilename": "rookie_face_0125_base.png",
+      "baseUrl": "/assets/portrait_studio/base/rookie_face_0125_base.png",
+      "draftUrl": "/assets/rookie_faces/rookie_face_0125.png",
+      "baseReady": true,
+      "needsBase": false,
+      "fitReference": false,
+      "canvas": {
+        "width": 1040,
+        "height": 760,
+        "alpha": true
+      },
+      "appearancePool": "African / International",
+      "skinTone": "dark",
+      "hairTextureGroup": "coily",
+      "defaultHairStyle": "medium twists",
+      "defaultFacialHair": "none",
+      "expression": "smile",
+      "quality": "realistic - average/rougher face"
+    },
+    {
+      "id": "rookie_face_0126",
+      "baseFilename": "rookie_face_0126_base.png",
+      "baseUrl": "/assets/portrait_studio/base/rookie_face_0126_base.png",
+      "draftUrl": "/assets/rookie_faces/rookie_face_0126.png",
+      "baseReady": true,
+      "needsBase": false,
+      "fitReference": false,
+      "canvas": {
+        "width": 1040,
+        "height": 760,
+        "alpha": true
+      },
+      "appearancePool": "Latino / Mixed",
+      "skinTone": "tan",
+      "hairTextureGroup": "curly/wavy",
+      "defaultHairStyle": "messy curls",
+      "defaultFacialHair": "none",
+      "expression": "neutral",
+      "quality": "realistic - average/rougher face"
+    },
+    {
+      "id": "rookie_face_0127",
+      "baseFilename": "rookie_face_0127_base.png",
+      "baseUrl": "/assets/portrait_studio/base/rookie_face_0127_base.png",
+      "draftUrl": "/assets/rookie_faces/rookie_face_0127.png",
+      "baseReady": true,
+      "needsBase": false,
+      "fitReference": false,
+      "canvas": {
+        "width": 1040,
+        "height": 760,
+        "alpha": true
+      },
+      "appearancePool": "White",
+      "skinTone": "light",
+      "hairTextureGroup": "straight/wavy",
+      "defaultHairStyle": "messy brown hair",
+      "defaultFacialHair": "light stubble",
+      "expression": "neutral",
+      "quality": "realistic - average/rougher face"
+    },
+    {
+      "id": "rookie_face_0128",
+      "baseFilename": "rookie_face_0128_base.png",
+      "baseUrl": "/assets/portrait_studio/base/rookie_face_0128_base.png",
+      "draftUrl": "/assets/rookie_faces/rookie_face_0128.png",
+      "baseReady": true,
+      "needsBase": false,
+      "fitReference": false,
+      "canvas": {
+        "width": 1040,
+        "height": 760,
+        "alpha": true
+      },
+      "appearancePool": "White",
+      "skinTone": "light",
+      "hairTextureGroup": "straight/wavy",
+      "defaultHairStyle": "messy brown hair",
+      "defaultFacialHair": "light stubble",
+      "expression": "neutral",
+      "quality": "realistic - average/rougher face"
+    },
+    {
+      "id": "rookie_face_0129",
+      "baseFilename": "rookie_face_0129_base.png",
+      "baseUrl": "/assets/portrait_studio/base/rookie_face_0129_base.png",
+      "draftUrl": "/assets/rookie_faces/rookie_face_0129.png",
+      "baseReady": true,
+      "needsBase": false,
+      "fitReference": false,
+      "canvas": {
+        "width": 1040,
+        "height": 760,
+        "alpha": true
+      },
+      "appearancePool": "Latino / Mixed",
+      "skinTone": "tan",
+      "hairTextureGroup": "curly/wavy",
+      "defaultHairStyle": "short curls",
+      "defaultFacialHair": "faint stubble",
+      "expression": "neutral",
+      "quality": "realistic - average/rougher face"
+    },
+    {
+      "id": "rookie_face_0130",
+      "baseFilename": "rookie_face_0130_base.png",
+      "baseUrl": "/assets/portrait_studio/base/rookie_face_0130_base.png",
+      "draftUrl": "/assets/rookie_faces/rookie_face_0130.png",
+      "baseReady": true,
+      "needsBase": false,
+      "fitReference": false,
+      "canvas": {
+        "width": 1040,
+        "height": 760,
+        "alpha": true
+      },
+      "appearancePool": "Black",
+      "skinTone": "medium-dark",
+      "hairTextureGroup": "coily",
+      "defaultHairStyle": "short fade",
+      "defaultFacialHair": "none",
+      "expression": "neutral",
+      "quality": "realistic - average/rougher face"
+    },
+    {
+      "id": "rookie_face_0131",
+      "baseFilename": "rookie_face_0131_base.png",
+      "baseUrl": "/assets/portrait_studio/base/rookie_face_0131_base.png",
+      "draftUrl": "/assets/rookie_faces/rookie_face_0131.png",
+      "baseReady": true,
+      "needsBase": false,
+      "fitReference": false,
+      "canvas": {
+        "width": 1040,
+        "height": 760,
+        "alpha": true
+      },
+      "appearancePool": "Black",
+      "skinTone": "medium-dark",
+      "hairTextureGroup": "coily",
+      "defaultHairStyle": "short fade",
+      "defaultFacialHair": "none",
+      "expression": "neutral",
+      "quality": "realistic - average/rougher face"
+    },
+    {
+      "id": "rookie_face_0132",
+      "baseFilename": "rookie_face_0132_base.png",
+      "baseUrl": "/assets/portrait_studio/base/rookie_face_0132_base.png",
+      "draftUrl": "/assets/rookie_faces/rookie_face_0132.png",
+      "baseReady": true,
+      "needsBase": false,
+      "fitReference": false,
+      "canvas": {
+        "width": 1040,
+        "height": 760,
+        "alpha": true
+      },
+      "appearancePool": "Mixed / Black",
+      "skinTone": "light-brown",
+      "hairTextureGroup": "coily",
+      "defaultHairStyle": "cornrows",
+      "defaultFacialHair": "light goatee",
+      "expression": "smile",
+      "quality": "strong"
+    },
+    {
+      "id": "rookie_face_0133",
+      "baseFilename": "rookie_face_0133_base.png",
+      "baseUrl": "/assets/portrait_studio/base/rookie_face_0133_base.png",
+      "draftUrl": "/assets/rookie_faces/rookie_face_0133.png",
+      "baseReady": true,
+      "needsBase": false,
+      "fitReference": false,
+      "canvas": {
+        "width": 1040,
+        "height": 760,
+        "alpha": true
+      },
+      "appearancePool": "White",
+      "skinTone": "light",
+      "hairTextureGroup": "straight/wavy",
+      "defaultHairStyle": "dyed blond messy hair",
+      "defaultFacialHair": "none",
+      "expression": "smile",
+      "quality": "strong"
+    },
+    {
+      "id": "rookie_face_0134",
+      "baseFilename": "rookie_face_0134_base.png",
+      "baseUrl": "/assets/portrait_studio/base/rookie_face_0134_base.png",
+      "draftUrl": "/assets/rookie_faces/rookie_face_0134.png",
+      "baseReady": true,
+      "needsBase": false,
+      "fitReference": false,
+      "canvas": {
+        "width": 1040,
+        "height": 760,
+        "alpha": true
+      },
+      "appearancePool": "African / International",
+      "skinTone": "dark",
+      "hairTextureGroup": "coily",
+      "defaultHairStyle": "starter locs/twists",
+      "defaultFacialHair": "light facial hair",
+      "expression": "smile",
+      "quality": "strong"
+    }
+  ]
+}

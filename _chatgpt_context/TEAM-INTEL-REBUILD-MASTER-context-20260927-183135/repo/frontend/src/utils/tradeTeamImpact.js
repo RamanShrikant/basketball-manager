@@ -1,0 +1,3172 @@
+import LZString from "lz-string";
+import { computeTeamRatingsNumeric } from "../api/teamRatings.js";
+import {
+  GAMEPLAN_VERSION,
+  buildFullTeamRating,
+  resetFullTeamRatingCache,
+  buildSmartRotation,
+  calculateTeamPotentialRating,
+} from "./ensureGameplans.js";
+import { evaluateCpuContractFriction } from "./tradeContractValue.js";
+import { evaluateTradePickImpact } from "./tradePickValue.js";
+import { getScheduleStructureFingerprint, readScheduleFromStorage } from "./scheduleStorage.js";
+
+const RESULT_V3_INDEX_KEY = "bm_results_index_v3";
+const RESULT_V3_PREFIX = "bm_result_v3_";
+const evaluationPlayerIndexCache = new WeakMap();
+
+const TEAM_IMPACT_EPS = 0.015;
+const NO_DOWNSIDE_MIN_GAIN = 0.10;
+const CLEAN_PICK_UPGRADE_ACCEPT_LINE = 0.015;
+const NO_DOWNSIDE_PICK_SWEETENER_LINE = 0.075;
+const OVR_IMPACT_MULT = 10;
+const POT_IMPACT_MULT = 7;
+const FTR_FLAT_OVR_WINDOW = 0.15;
+const FTR_TIEBREAKER_MULT = 0.45;
+const BASE_ACCEPT_THRESHOLD = 0.85;
+const TOP_CONFERENCE_THRESHOLD_TAX = 0.45;
+const ELITE_TEAM_THRESHOLD_TAX = 0.10;
+
+// CPU-to-CPU trades still need a little more flexibility than manual/user
+// proposals because the market engine is building both sides automatically.
+// Keep that flexibility small enough that the normal Propose Trade standard
+// remains the anchor, and make elite/top-team caution actually matter.
+const CPU_CPU_THRESHOLD_DISCOUNT = 0.58;
+const CPU_CPU_MIN_ACCEPT_THRESHOLD = 0.34;
+const CPU_CPU_TOP_CONFERENCE_THRESHOLD_TAX = 0.15;
+const CPU_CPU_ELITE_TEAM_THRESHOLD_TAX = 0.05;
+const CPU_CPU_BASE_BUYER_PICK_FLOOR = -3.25;
+const CPU_CPU_BASE_SELLER_OVR_DROP = -2.75;
+
+// PATCH58 CPU-to-CPU-only market smoothing. This deliberately does not affect
+// manual Propose Trade, Trade Finder, or mega-trade evaluations. The goal is to
+// let non-mega CPU trade candidates pass a little more naturally across more
+// team phases without making already-stacked contenders even easier to load up.
+const CPU_CPU_NON_MEGA_BUYER_RELIEF_BY_PHASE = {
+  contender: 0.00,
+  buyer: 0.04,
+  middle: 0.18,
+  retool: 0.22,
+  seller: 0.16,
+};
+const CPU_CPU_NON_MEGA_SELLER_RELIEF_BY_PHASE = {
+  contender: 0.00,
+  buyer: 0.06,
+  middle: 0.14,
+  retool: 0.18,
+  seller: 0.12,
+};
+const CPU_CPU_NON_MEGA_BUYER_SLACK_BY_PHASE = {
+  contender: 0.00,
+  buyer: 0.12,
+  middle: 0.34,
+  retool: 0.42,
+  seller: 0.28,
+};
+const CPU_CPU_NON_MEGA_SELLER_SLACK_BY_PHASE = {
+  contender: 0.00,
+  buyer: 0.08,
+  middle: 0.26,
+  retool: 0.34,
+  seller: 0.24,
+};
+
+function cpuCpuPhaseRelief(map, phase) {
+  return Number(map?.[String(phase || "").toLowerCase()] || 0);
+}
+
+// Extra threshold required when the CPU is asked to send out a true star.
+// This is intentionally non-net-aware: receiving another star does not erase
+// the organizational cost of moving a franchise player.
+const STAR_RETENTION_TAX_CAP = 32.00;
+const STAR_RETENTION_TAX_BY_OVR = {
+  91: [0.50, 0.41, 0.27, 0.15, 0.09, 0.05],
+  92: [1.50, 1.23, 0.82, 0.45, 0.27, 0.13],
+  93: [3.00, 2.46, 1.64, 0.90, 0.54, 0.25],
+  94: [6.00, 4.92, 3.28, 1.80, 1.08, 0.50],
+  95: [10.00, 8.20, 5.47, 3.00, 1.80, 0.83],
+  96: [13.50, 11.07, 7.38, 4.05, 2.43, 1.12],
+  97: [17.50, 14.35, 9.57, 5.25, 3.15, 1.45],
+  98: [22.50, 18.45, 12.30, 6.75, 4.05, 1.87],
+  99: [28.00, 22.96, 15.31, 8.40, 5.04, 2.32],
+};
+
+// Extra threshold when the CPU is giving up young high-potential players or
+// young already-good core players. This does not change player value; it raises
+// the acceptance bar on top of the existing OVR/POT/team-direction logic so
+// premium young assets are genuinely hard for the user to steal.
+const PROSPECT_RETENTION_TAX_CAP = 50.00;
+const PROSPECT_RETENTION_TAX_BY_POT = [
+  [80, 0.035],
+  [82, 0.075],
+  [84, 0.130],
+  [86, 0.205],
+  [88, 0.310],
+  [90, 0.430],
+  [93, 0.600],
+  [96, 0.780],
+];
+const PROSPECT_GAP_TAX_BY_GAP = [
+  { min: 21, tax: 5.50 },
+  { min: 16, tax: 4.25 },
+  { min: 12, tax: 2.85 },
+  { min: 8, tax: 1.60 },
+  { min: 4, tax: 0.75 },
+];
+const YOUNG_CORE_RETENTION_TAX_BY_OVR = [
+  [76, 0.040],
+  [78, 0.085],
+  [80, 0.150],
+  [82, 0.235],
+  [84, 0.340],
+  [86, 0.480],
+  [88, 0.640],
+];
+const YOUNG_CORE_POT_KICKER_BY_POT = [
+  { min: 98, tax: 6.25 },
+  { min: 95, tax: 4.75 },
+  { min: 92, tax: 3.20 },
+  { min: 89, tax: 2.25 },
+];
+const PROSPECT_RETENTION_STACK_WEIGHTS = [1.00, 0.68, 0.38];
+const PROSPECT_RETENTION_STACK_FALLBACK = 0.16;
+
+// Extra threshold only for bad/rebuilding CPU teams sending their own valuable
+// firsts or exposing their own first through swaps. Existing pick value/protection
+// logic remains untouched; this is just additional retention pain layered on top.
+const OWN_FIRST_RETENTION_TAX_CAP = 42.00;
+const DRAFT_ASSET_RETENTION_TAX_CAP = 50.00;
+const OWN_FIRST_RETENTION_STACK_WEIGHTS = [1.00, 0.70, 0.45];
+const OWN_FIRST_RETENTION_STACK_FALLBACK = 0.20;
+const RESOLVED_PICK_REPLACEMENT_CREDIT_RATE = 0.95;
+const RATING_CACHE_MAX = 900;
+const POWER_CONTEXT_CACHE_MAX = 24;
+const TRADE_FINDER_IMPACT_CACHE_MAX = 2600;
+const CPU_TRADE_IMPACT_CACHE_MAX = 3600;
+const CPU_TRADE_IMPACT_CONTEXT_MAX = 48;
+const TRADE_FINDER_IMPACT_MODE_KEY = "bm_trade_finder_impact_mode_v1";
+const TRADE_DEBUG_KEY = "bm_trade_debug_v1";
+const TRADE_FINDER_FAST_FTR_MODE = "fast-ftr";
+const TRADE_FINDER_FAST_SCAN_MODE = "fast-scan";
+const TRADE_FINDER_IMPACT_BREAKDOWN_KEY = "bm_trade_finder_impact_breakdown_v1";
+const TRADE_FINDER_IMPACT_BREAKDOWN_MAX_ROWS = 600;
+
+const rosterRatingCache = new Map();
+const rankOnlyRatingCache = new Map();
+const powerContextCache = new Map();
+const tradeFinderImpactCache = new Map();
+const cpuTradeImpactCache = new Map();
+let cpuTradeImpactCacheHits = 0;
+let cpuTradeImpactCacheMisses = 0;
+let cpuTradeImpactNextContextToken = 1;
+const cpuTradeImpactContextTokens = new Map();
+let cpuTradeImpactLeagueContextCache = new WeakMap();
+let attachedRecordSignatureCache = new WeakMap();
+let tradeFinderLeaguePowerSignatureCache = new WeakMap();
+
+const CPU_TRADE_IMPACT_BREAKDOWN_MAX_ROWS = 800;
+let cpuTradeImpactBreakdownEnabled = false;
+let cpuTradeImpactBreakdownStore = makeCpuTradeImpactBreakdownStore();
+
+function makeCpuTradeImpactBreakdownStore() {
+  return {
+    rows: [],
+    totals: {},
+    byRole: {},
+    byTeam: {},
+    createdAt: new Date().toISOString(),
+    updatedAt: null,
+  };
+}
+
+function addCpuImpactAggregate(target = {}, row = {}) {
+  target.calls = Number(target.calls || 0) + 1;
+  target.cacheHits = Number(target.cacheHits || 0) + (row.cacheHit ? 1 : 0);
+  target.cacheMisses = Number(target.cacheMisses || 0) + (row.cacheHit ? 0 : 1);
+  target.accepted = Number(target.accepted || 0) + (row.accepted ? 1 : 0);
+  target.rejected = Number(target.rejected || 0) + (row.accepted ? 0 : 1);
+  target.totalMs = Number(target.totalMs || 0) + Number(row.totalMs || 0);
+
+  if (!target.metrics || typeof target.metrics !== "object") target.metrics = {};
+  for (const [key, value] of Object.entries(row.metrics || {})) {
+    if (typeof value !== "number" || !Number.isFinite(value)) continue;
+    target.metrics[key] = Number(target.metrics[key] || 0) + value;
+  }
+  return target;
+}
+
+function recordCpuTradeImpactBreakdown(row = {}) {
+  if (!cpuTradeImpactBreakdownEnabled) return;
+  try {
+    const cleanRow = {
+      callIndex: Number(cpuTradeImpactBreakdownStore?.totals?.calls || 0) + 1,
+      ...row,
+    };
+
+    cpuTradeImpactBreakdownStore.rows.push(cleanRow);
+    while (cpuTradeImpactBreakdownStore.rows.length > CPU_TRADE_IMPACT_BREAKDOWN_MAX_ROWS) {
+      cpuTradeImpactBreakdownStore.rows.shift();
+    }
+
+    cpuTradeImpactBreakdownStore.totals = addCpuImpactAggregate(
+      cpuTradeImpactBreakdownStore.totals || {},
+      cleanRow
+    );
+
+    const roleKey = String(cleanRow.cpuTradeRole || "cpu").toLowerCase() || "cpu";
+    cpuTradeImpactBreakdownStore.byRole[roleKey] = addCpuImpactAggregate(
+      cpuTradeImpactBreakdownStore.byRole[roleKey] || { role: roleKey },
+      cleanRow
+    );
+
+    const teamKey = cleanRow.team || "Unknown";
+    cpuTradeImpactBreakdownStore.byTeam[teamKey] = addCpuImpactAggregate(
+      cpuTradeImpactBreakdownStore.byTeam[teamKey] || { team: teamKey },
+      cleanRow
+    );
+
+    cpuTradeImpactBreakdownStore.updatedAt = new Date().toISOString();
+  } catch {}
+}
+
+export function setCpuTradeImpactBreakdownEnabled(enabled = true) {
+  cpuTradeImpactBreakdownEnabled = Boolean(enabled);
+  return cpuTradeImpactBreakdownEnabled;
+}
+
+export function resetCpuTradeImpactBreakdown() {
+  cpuTradeImpactBreakdownStore = makeCpuTradeImpactBreakdownStore();
+  return cpuTradeImpactBreakdownStore;
+}
+
+export function getCpuTradeImpactBreakdown() {
+  try {
+    return JSON.parse(JSON.stringify(cpuTradeImpactBreakdownStore));
+  } catch {
+    return cpuTradeImpactBreakdownStore;
+  }
+}
+
+export function resetTradeFinderImpactSearchCaches({ keepPowerContext = true } = {}) {
+  rosterRatingCache.clear();
+  rankOnlyRatingCache.clear();
+  tradeFinderImpactCache.clear();
+  attachedRecordSignatureCache = new WeakMap();
+  tradeFinderLeaguePowerSignatureCache = new WeakMap();
+  try { resetFullTeamRatingCache(); } catch {}
+  if (!keepPowerContext) powerContextCache.clear();
+}
+
+const round4 = (value) => Math.round(Number(value || 0) * 10000) / 10000;
+const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+
+function toNum(value, fallback = 0) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function normalizeName(value = "") {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "")
+    .trim();
+}
+
+function sameTeamName(a = "", b = "") {
+  return normalizeName(a) === normalizeName(b);
+}
+
+function getTeamName(team = {}) {
+  return team?.name || team?.teamName || team?.team || "";
+}
+
+function touchLimitedCache(cache, key, value, maxSize) {
+  if (!key) return value;
+  if (cache.has(key)) cache.delete(key);
+  cache.set(key, value);
+
+  while (cache.size > maxSize) {
+    const oldest = cache.keys().next().value;
+    cache.delete(oldest);
+  }
+
+  return value;
+}
+
+function getLimitedCache(cache, key) {
+  if (!key || !cache.has(key)) return null;
+  const value = cache.get(key);
+  cache.delete(key);
+  cache.set(key, value);
+  return value;
+}
+
+function stablePrimitive(value = "") {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "number") return Number.isFinite(value) ? String(value) : "";
+  if (typeof value === "boolean") return value ? "1" : "0";
+  return String(value);
+}
+
+function stableTradeRuleSignature(rule = {}) {
+  if (!rule || typeof rule !== "object") return "";
+  return [
+    stablePrimitive(rule.action),
+    stablePrimitive(rule.swapId),
+    stablePrimitive(rule.mirror),
+    stablePrimitive(rule.protectStart),
+    stablePrimitive(rule.protectEnd),
+    stablePrimitive(rule.swapDirection),
+    stablePrimitive(rule.ownedRange?.start),
+    stablePrimitive(rule.ownedRange?.end),
+    stablePrimitive(rule.retainedRange?.start),
+    stablePrimitive(rule.retainedRange?.end),
+    stablePrimitive(rule.conveyedRange?.start),
+    stablePrimitive(rule.conveyedRange?.end),
+  ].join(":");
+}
+
+function tradeItemImpactSignature(item = {}) {
+  if (item?.type === "player") {
+    const player = item.player || {};
+    return [
+      "player",
+      getPlayerIdentity(player),
+      normalizeName(player?.name || player?.player || ""),
+      stablePrimitive(player?.pos),
+      stablePrimitive(player?.secondaryPos),
+      stablePrimitive(player?.age),
+      stablePrimitive(player?.overall ?? player?.ovr),
+      stablePrimitive(player?.potential ?? player?.pot),
+      stablePrimitive(player?.offRating ?? player?.off),
+      stablePrimitive(player?.defRating ?? player?.def),
+      stablePrimitive(player?.stamina ?? player?.sta),
+      stablePrimitive(player?.salary ?? player?.currentSalary ?? player?.contractSalary ?? player?.capHit ?? player?.aav),
+      Array.isArray(player?.contract?.salaryByYear) ? player.contract.salaryByYear.map(stablePrimitive).join(",") : "",
+      stablePrimitive(player?.contract?.startYear),
+    ].join("|");
+  }
+
+  if (item?.type === "pick") {
+    const pick = item.pick || {};
+    const rule = item.tradeRule || pick.tradeRule || {};
+    return [
+      "pick",
+      stablePrimitive(pick.id || pick.pickId),
+      stablePrimitive(pick.assetType || pick.type),
+      stablePrimitive(pick.year || pick.seasonYear),
+      stablePrimitive(pick.round || pick.rnd),
+      stablePrimitive(pick.pickNumber || pick.overallPick || pick.resolvedPickNumber || pick.draftPickNumber || pick.projectedRank),
+      normalizeName(pick.originalTeam || pick.originalTeamName || pick.team || ""),
+      normalizeName(pick.ownerTeam || pick.owner || pick.currentOwnerTeamName || ""),
+      stablePrimitive(item.protection || pick.displayProtection || pick.protections || pick.protection),
+      stableTradeRuleSignature(rule),
+    ].join("|");
+  }
+
+  return `${stablePrimitive(item?.type)}:${stablePrimitive(JSON.stringify(item || {}))}`;
+}
+
+function tradeItemsImpactSignature(items = []) {
+  return (items || []).map(tradeItemImpactSignature).sort().join("||");
+}
+
+function makeTradeFinderImpactCacheKey({
+  leagueData,
+  cpuTeam,
+  userTeamName = "",
+  cpuTeamName = "",
+  userItems = [],
+  cpuItems = [],
+  evaluationMode = "standard",
+  cpuTradeRole = "",
+  cpuTradeContext = null,
+} = {}) {
+  if (String(cpuTradeRole || "").toLowerCase() !== "trade_finder") return null;
+  const teams = getAllTeamsFromLeague(leagueData);
+  const leagueSignature = tradeFinderLeaguePowerSignature(leagueData, teams, cpuTradeContext);
+  const cpuName = cpuTeamName || getTeamName(cpuTeam) || "";
+  const fastScanKey = cpuTradeContext?.tradeFinderFastScan
+    ? `fastscan:${cpuTradeContext?.searchPhase || ""}`
+    : "normal";
+  return [
+    "tf-impact-v5",
+    stablePrimitive(getTradeFinderImpactMode()),
+    stablePrimitive(fastScanKey),
+    stablePrimitive(evaluationMode),
+    normalizeName(userTeamName),
+    normalizeName(cpuName),
+    leagueSignature,
+    rosterRatingSignature(cpuTeam?.players || []),
+    tradeItemsImpactSignature(userItems),
+    tradeItemsImpactSignature(cpuItems),
+  ].join("::");
+}
+
+function stableJsonSignature(value) {
+  if (value === null || value === undefined) return "";
+  if (Array.isArray(value)) return `[${value.map(stableJsonSignature).join(",")}]`;
+  if (typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => `${key}:${stableJsonSignature(value[key])}`).join(",")}}`;
+  }
+  return stablePrimitive(value);
+}
+
+function cpuTradeDraftContextSignature(leagueData = {}) {
+  const draftPicks = Array.isArray(leagueData?.draftPicks) ? leagueData.draftPicks : [];
+  const signature = draftPicks
+    .map((pick = {}) => [
+      stablePrimitive(pick?.id || pick?.pickId),
+      stablePrimitive(pick?.year || pick?.seasonYear),
+      stablePrimitive(pick?.round || pick?.rnd),
+      normalizeName(pick?.originalTeam || pick?.originalTeamName || pick?.team || ""),
+      normalizeName(pick?.ownerTeam || pick?.currentOwnerTeamName || pick?.owner || ""),
+      stablePrimitive(pick?.protection || pick?.protections || pick?.displayProtection),
+      stablePrimitive(pick?.status || "active"),
+      stablePrimitive(pick?.pickNumber || pick?.overallPick || pick?.resolvedPickNumber),
+      stableJsonSignature(pick?.tradeRule || null),
+    ].join("|"))
+    .sort()
+    .join("||");
+
+  return signature;
+}
+
+function cpuTradeContractContextSignature(leagueData = {}, teams = []) {
+  const signature = (teams || [])
+    .map((team = {}) => {
+      const players = (team?.players || [])
+        .map((player = {}) => [
+          getPlayerIdentity(player),
+          stablePrimitive(player?.salary ?? player?.currentSalary ?? player?.contractSalary ?? player?.capHit ?? player?.aav),
+          stablePrimitive(player?.contract?.startYear),
+          Array.isArray(player?.contract?.salaryByYear)
+            ? player.contract.salaryByYear.map(stablePrimitive).join(",")
+            : "",
+          stableJsonSignature(player?.contract?.option || null),
+        ].join("|"))
+        .sort()
+        .join(";");
+      return [
+        normalizeName(getTeamName(team)),
+        stablePrimitive(team?.payroll ?? team?.totalSalary ?? team?.salaryTotal ?? team?.financials?.payroll ?? team?.financials?.totalSalary),
+        players,
+      ].join("::");
+    })
+    .sort()
+    .join("##");
+
+  return signature;
+}
+
+function cpuTradeFinancialContextSignature(leagueData = {}) {
+  return [
+    stablePrimitive(leagueData?.seasonYear),
+    stablePrimitive(leagueData?.currentSeasonYear),
+    stablePrimitive(leagueData?.seasonStartYear),
+    stablePrimitive(leagueData?.payrollSeasonYear),
+    stablePrimitive(leagueData?.salarySeasonYear),
+    stablePrimitive(leagueData?.currentPayrollSeasonYear),
+    stablePrimitive(leagueData?.name || leagueData?.leagueName || leagueData?.title || leagueData?.fileName),
+    stableJsonSignature(leagueData?.financialRules || leagueData?.leagueFinancialRules || leagueData?.cba || null),
+    stablePrimitive(leagueData?.salaryCap),
+    stablePrimitive(leagueData?.luxuryTax),
+    stablePrimitive(leagueData?.firstApron),
+    stablePrimitive(leagueData?.secondApron),
+  ].join("|");
+}
+
+function internCpuTradeImpactContext(signature = "") {
+  if (cpuTradeImpactContextTokens.has(signature)) {
+    const token = cpuTradeImpactContextTokens.get(signature);
+    cpuTradeImpactContextTokens.delete(signature);
+    cpuTradeImpactContextTokens.set(signature, token);
+    return token;
+  }
+
+  const token = `ctx${cpuTradeImpactNextContextToken++}`;
+  cpuTradeImpactContextTokens.set(signature, token);
+  while (cpuTradeImpactContextTokens.size > CPU_TRADE_IMPACT_CONTEXT_MAX) {
+    const oldest = cpuTradeImpactContextTokens.keys().next().value;
+    cpuTradeImpactContextTokens.delete(oldest);
+  }
+  return token;
+}
+
+function cpuTradeImpactLeagueContextSignature(leagueData = {}, teams = []) {
+  if (leagueData && typeof leagueData === "object" && cpuTradeImpactLeagueContextCache.has(leagueData)) {
+    return cpuTradeImpactLeagueContextCache.get(leagueData);
+  }
+
+  const semanticSignature = [
+    leaguePowerSignature(leagueData, teams),
+    cpuTradeDraftContextSignature(leagueData),
+    cpuTradeContractContextSignature(leagueData, teams),
+    cpuTradeFinancialContextSignature(leagueData),
+  ].join("@@");
+  const token = internCpuTradeImpactContext(semanticSignature);
+
+  if (leagueData && typeof leagueData === "object") {
+    cpuTradeImpactLeagueContextCache.set(leagueData, token);
+  }
+  return token;
+}
+
+function makeCpuTradeImpactCacheKey({
+  leagueData,
+  userTeam,
+  cpuTeam,
+  userTeamName = "",
+  cpuTeamName = "",
+  userItems = [],
+  cpuItems = [],
+  evaluationMode = "standard",
+  cpuTradeRole = "",
+  cpuTradeContext = null,
+} = {}) {
+  const role = String(cpuTradeRole || "").toLowerCase();
+  if (String(evaluationMode || "").toLowerCase() !== "cpu_cpu_trade") return null;
+  if (role !== "buyer" && role !== "seller") return null;
+
+  const teams = getAllTeamsFromLeague(leagueData);
+  const cpuName = cpuTeamName || getTeamName(cpuTeam) || "";
+  const userName = userTeamName || getTeamName(userTeam) || "";
+  return [
+    "cpu-impact-v1",
+    role,
+    normalizeName(userName),
+    normalizeName(cpuName),
+    cpuTradeImpactLeagueContextSignature(leagueData, teams),
+    rosterRatingSignature(userTeam?.players || []),
+    rosterRatingSignature(cpuTeam?.players || []),
+    tradeItemsImpactSignature(userItems),
+    tradeItemsImpactSignature(cpuItems),
+    stablePrimitive(cpuTradeContext?.sellerPhase),
+    stablePrimitive(cpuTradeContext?.targetAge),
+  ].join("::");
+}
+
+function playerRatingSignature(player = {}) {
+  return [
+    player?.id ?? player?.playerId ?? player?.player_id ?? player?.uuid ?? "",
+    normalizeName(player?.name || player?.player || ""),
+    player?.pos || "",
+    player?.secondaryPos || "",
+    toNum(player?.age, 0),
+    toNum(player?.overall ?? player?.ovr, 0),
+    toNum(player?.potential ?? player?.pot, 0),
+    toNum(player?.offRating ?? player?.off ?? player?.overall ?? player?.ovr, 0),
+    toNum(player?.defRating ?? player?.def ?? player?.overall ?? player?.ovr, 0),
+    toNum(player?.stamina ?? player?.sta, 0),
+  ].join("|");
+}
+
+function rosterRatingSignature(players = []) {
+  return (players || [])
+    .map(playerRatingSignature)
+    .sort()
+    .join("||");
+}
+
+function getAttachedTradeRecords(leagueData = {}) {
+  const cpuRecords = leagueData?.__cpuTradeRecords;
+  if (cpuRecords && typeof cpuRecords === "object") return cpuRecords;
+
+  const offseasonRecords = leagueData?.__offseasonTradeRecords;
+  return offseasonRecords && typeof offseasonRecords === "object" && Object.keys(offseasonRecords).length
+    ? offseasonRecords
+    : null;
+}
+
+function attachedTradeRecordsSignature(records = null) {
+  if (!records || typeof records !== "object") return "";
+  if (attachedRecordSignatureCache.has(records)) {
+    return attachedRecordSignatureCache.get(records);
+  }
+
+  const signature = Object.entries(records)
+    .map(([name, row]) =>
+      `${normalizeName(name)}:${toNum(row?.w, 0)}:${toNum(row?.l, 0)}:${toNum(row?.gp, 0)}:${toNum(row?.pf, 0)}:${toNum(row?.pa, 0)}`
+    )
+    .sort()
+    .join("|");
+  attachedRecordSignatureCache.set(records, signature);
+  return signature;
+}
+
+function gameplanRosterSignature(players = []) {
+  return [...(players || [])]
+    .map((p) =>
+      [
+        p?.name || p?.player || "",
+        p?.pos || "",
+        p?.secondaryPos || "",
+        toNum(p?.overall ?? p?.ovr, 0),
+      ].join("|")
+    )
+    .sort()
+    .join("||");
+}
+
+function leaguePowerSignature(leagueData, teams = []) {
+  const rosterPart = (teams || [])
+    .map((team) => `${normalizeName(getTeamName(team))}:${rosterRatingSignature(team?.players || [])}`)
+    .sort()
+    .join("##");
+
+  const attachedRecords = getAttachedTradeRecords(leagueData);
+  const attachedRecordPart = attachedTradeRecordsSignature(attachedRecords);
+  const offseasonPart = [
+    leagueData?.__offseasonTradeContext?.seasonYear || "",
+    leagueData?.__offseasonTradeContext?.stage || "",
+    leagueData?.__offseasonTradeContext?.currentPickIndex || 0,
+  ].join("|");
+  const storagePart = attachedRecords
+    ? "attached-records"
+    : [
+        safeLocalStorageGet(RESULT_V3_INDEX_KEY) || "",
+        getScheduleStructureFingerprint(readScheduleFromStorage()),
+      ].join("::");
+
+  return [
+    rosterPart,
+    attachedRecordPart,
+    offseasonPart,
+    storagePart,
+  ].join("::");
+}
+
+function tradeFinderLeaguePowerSignature(leagueData, teams = [], cpuTradeContext = null) {
+  // Trade Finder asks for this exact whole-league signature for every candidate
+  // package. Cache it only inside the active Trade Finder search context. This
+  // avoids re-walking every roster on each package while leaving normal CPU /
+  // mega-trade power signatures completely untouched. The cache is reset at the
+  // beginning of each Trade Finder search.
+  const key = cpuTradeContext && typeof cpuTradeContext === "object"
+    ? cpuTradeContext
+    : (leagueData && typeof leagueData === "object" ? leagueData : null);
+  if (key) {
+    const cached = tradeFinderLeaguePowerSignatureCache.get(key);
+    if (cached?.leagueData === leagueData) return cached.signature;
+  }
+
+  const signature = leaguePowerSignature(leagueData, teams);
+  if (key) tradeFinderLeaguePowerSignatureCache.set(key, { leagueData, signature });
+  return signature;
+}
+
+function getAllTeamsFromLeague(leagueData) {
+  if (!leagueData) return [];
+  if (Array.isArray(leagueData.teams)) return leagueData.teams;
+  if (leagueData.conferences) return Object.values(leagueData.conferences).flat();
+  return [];
+}
+
+function getTeamConferenceMap(leagueData, teams) {
+  const map = {};
+
+  if (leagueData?.conferences && typeof leagueData.conferences === "object") {
+    for (const [conf, arr] of Object.entries(leagueData.conferences)) {
+      for (const team of arr || []) {
+        const name = getTeamName(team);
+        if (name) map[name] = conf;
+      }
+    }
+  }
+
+  for (const team of teams || []) {
+    const name = getTeamName(team);
+    if (!name || map[name]) continue;
+    map[name] = team?.conference || team?.conf || team?.divisionConference || "";
+  }
+
+  return map;
+}
+
+function parseMaybeCompressed(raw, fallback = null) {
+  if (!raw) return fallback;
+
+  try {
+    if (raw.startsWith("lz:")) {
+      const decompressed = LZString.decompressFromUTF16(raw.slice(3));
+      return decompressed ? JSON.parse(decompressed) : fallback;
+    }
+  } catch {}
+
+  try {
+    return JSON.parse(raw);
+  } catch {}
+
+  try {
+    const decompressed = LZString.decompressFromUTF16(raw);
+    return decompressed ? JSON.parse(decompressed) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function safeLocalStorageGet(key) {
+  try {
+    if (typeof localStorage === "undefined") return null;
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+
+function isTradeDebugEnabled() {
+  try {
+    return Boolean(
+      typeof window !== "undefined" &&
+        (window.__BM_TRADE_DEBUG || safeLocalStorageGet(TRADE_DEBUG_KEY) === "1")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function debugTradeImpactItems(items = []) {
+  return (Array.isArray(items) ? items : []).map((item) => {
+    if (item?.type === "player") {
+      const player = item.player || {};
+      return {
+        type: "player",
+        name: getPlayerDisplayName(player),
+        ovr: toNum(player?.overall ?? player?.ovr, 0),
+        pot: toNum(player?.potential ?? player?.pot ?? player?.overall ?? player?.ovr, 0),
+        age: toNum(player?.age, 0),
+      };
+    }
+    if (item?.type === "pick") {
+      const pick = item.pick || {};
+      return {
+        type: "pick",
+        year: pick.year,
+        round: pick.round,
+        originalTeam: pick.originalTeam || pick.originalTeamName,
+        ownerTeam: pick.ownerTeam || pick.owner || pick.currentOwnerTeamName,
+        protection: item.protection || pick.displayProtection || pick.protection || "Unprotected",
+        tradeRule: item.tradeRule || pick.tradeRule || null,
+      };
+    }
+    return { type: item?.type || "unknown" };
+  });
+}
+
+function debugTradeImpactEvaluation(args = {}, result = {}, extra = {}) {
+  if (!isTradeDebugEnabled()) return;
+
+  const impact = result?.teamImpact || {};
+  const breakdown = impact?.scoreBreakdown || {};
+  const accepted = Boolean(result?.accepted || ["accept", "accepted"].includes(String(result?.decision || "").toLowerCase()));
+  const payload = {
+    source: String(args?.cpuTradeRole || "").toLowerCase() === "trade_finder" ? "Trade Finder" : "Builder / exact",
+    userTeam: args?.userTeamName || getTeamName(args?.userTeam) || "Your team",
+    cpuTeam: args?.cpuTeamName || getTeamName(args?.cpuTeam) || "CPU team",
+    cpuTradeRole: args?.cpuTradeRole || "",
+    cpuTradeContext: args?.cpuTradeContext || null,
+    evaluationMode: args?.evaluationMode || "standard",
+    cacheHit: Boolean(extra.cacheHit),
+    totalMs: extra.totalMs,
+    accepted,
+    decision: result?.decision,
+    score: Number(result?.score ?? 0),
+    threshold: Number(impact?.threshold ?? 0),
+    decisionMargin: Number(result?.decisionMargin ?? impact?.decisionMargin ?? 0),
+    rawScoreMargin: Number(result?.rawScoreMargin ?? impact?.rawScoreMargin ?? (Number(result?.score ?? 0) - Number(impact?.threshold ?? 0))),
+    ratingMode: impact?.ratingMode || "",
+    fastScan: Boolean(impact?.fastScan),
+    fastFtr: Boolean(impact?.fastFtr),
+    rank: impact?.rank,
+    deltas: impact?.deltas || null,
+    scoreBreakdown: {
+      ovrScore: breakdown?.ovrScore,
+      potScore: breakdown?.potScore,
+      ftrScore: breakdown?.ftrScore,
+      pickScore: breakdown?.pickScore,
+      contractFriction: impact?.contractFriction ?? breakdown?.contractFriction,
+      starRetentionTax: impact?.starRetentionTax ?? breakdown?.starRetentionTax,
+      prospectRetentionTax: impact?.prospectRetentionTax ?? breakdown?.prospectRetentionTax,
+      ownFirstRetentionTax: impact?.ownFirstRetentionTax ?? breakdown?.ownFirstRetentionTax,
+      assetRetentionTax: impact?.assetRetentionTax ?? breakdown?.assetRetentionTax,
+      incomingPickValue: breakdown?.incomingPickValue,
+      outgoingPickValue: breakdown?.outgoingPickValue,
+    },
+    userItems: debugTradeImpactItems(args?.userItems || []),
+    cpuItems: debugTradeImpactItems(args?.cpuItems || []),
+    reasons: Array.isArray(result?.reasons) ? result.reasons.slice(0, 12) : [],
+  };
+
+  const label = `[TRADE DEBUG][IMPACT ${accepted ? "ACCEPT" : "REJECT"}] ${payload.source} • ${payload.cpuTeam} • score ${payload.score} / threshold ${payload.threshold}`;
+  if (accepted) console.log(label, payload);
+  else console.warn(label, payload);
+}
+
+
+function tfImpactNow() {
+  try {
+    return typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+  } catch {
+    return Date.now();
+  }
+}
+
+function tfImpactRoundMs(value) {
+  const n = Number(value || 0);
+  return Math.round(n * 10) / 10;
+}
+
+function isTradeFinderImpactBreakdownEnabled() {
+  try {
+    return Boolean(
+      typeof window !== "undefined" &&
+        (window.__TF_IMPACT_BREAKDOWN_ENABLED || safeLocalStorageGet(TRADE_FINDER_IMPACT_BREAKDOWN_KEY) === "1")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function addBreakdownMetric(metrics, key, value) {
+  if (!metrics || !key) return;
+  const n = Number(value || 0);
+  if (!Number.isFinite(n)) return;
+  metrics[key] = Number(metrics[key] || 0) + n;
+}
+
+function incrementBreakdownMetric(metrics, key, amount = 1) {
+  addBreakdownMetric(metrics, key, amount);
+}
+
+function getBreakdownRolePrefix(role = "rating") {
+  const raw = String(role || "rating").replace(/[^a-z0-9]+/gi, "");
+  return raw ? raw.charAt(0).toLowerCase() + raw.slice(1) : "rating";
+}
+
+function countBreakdownTradeItems(items = []) {
+  const rows = Array.isArray(items) ? items : [];
+  return {
+    assetCount: rows.length,
+    playerCount: rows.filter((item) => item?.type === "player").length,
+    pickCount: rows.filter((item) => item?.type === "pick").length,
+  };
+}
+
+function makeTradeFinderImpactBreakdownBase(args = {}) {
+  const cpuTeam = args?.cpuTeam || {};
+  const userTeam = args?.userTeam || {};
+  return {
+    team: args?.cpuTeamName || getTeamName(cpuTeam) || "CPU team",
+    userTeam: args?.userTeamName || getTeamName(userTeam) || "Your team",
+    evaluationMode: args?.evaluationMode || "standard",
+    cpuTradeRole: String(args?.cpuTradeRole || "").toLowerCase(),
+    impactMode: getTradeFinderImpactMode(),
+    userItems: countBreakdownTradeItems(args?.userItems || []),
+    cpuItems: countBreakdownTradeItems(args?.cpuItems || []),
+    cpuItemSignature: tradeItemsImpactSignature(args?.cpuItems || []),
+    userItemSignature: tradeItemsImpactSignature(args?.userItems || []),
+  };
+}
+
+function ensureTradeFinderImpactBreakdownStore() {
+  if (typeof window === "undefined") return null;
+  if (!window.__TF_IMPACT_BREAKDOWN || typeof window.__TF_IMPACT_BREAKDOWN !== "object" || !Array.isArray(window.__TF_IMPACT_BREAKDOWN.rows)) {
+    window.__TF_IMPACT_BREAKDOWN = {
+      rows: [],
+      totals: {},
+      byTeam: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: null,
+    };
+  }
+  if (!window.__TF_RESET_IMPACT_BREAKDOWN) {
+    window.__TF_RESET_IMPACT_BREAKDOWN = () => {
+      window.__TF_IMPACT_BREAKDOWN = {
+        rows: [],
+        totals: {},
+        byTeam: {},
+        createdAt: new Date().toISOString(),
+        updatedAt: null,
+      };
+      return window.__TF_IMPACT_BREAKDOWN;
+    };
+  }
+  return window.__TF_IMPACT_BREAKDOWN;
+}
+
+function recordTradeFinderImpactBreakdown(row = {}) {
+  if (!isTradeFinderImpactBreakdownEnabled()) return;
+  try {
+    const store = ensureTradeFinderImpactBreakdownStore();
+    if (!store) return;
+
+    const cleanRow = {
+      callIndex: Number(store.totals?.calls || 0) + 1,
+      ...row,
+    };
+    store.rows.push(cleanRow);
+    while (store.rows.length > TRADE_FINDER_IMPACT_BREAKDOWN_MAX_ROWS) store.rows.shift();
+
+    const totals = store.totals || {};
+    totals.calls = Number(totals.calls || 0) + 1;
+    totals.cacheHits = Number(totals.cacheHits || 0) + (cleanRow.cacheHit ? 1 : 0);
+    totals.cacheMisses = Number(totals.cacheMisses || 0) + (cleanRow.cacheHit ? 0 : 1);
+
+    for (const [key, value] of Object.entries(cleanRow.metrics || {})) {
+      if (typeof value !== "number" || !Number.isFinite(value)) continue;
+      totals[key] = Number(totals[key] || 0) + value;
+    }
+    totals.totalMs = Number(totals.totalMs || 0) + Number(cleanRow.totalMs || 0);
+    totals.updatedAtMs = tfImpactNow();
+
+    const teamKey = cleanRow.team || "Unknown";
+    const byTeam = store.byTeam || {};
+    const teamRow = byTeam[teamKey] || { team: teamKey, calls: 0, totalMs: 0, cacheHits: 0, metrics: {} };
+    teamRow.calls += 1;
+    teamRow.totalMs += Number(cleanRow.totalMs || 0);
+    teamRow.cacheHits += cleanRow.cacheHit ? 1 : 0;
+    for (const [key, value] of Object.entries(cleanRow.metrics || {})) {
+      if (typeof value !== "number" || !Number.isFinite(value)) continue;
+      teamRow.metrics[key] = Number(teamRow.metrics[key] || 0) + value;
+    }
+    byTeam[teamKey] = teamRow;
+
+    store.totals = totals;
+    store.byTeam = byTeam;
+    store.updatedAt = new Date().toISOString();
+  } catch {}
+}
+
+function getTradeFinderImpactMode() {
+  const raw = safeLocalStorageGet(TRADE_FINDER_IMPACT_MODE_KEY);
+  const mode = String(raw || "").toLowerCase().trim();
+
+  // Default Trade Finder to the fast FTR approximation. Propose Trade and
+  // non-Trade-Finder evaluations still use exact logic because this mode is
+  // only checked when cpuTradeRole === "trade_finder".
+  if (!mode) return TRADE_FINDER_FAST_FTR_MODE;
+  if (["exact", "slow", "full", "standard"].includes(mode)) return "exact";
+  if ([TRADE_FINDER_FAST_FTR_MODE, "fast_ftr", "fast", "1", "on", "true"].includes(mode)) {
+    return TRADE_FINDER_FAST_FTR_MODE;
+  }
+  return TRADE_FINDER_FAST_FTR_MODE;
+}
+
+function shouldUseTradeFinderFastFtr({ cpuTradeRole = "" } = {}) {
+  return (
+    String(cpuTradeRole || "").toLowerCase() === "trade_finder" &&
+    getTradeFinderImpactMode() === TRADE_FINDER_FAST_FTR_MODE
+  );
+}
+
+function shouldUseTradeFinderFastScanImpact({ cpuTradeRole = "", cpuTradeContext = null } = {}) {
+  return Boolean(
+    String(cpuTradeRole || "").toLowerCase() === "trade_finder" &&
+      cpuTradeContext &&
+      cpuTradeContext.tradeFinderFastScan
+  );
+}
+
+function parseSavedGameplan(raw) {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function namesSet(players = []) {
+  return new Set(
+    (players || [])
+      .map((player) => player?.name || player?.player || "")
+      .filter(Boolean)
+  );
+}
+
+function setMatches(a, b) {
+  if (a.size !== b.size) return false;
+  for (const value of a) {
+    if (!b.has(value)) return false;
+  }
+  return true;
+}
+
+function getCachedAutoMinutes(teamName, players = []) {
+  const saved = parseSavedGameplan(safeLocalStorageGet(`gameplan_${teamName}`));
+  if (!saved || saved.manualLocked || saved.userEdited || saved.source === "coach_gameplan") return null;
+  if (saved.version !== GAMEPLAN_VERSION) return null;
+  if (saved.teamName && teamName && !sameTeamName(saved.teamName, teamName)) return null;
+  if (saved.rosterSignature !== gameplanRosterSignature(players)) return null;
+  if (!saved.minutes || typeof saved.minutes !== "object") return null;
+
+  const liveNames = namesSet(players);
+  const minuteNames = new Set(Object.keys(saved.minutes || {}).filter(Boolean));
+  if (!setMatches(liveNames, minuteNames)) return null;
+
+  for (const name of minuteNames) {
+    if (!Number.isFinite(Number(saved.minutes[name]))) return null;
+  }
+
+  return saved.minutes;
+}
+
+function resultV3Key(gameId) {
+  return `${RESULT_V3_PREFIX}${gameId}`;
+}
+
+function loadSchedule() {
+  return readScheduleFromStorage();
+}
+
+function loadResultsV3() {
+  const ids = parseMaybeCompressed(safeLocalStorageGet(RESULT_V3_INDEX_KEY), []) || [];
+  const out = {};
+
+  for (const id of ids) {
+    const result = parseMaybeCompressed(safeLocalStorageGet(resultV3Key(id)), null);
+    if (result) out[String(id)] = result;
+  }
+
+  return out;
+}
+
+function buildRecordMap(leagueData = null) {
+  const attached = getAttachedTradeRecords(leagueData);
+  if (attached) return attached;
+  const schedule = loadSchedule();
+  const results = loadResultsV3();
+  const map = {};
+
+  const ensure = (teamName) => {
+    if (!teamName) return null;
+    if (!map[teamName]) {
+      map[teamName] = { w: 0, l: 0, gp: 0, pf: 0, pa: 0 };
+    }
+    return map[teamName];
+  };
+
+  for (const games of Object.values(schedule || {})) {
+    for (const game of games || []) {
+      if (!game?.id) continue;
+
+      const result = results?.[String(game.id)];
+      if (!game.played && !result) continue;
+
+      const homePts = toNum(result?.totals?.home ?? result?.winner?.home, NaN);
+      const awayPts = toNum(result?.totals?.away ?? result?.winner?.away, NaN);
+      if (!Number.isFinite(homePts) || !Number.isFinite(awayPts)) continue;
+      if (homePts === awayPts) continue;
+
+      const homeName = game.home;
+      const awayName = game.away;
+      const home = ensure(homeName);
+      const away = ensure(awayName);
+      if (!home || !away) continue;
+
+      home.gp += 1;
+      away.gp += 1;
+      home.pf += homePts;
+      home.pa += awayPts;
+      away.pf += awayPts;
+      away.pa += homePts;
+
+      if (homePts > awayPts) {
+        home.w += 1;
+        away.l += 1;
+      } else {
+        away.w += 1;
+        home.l += 1;
+      }
+    }
+  }
+
+  return map;
+}
+
+function tradeFinderFastPlayerValue(player = {}) {
+  const overall = toNum(player?.overall ?? player?.ovr, 75);
+  const off = toNum(player?.offRating ?? player?.off ?? overall, overall);
+  const def = toNum(player?.defRating ?? player?.def ?? overall, overall);
+  const stamina = toNum(player?.stamina ?? player?.sta, 75);
+  return overall * 1.0 + off * 0.18 + def * 0.18 + (stamina - 70) * 0.08;
+}
+
+function compareTradeFinderFastPlayers(a = {}, b = {}) {
+  const diff = tradeFinderFastPlayerValue(b) - tradeFinderFastPlayerValue(a);
+  if (Math.abs(diff) > 1e-9) return diff;
+  const ovrDiff = toNum(b?.overall ?? b?.ovr, 0) - toNum(a?.overall ?? a?.ovr, 0);
+  if (ovrDiff !== 0) return ovrDiff;
+  return String(a?.name || a?.player || "").localeCompare(String(b?.name || b?.player || ""));
+}
+
+const TRADE_FINDER_FAST_SCAN_POSITIONS = ["PG", "SG", "SF", "PF", "C"];
+const TRADE_FINDER_FAST_SCAN_STARTER_MINUTES = [34, 34, 34, 34, 34];
+const TRADE_FINDER_FAST_SCAN_BENCH_MINUTES = [18, 16, 14, 12, 10];
+
+function tradeFinderFastPlayerName(player = {}) {
+  return player?.name || player?.player || "";
+}
+
+function tradeFinderFastPlayerOverall(player = {}) {
+  return toNum(player?.overall ?? player?.ovr, 0);
+}
+
+function tradeFinderFastPlayerPotential(player = {}) {
+  return toNum(player?.potential ?? player?.pot ?? player?.overall ?? player?.ovr, 75);
+}
+
+function tradeFinderFastCanPlayPosition(player = {}, pos = "") {
+  return player?.pos === pos || player?.secondaryPos === pos;
+}
+
+function chooseTradeFinderFastScanStarters(valid = []) {
+  const remaining = [...(valid || [])].sort(compareTradeFinderFastPlayers);
+  const starters = [];
+  const used = new Set();
+
+  for (const pos of TRADE_FINDER_FAST_SCAN_POSITIONS) {
+    const candidates = remaining
+      .filter((player) => {
+        const name = tradeFinderFastPlayerName(player);
+        return name && !used.has(name) && tradeFinderFastCanPlayPosition(player, pos);
+      })
+      .sort((a, b) => {
+        const primaryDiff = Number(b?.pos === pos) - Number(a?.pos === pos);
+        if (primaryDiff !== 0) return primaryDiff;
+        return compareTradeFinderFastPlayers(a, b);
+      });
+
+    const picked = candidates[0] || remaining.find((player) => {
+      const name = tradeFinderFastPlayerName(player);
+      return name && !used.has(name);
+    });
+
+    if (!picked) continue;
+    used.add(tradeFinderFastPlayerName(picked));
+    starters.push(picked);
+  }
+
+  return starters;
+}
+
+function buildTradeFinderFastScanMinutes(valid = []) {
+  const minutes = {};
+  for (const player of valid || []) {
+    const name = tradeFinderFastPlayerName(player);
+    if (name) minutes[name] = 0;
+  }
+
+  const starters = chooseTradeFinderFastScanStarters(valid);
+  const used = new Set(starters.map(tradeFinderFastPlayerName));
+  const bench = (valid || [])
+    .filter((player) => {
+      const name = tradeFinderFastPlayerName(player);
+      return name && !used.has(name);
+    })
+    .sort(compareTradeFinderFastPlayers)
+    .slice(0, TRADE_FINDER_FAST_SCAN_BENCH_MINUTES.length);
+
+  const active = [...starters, ...bench].filter(Boolean);
+  const minuteSlots = [
+    ...TRADE_FINDER_FAST_SCAN_STARTER_MINUTES.slice(0, starters.length),
+    ...TRADE_FINDER_FAST_SCAN_BENCH_MINUTES.slice(0, bench.length),
+  ];
+
+  for (let idx = 0; idx < active.length; idx += 1) {
+    const name = tradeFinderFastPlayerName(active[idx]);
+    if (!name) continue;
+    minutes[name] = Number(minuteSlots[idx] || 0);
+  }
+
+  let total = Object.values(minutes).reduce((sum, value) => sum + Number(value || 0), 0);
+  let remaining = Math.max(0, 240 - total);
+  const priority = active.slice().sort(compareTradeFinderFastPlayers);
+
+  while (remaining > 0 && priority.length) {
+    let moved = false;
+    for (const player of priority) {
+      if (remaining <= 0) break;
+      const name = tradeFinderFastPlayerName(player);
+      if (!name) continue;
+      const current = Number(minutes[name] || 0);
+      const add = Math.min(remaining, Math.max(0, 42 - current), 4);
+      if (add <= 0) continue;
+      minutes[name] = current + add;
+      remaining -= add;
+      moved = true;
+    }
+    if (!moved) break;
+  }
+
+  total = Object.values(minutes).reduce((sum, value) => sum + Number(value || 0), 0);
+  if (total > 240) {
+    let over = total - 240;
+    const donors = active.slice().reverse();
+    for (const player of donors) {
+      if (over <= 0) break;
+      const name = tradeFinderFastPlayerName(player);
+      const current = Number(minutes[name] || 0);
+      const take = Math.min(over, Math.max(0, current - 6));
+      if (take <= 0) continue;
+      minutes[name] = current - take;
+      over -= take;
+    }
+  }
+
+  return minutes;
+}
+
+function estimateTradeFinderFastScanPotential(valid = [], exactOverall = 0) {
+  const rows = (valid || [])
+    .map((player) => {
+      const overall = tradeFinderFastPlayerOverall(player);
+      const potential = tradeFinderFastPlayerPotential(player);
+      const age = toNum(player?.age, 27);
+      const upside = Math.max(0, potential - overall);
+      const youth = age <= 20 ? 1.16 : age <= 23 ? 1.10 : age <= 26 ? 1.02 : age <= 30 ? 0.94 : age <= 34 ? 0.82 : 0.66;
+      return overall * 0.44 + potential * 0.56 + upside * 0.20 * youth;
+    })
+    .filter((value) => Number.isFinite(value))
+    .sort((a, b) => b - a);
+
+  if (!rows.length) return round4(exactOverall || 0);
+  const top2 = rows.slice(0, 2).reduce((sum, value) => sum + value, 0) / Math.max(1, Math.min(2, rows.length));
+  const top5 = rows.slice(0, 5).reduce((sum, value) => sum + value, 0) / Math.max(1, Math.min(5, rows.length));
+  const weighted = rows.reduce((sum, value, idx) => sum + value * Math.pow(0.86, idx), 0) /
+    rows.reduce((sum, _, idx) => sum + Math.pow(0.86, idx), 0);
+  const futureScore = top2 * 0.42 + top5 * 0.38 + weighted * 0.20;
+  const blended = exactOverall * 0.32 + futureScore * 0.68;
+  return round4(clamp(blended, 0, 99));
+}
+
+function calculateTradeFinderFastScanRatings(valid = [], metrics = null, rolePrefix = "rating") {
+  const totalStart = tfImpactNow();
+
+  // Trade Finder scan mode is allowed to be approximate because every displayed
+  // offer is exact-confirmed later. Avoid computeTeamRatings here: the old scan
+  // still rebuilt rotations/ratings for every candidate and made one leaguewide
+  // search take several minutes. This pure weighted-top-rotation estimate gives
+  // the package builder a stable ordering in milliseconds.
+  const rows = (valid || [])
+    .filter((player) => player && (player.name || player.player))
+    .map((player) => {
+      const overall = tradeFinderFastPlayerOverall(player);
+      const off = toNum(player?.offRating ?? player?.off ?? overall, overall);
+      const def = toNum(player?.defRating ?? player?.def ?? overall, overall);
+      const pot = tradeFinderFastPlayerPotential(player);
+      const stamina = toNum(player?.stamina ?? player?.sta, 75);
+      const blended = overall * 0.72 + off * 0.12 + def * 0.12 + (stamina - 75) * 0.04;
+      return { player, overall, off, def, pot, blended };
+    })
+    .sort((a, b) => b.blended - a.blended || b.overall - a.overall);
+
+  if (!rows.length) {
+    addBreakdownMetric(metrics, `${rolePrefix}RatingTotalMs`, tfImpactNow() - totalStart);
+    return {
+      exactOverall: 0,
+      exactOff: 0,
+      exactDef: 0,
+      exactPot: 0,
+      exactFtr: 0,
+      displayOverall: 0,
+      displayPot: 0,
+      displayFtr: 0,
+      ratingMode: TRADE_FINDER_FAST_SCAN_MODE,
+    };
+  }
+
+  const weights = [1.0, 0.94, 0.88, 0.82, 0.76, 0.52, 0.44, 0.36, 0.30, 0.24];
+  const weightedAvg = (selector) => {
+    let sum = 0;
+    let weightSum = 0;
+    rows.slice(0, weights.length).forEach((row, idx) => {
+      const weight = weights[idx] || 0;
+      sum += Number(selector(row) || 0) * weight;
+      weightSum += weight;
+    });
+    return weightSum > 0 ? sum / weightSum : 0;
+  };
+
+  const top1 = Number(rows[0]?.overall || 0);
+  const top2 = weightedAvg((row) => row.overall);
+  const topOff = weightedAvg((row) => row.off);
+  const topDef = weightedAvg((row) => row.def);
+  const topPot = weightedAvg((row) => row.pot);
+  const depth = rows.slice(5, 10).reduce((sum, row) => sum + Number(row.overall || 0), 0) / Math.max(1, rows.slice(5, 10).length || 1);
+
+  const exactOverall = round4(clamp(top2 * 0.86 + top1 * 0.10 + depth * 0.04, 0, 99));
+  const exactOff = round4(clamp(topOff * 0.90 + exactOverall * 0.10, 0, 99));
+  const exactDef = round4(clamp(topDef * 0.90 + exactOverall * 0.10, 0, 99));
+  const exactPot = round4(clamp(topPot * 0.88 + exactOverall * 0.12, 0, 99));
+
+  addBreakdownMetric(metrics, `${rolePrefix}FastScanPureRows`, rows.length);
+  addBreakdownMetric(metrics, `${rolePrefix}RatingTotalMs`, tfImpactNow() - totalStart);
+
+  return {
+    exactOverall,
+    exactOff,
+    exactDef,
+    exactPot,
+    exactFtr: exactOverall,
+    displayOverall: Math.round(exactOverall),
+    displayPot: Math.round(exactPot),
+    displayFtr: Math.round(exactOverall),
+    ratingMode: TRADE_FINDER_FAST_SCAN_MODE,
+  };
+}
+
+function buildTradeFinderFastFtrMinutes(valid = [], smartMinutes = {}) {
+  const minutes = {};
+  for (const player of valid || []) {
+    const name = player?.name || player?.player;
+    if (!name) continue;
+    minutes[name] = Math.max(0, Number(smartMinutes?.[name] || 0));
+  }
+
+  const activeNames = new Set(
+    Object.entries(minutes)
+      .filter(([, min]) => Number(min || 0) > 0)
+      .map(([name]) => name)
+  );
+  const depthPlayers = (valid || [])
+    .filter((player) => {
+      const name = player?.name || player?.player;
+      return name && !activeNames.has(name);
+    })
+    .sort(compareTradeFinderFastPlayers);
+
+  if (!depthPlayers.length) return minutes;
+
+  // Cheap FTR approximation for Trade Finder only. The exact full-team rating
+  // optimizer is very expensive because it rebuilds a 10-man group while also
+  // forcing deep bench minutes. For search scans, approximate that idea by
+  // giving non-rotation depth 5 minutes and taking those minutes from the lowest
+  // value active players above a safe floor. Propose Trade and normal ratings
+  // still use the exact buildFullTeamRating path.
+  const depthMinuteTarget = 5;
+  const minActiveFloor = 8;
+  let minutesNeeded = 0;
+  for (const player of depthPlayers) {
+    const name = player?.name || player?.player;
+    minutes[name] = depthMinuteTarget;
+    minutesNeeded += depthMinuteTarget;
+  }
+
+  const donors = (valid || [])
+    .filter((player) => {
+      const name = player?.name || player?.player;
+      return name && Number(minutes[name] || 0) > minActiveFloor && activeNames.has(name);
+    })
+    .sort((a, b) => tradeFinderFastPlayerValue(a) - tradeFinderFastPlayerValue(b));
+
+  for (const donor of donors) {
+    if (minutesNeeded <= 0) break;
+    const name = donor?.name || donor?.player;
+    const current = Number(minutes[name] || 0);
+    const take = Math.min(minutesNeeded, Math.max(0, current - minActiveFloor));
+    if (take <= 0) continue;
+    minutes[name] = current - take;
+    minutesNeeded -= take;
+  }
+
+  if (minutesNeeded > 0) {
+    const active = (valid || [])
+      .filter((player) => {
+        const name = player?.name || player?.player;
+        return name && Number(minutes[name] || 0) > 0 && activeNames.has(name);
+      })
+      .sort((a, b) => tradeFinderFastPlayerValue(a) - tradeFinderFastPlayerValue(b));
+
+    for (const donor of active) {
+      if (minutesNeeded <= 0) break;
+      const name = donor?.name || donor?.player;
+      const current = Number(minutes[name] || 0);
+      const take = Math.min(minutesNeeded, Math.max(0, current));
+      if (take <= 0) continue;
+      minutes[name] = current - take;
+      minutesNeeded -= take;
+    }
+  }
+
+  return minutes;
+}
+
+function calculateTeamImpactRatings(players = [], options = {}) {
+  const metrics = options?.breakdownMetrics || null;
+  const rolePrefix = getBreakdownRolePrefix(options?.ratingRole || "rating");
+  const totalStart = tfImpactNow();
+  const validStart = tfImpactNow();
+  const valid = (players || []).filter((p) => p && (p.name || p.player) && Number.isFinite(Number(p.overall ?? p.ovr)));
+  addBreakdownMetric(metrics, `${rolePrefix}ValidFilterMs`, tfImpactNow() - validStart);
+  incrementBreakdownMetric(metrics, `${rolePrefix}PlayersRated`, valid.length);
+
+  if (!valid.length) {
+    addBreakdownMetric(metrics, `${rolePrefix}RatingTotalMs`, tfImpactNow() - totalStart);
+    return {
+      exactOverall: 0,
+      exactOff: 0,
+      exactDef: 0,
+      exactPot: 0,
+      exactFtr: 0,
+      displayOverall: 0,
+      displayPot: 0,
+      displayFtr: 0,
+    };
+  }
+
+  if (options?.fastScan) {
+    return calculateTradeFinderFastScanRatings(valid, metrics, rolePrefix);
+  }
+
+  let minutes = {};
+  let smartRotationResult = null;
+  const smartRotationStart = tfImpactNow();
+  try {
+    smartRotationResult = buildSmartRotation(valid);
+    minutes = smartRotationResult?.obj && typeof smartRotationResult.obj === "object" ? smartRotationResult.obj : {};
+  } catch (error) {
+    console.warn("Trade impact auto-rotation fallback:", error);
+  } finally {
+    addBreakdownMetric(metrics, `${rolePrefix}SmartRotationMs`, tfImpactNow() - smartRotationStart);
+  }
+
+  const teamRatingsStart = tfImpactNow();
+  const teamRatings = computeTeamRatingsNumeric({ players: valid }, minutes);
+  addBreakdownMetric(metrics, `${rolePrefix}TeamRatingsMs`, tfImpactNow() - teamRatingsStart);
+
+  const potentialStart = tfImpactNow();
+  const potentialRatings = calculateTeamPotentialRating(valid, {
+    exactCurrentOverall: Number(teamRatings?.exactOverall ?? teamRatings?.overall ?? 0),
+  });
+  addBreakdownMetric(metrics, `${rolePrefix}PotentialMs`, tfImpactNow() - potentialStart);
+
+  let fullTeamRatings;
+
+  if (options?.fastFtr) {
+    const fastMinutesStart = tfImpactNow();
+    const fastFtrMinutes = buildTradeFinderFastFtrMinutes(valid, minutes);
+    addBreakdownMetric(metrics, `${rolePrefix}FastFtrMinutesMs`, tfImpactNow() - fastMinutesStart);
+
+    const fastFtrRatingsStart = tfImpactNow();
+    const fastFtrRatings = computeTeamRatingsNumeric({ players: valid }, fastFtrMinutes);
+    addBreakdownMetric(metrics, `${rolePrefix}FastFtrRatingsMs`, tfImpactNow() - fastFtrRatingsStart);
+    fullTeamRatings = {
+      ftr: Number(fastFtrRatings?.overall || 0),
+      ftrOff: Number(fastFtrRatings?.off || 0),
+      ftrDef: Number(fastFtrRatings?.def || 0),
+      exactFtr: Number(fastFtrRatings?.exactOverall ?? fastFtrRatings?.overall ?? 0),
+      exactFtrOff: Number(fastFtrRatings?.exactOff ?? fastFtrRatings?.off ?? 0),
+      exactFtrDef: Number(fastFtrRatings?.exactDef ?? fastFtrRatings?.def ?? 0),
+      minutes: fastFtrMinutes,
+      fastApproximation: true,
+    };
+  } else {
+    const fullTeamStart = tfImpactNow();
+    fullTeamRatings = buildFullTeamRating(valid, {
+      // Reuse the exact full-roster chooseStarters result captured during
+      // buildSmartRotation. This remains correct even when smart rotation later
+      // accepts a low-end exclusion retry on a reduced roster.
+      precomputedStarters: Array.isArray(smartRotationResult?.__fullRosterStarters)
+        ? smartRotationResult.__fullRosterStarters
+        : null,
+    });
+    addBreakdownMetric(metrics, `${rolePrefix}FullTeamRatingMs`, tfImpactNow() - fullTeamStart);
+  }
+
+  addBreakdownMetric(metrics, `${rolePrefix}RatingTotalMs`, tfImpactNow() - totalStart);
+
+  const result = {
+    exactOverall: round4(teamRatings?.exactOverall ?? teamRatings?.overall ?? 0),
+    exactOff: round4(teamRatings?.exactOff ?? teamRatings?.off ?? 0),
+    exactDef: round4(teamRatings?.exactDef ?? teamRatings?.def ?? 0),
+    exactPot: round4(potentialRatings?.exactPot ?? potentialRatings?.pot ?? 0),
+    exactFtr: round4(fullTeamRatings?.exactFtr ?? fullTeamRatings?.ftr ?? 0),
+    displayOverall: toNum(teamRatings?.overall, Math.round(teamRatings?.exactOverall || 0)),
+    displayPot: toNum(potentialRatings?.pot, Math.round(potentialRatings?.exactPot || 0)),
+    displayFtr: toNum(fullTeamRatings?.ftr, Math.round(fullTeamRatings?.exactFtr || 0)),
+    ratingMode: options?.fastFtr ? TRADE_FINDER_FAST_FTR_MODE : "exact",
+  };
+
+  // CPU exact validation later asks the pick-value engine to project the same
+  // post-trade roster. Preserve an exact, non-enumerable snapshot of the power
+  // rating values so that projection can reuse work we have already completed.
+  // POT is intentionally recalculated by the pick engine because its cache/use
+  // contract is separate; that work is tiny compared with smart rotation.
+  // Non-enumerable keeps the public/debug result byte-for-byte unchanged.
+  try {
+    const pickExactOff = round4(teamRatings?.exactOff ?? teamRatings?.off ?? 0);
+    const pickExactDef = round4(teamRatings?.exactDef ?? teamRatings?.def ?? 0);
+    Object.defineProperty(result, "__pickProjectionSnapshot", {
+      value: {
+        exactOverall: round4(teamRatings?.exactOverall ?? teamRatings?.overall ?? 0),
+        // Match calculatePowerOverall -> calculatePickTeamRatingSnapshot exactly:
+        // each side is rounded first, then their sum is rounded.
+        offDef: round4(pickExactOff + pickExactDef),
+      },
+      enumerable: false,
+      configurable: false,
+      writable: false,
+    });
+  } catch {}
+
+  return result;
+}
+
+function rateTeamRoster(players = [], options = {}) {
+  const metrics = options?.breakdownMetrics || null;
+  const rolePrefix = getBreakdownRolePrefix(options?.ratingRole || "rating");
+  const ratingMode = options?.fastScan ? TRADE_FINDER_FAST_SCAN_MODE : options?.fastFtr ? TRADE_FINDER_FAST_FTR_MODE : "exact";
+  const keyStart = tfImpactNow();
+  const key = `${GAMEPLAN_VERSION}:${ratingMode}:${rosterRatingSignature(players)}`;
+  addBreakdownMetric(metrics, `${rolePrefix}RatingKeyMs`, tfImpactNow() - keyStart);
+
+  const lookupStart = tfImpactNow();
+  const cached = getLimitedCache(rosterRatingCache, key);
+  addBreakdownMetric(metrics, `${rolePrefix}RatingCacheLookupMs`, tfImpactNow() - lookupStart);
+  if (cached) {
+    incrementBreakdownMetric(metrics, `${rolePrefix}RatingCacheHits`);
+    return cached;
+  }
+
+  incrementBreakdownMetric(metrics, `${rolePrefix}RatingCacheMisses`);
+  const calcStart = tfImpactNow();
+  const calculated = calculateTeamImpactRatings(players, { ...options, breakdownMetrics: metrics, ratingRole: rolePrefix });
+  addBreakdownMetric(metrics, `${rolePrefix}RatingCalcMs`, tfImpactNow() - calcStart);
+
+  return touchLimitedCache(
+    rosterRatingCache,
+    key,
+    calculated,
+    RATING_CACHE_MAX
+  );
+}
+
+function calculateRankOnlyRatings(team = {}, metrics = null) {
+  const totalStart = tfImpactNow();
+  const players = Array.isArray(team?.players) ? team.players : [];
+  const valid = players.filter((p) => p && (p.name || p.player) && Number.isFinite(Number(p.overall ?? p.ovr)));
+  incrementBreakdownMetric(metrics, "powerRankPlayersRated", valid.length);
+
+  if (!valid.length) {
+    addBreakdownMetric(metrics, "powerRankRatingTotalMs", tfImpactNow() - totalStart);
+    return { exactOverall: 0, exactOff: 0, exactDef: 0 };
+  }
+
+  const cachedMinutesStart = tfImpactNow();
+  let minutes = getCachedAutoMinutes(getTeamName(team), valid);
+  addBreakdownMetric(metrics, "powerRankCachedMinutesMs", tfImpactNow() - cachedMinutesStart);
+
+  if (!minutes) {
+    const smartRotationStart = tfImpactNow();
+    try {
+      const built = buildSmartRotation(valid);
+      minutes = built?.obj && typeof built.obj === "object" ? built.obj : {};
+    } catch (error) {
+      console.warn("Trade power-rank auto-rotation fallback:", error);
+      minutes = {};
+    } finally {
+      addBreakdownMetric(metrics, "powerRankSmartRotationMs", tfImpactNow() - smartRotationStart);
+    }
+  } else {
+    incrementBreakdownMetric(metrics, "powerRankCachedMinutesHits");
+  }
+
+  const ratingsStart = tfImpactNow();
+  const ratings = computeTeamRatingsNumeric({ players: valid }, minutes);
+  addBreakdownMetric(metrics, "powerRankTeamRatingsMs", tfImpactNow() - ratingsStart);
+  addBreakdownMetric(metrics, "powerRankRatingTotalMs", tfImpactNow() - totalStart);
+  incrementBreakdownMetric(metrics, "powerRankTeamsRated");
+
+  return {
+    exactOverall: round4(ratings?.exactOverall ?? ratings?.overall ?? 0),
+    exactOff: round4(ratings?.exactOff ?? ratings?.off ?? 0),
+    exactDef: round4(ratings?.exactDef ?? ratings?.def ?? 0),
+  };
+}
+
+function rateTeamForPowerRank(team = {}, metrics = null) {
+  const keyStart = tfImpactNow();
+  const key = `${GAMEPLAN_VERSION}:${normalizeName(getTeamName(team))}:${rosterRatingSignature(team?.players || [])}`;
+  addBreakdownMetric(metrics, "powerRankKeyMs", tfImpactNow() - keyStart);
+
+  const lookupStart = tfImpactNow();
+  const cached = getLimitedCache(rankOnlyRatingCache, key);
+  addBreakdownMetric(metrics, "powerRankCacheLookupMs", tfImpactNow() - lookupStart);
+  if (cached) {
+    incrementBreakdownMetric(metrics, "powerRankCacheHits");
+    return cached;
+  }
+
+  incrementBreakdownMetric(metrics, "powerRankCacheMisses");
+  return touchLimitedCache(
+    rankOnlyRatingCache,
+    key,
+    calculateRankOnlyRatings(team, metrics),
+    RATING_CACHE_MAX
+  );
+}
+
+function buildPowerRankingRows(leagueData, metrics = null) {
+  const totalStart = tfImpactNow();
+  const teamsStart = tfImpactNow();
+  const teams = getAllTeamsFromLeague(leagueData);
+  addBreakdownMetric(metrics, "powerRowsGetTeamsMs", tfImpactNow() - teamsStart);
+
+  const cacheKeyStart = tfImpactNow();
+  const cacheKey = leaguePowerSignature(leagueData, teams);
+  addBreakdownMetric(metrics, "powerRowsCacheKeyMs", tfImpactNow() - cacheKeyStart);
+
+  const lookupStart = tfImpactNow();
+  const cached = getLimitedCache(powerContextCache, cacheKey);
+  addBreakdownMetric(metrics, "powerRowsCacheLookupMs", tfImpactNow() - lookupStart);
+  if (cached) {
+    incrementBreakdownMetric(metrics, "powerRowsCacheHits");
+    addBreakdownMetric(metrics, "powerRowsTotalMs", tfImpactNow() - totalStart);
+    return cached;
+  }
+
+  incrementBreakdownMetric(metrics, "powerRowsCacheMisses");
+  const recordsStart = tfImpactNow();
+  const records = buildRecordMap(leagueData);
+  addBreakdownMetric(metrics, "powerRowsRecordMapMs", tfImpactNow() - recordsStart);
+
+  const confStart = tfImpactNow();
+  const confMap = getTeamConferenceMap(leagueData, teams);
+  addBreakdownMetric(metrics, "powerRowsConferenceMapMs", tfImpactNow() - confStart);
+
+  const baseRowsStart = tfImpactNow();
+  const baseRows = teams.map((team) => {
+    const name = getTeamName(team);
+    const ratings = rateTeamForPowerRank(team, metrics);
+    const record = records?.[name] || { w: 0, l: 0, gp: 0, pf: 0, pa: 0 };
+    const gp = toNum(record.gp, 0);
+    const diff = toNum(record.pf, 0) - toNum(record.pa, 0);
+
+    return {
+      team,
+      name,
+      conference: confMap?.[name] || "",
+      exactOverall: ratings.exactOverall,
+      offDef: ratings.exactOff + ratings.exactDef,
+      w: toNum(record.w, 0),
+      l: toNum(record.l, 0),
+      gp,
+      winPct: gp > 0 ? toNum(record.w, 0) / gp : 0,
+      pointDiff: gp > 0 ? diff / gp : 0,
+    };
+  });
+  addBreakdownMetric(metrics, "powerRowsBaseRowsMs", tfImpactNow() - baseRowsStart);
+
+  const scoringStart = tfImpactNow();
+  const useRecordPowerRankings = baseRows.length > 0 && baseRows.every((row) => row.gp >= 20);
+
+  const rowsWithScores = baseRows.map((row) => {
+    const recordScore = row.winPct * 100;
+    const powerScore = useRecordPowerRankings
+      ? row.exactOverall * 0.5 + recordScore * 0.5
+      : row.exactOverall;
+
+    return {
+      ...row,
+      recordScore,
+      powerScore,
+      useRecordPowerRankings,
+    };
+  });
+
+  rowsWithScores.sort(
+    (a, b) =>
+      b.powerScore - a.powerScore ||
+      (useRecordPowerRankings ? b.winPct - a.winPct : 0) ||
+      b.exactOverall - a.exactOverall ||
+      b.offDef - a.offDef ||
+      b.pointDiff - a.pointDiff ||
+      b.w - a.w ||
+      String(a.name || "").localeCompare(String(b.name || ""))
+  );
+
+  const rankedRows = rowsWithScores.map((row, idx) => ({ ...row, rank: idx + 1 }));
+  addBreakdownMetric(metrics, "powerRowsScoringSortMs", tfImpactNow() - scoringStart);
+  addBreakdownMetric(metrics, "powerRowsTotalMs", tfImpactNow() - totalStart);
+  return touchLimitedCache(powerContextCache, cacheKey, rankedRows, POWER_CONTEXT_CACHE_MAX);
+}
+
+function getTeamPowerContext(leagueData, cpuTeamName, metrics = null) {
+  const totalStart = tfImpactNow();
+  const rows = buildPowerRankingRows(leagueData, metrics);
+  const findStart = tfImpactNow();
+  const cpuRow = rows.find((row) => sameTeamName(row.name, cpuTeamName)) || null;
+  const conference = cpuRow?.conference || "";
+  const conferenceRows = rows.filter(
+    (row) => String(row.conference || "").toLowerCase() === String(conference || "").toLowerCase()
+  );
+  const topConferenceRow = conferenceRows[0] || null;
+  addBreakdownMetric(metrics, "powerContextFindTeamMs", tfImpactNow() - findStart);
+  addBreakdownMetric(metrics, "powerContextTotalMs", tfImpactNow() - totalStart);
+
+  return {
+    rows,
+    rank: cpuRow?.rank || rows.length || 30,
+    conference,
+    isTopConferenceTeam: Boolean(cpuRow && topConferenceRow && sameTeamName(cpuRow.name, topConferenceRow.name)),
+    useRecordPowerRankings: Boolean(cpuRow?.useRecordPowerRankings),
+  };
+}
+
+function getOvrPotWeights(leagueRank = 15) {
+  const rank = clamp(Number(leagueRank || 15), 1, 30);
+  let ovrWeight;
+
+  if (rank <= 12) {
+    ovrWeight = 0.68 - ((rank - 1) / 11) * 0.18;
+  } else if (rank <= 26) {
+    ovrWeight = 0.50 - ((rank - 12) / 14) * 0.17;
+  } else if (rank === 27) {
+    ovrWeight = 0.35;
+  } else if (rank === 28) {
+    ovrWeight = 0.365;
+  } else if (rank === 29) {
+    ovrWeight = 0.38;
+  } else {
+    ovrWeight = 0.395;
+  }
+
+  ovrWeight = clamp(ovrWeight, 0.30, 0.70);
+  return {
+    ovrWeight: round4(ovrWeight),
+    potWeight: round4(1 - ovrWeight),
+  };
+}
+
+function getPlayerIdentity(player = {}) {
+  const id = player?.id ?? player?.playerId ?? player?.player_id ?? player?.uuid ?? null;
+  if (id !== null && id !== undefined && String(id).trim() !== "") return `id:${String(id)}`;
+  return `name:${normalizeName(player?.name || player?.player || "")}`;
+}
+
+function samePlayer(a = {}, b = {}) {
+  const aid = getPlayerIdentity(a);
+  const bid = getPlayerIdentity(b);
+  return Boolean(aid && bid && aid === bid);
+}
+
+function clonePlain(value) {
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    return { ...(value || {}) };
+  }
+}
+
+function getTradePlayers(items = []) {
+  return (items || [])
+    .filter((item) => item?.type === "player" && item.player)
+    .map((item) => item.player);
+}
+
+function getEvaluationPlayerIndex(leagueData = {}) {
+  if (!leagueData || typeof leagueData !== "object") return new Map();
+  const cached = evaluationPlayerIndexCache.get(leagueData);
+  if (cached) return cached;
+  const index = new Map();
+  for (const team of getAllTeamsFromLeague(leagueData)) {
+    for (const row of team?.players || []) index.set(getPlayerIdentity(row), row);
+  }
+  for (const row of leagueData?.freeAgents || []) index.set(getPlayerIdentity(row), row);
+  evaluationPlayerIndexCache.set(leagueData, index);
+  return index;
+}
+
+function findEvaluationPlayer(leagueData = {}, player = {}) {
+  const identity = getPlayerIdentity(player);
+  if (!identity) return player;
+  return getEvaluationPlayerIndex(leagueData).get(identity) || player;
+}
+
+function getEvaluationTradePlayers(items = [], leagueData = {}) {
+  return getTradePlayers(items).map((player) => findEvaluationPlayer(leagueData, player));
+}
+
+function getConservativeYoungRetentionPlayer(player = {}) {
+  const currentAge = Number(player?.__offseasonCurrentAge);
+  const currentOverall = Number(player?.__offseasonCurrentOverall);
+  const currentPotential = Number(player?.__offseasonCurrentPotential);
+  const projectedAge = Math.round(toNum(player?.age, 27));
+  const projectedOverall = Math.round(toNum(player?.overall ?? player?.ovr, 0));
+  const projectedPotential = Math.round(toNum(player?.potential ?? player?.pot, projectedOverall));
+  if (!Number.isFinite(currentAge) && !Number.isFinite(currentOverall) && !Number.isFinite(currentPotential)) return player;
+  return {
+    ...player,
+    age: Number.isFinite(currentAge) ? Math.min(projectedAge, Math.round(currentAge)) : projectedAge,
+    overall: Number.isFinite(currentOverall) ? Math.max(projectedOverall, Math.round(currentOverall)) : projectedOverall,
+    ovr: Number.isFinite(currentOverall) ? Math.max(projectedOverall, Math.round(currentOverall)) : projectedOverall,
+    potential: Number.isFinite(currentPotential) ? Math.max(projectedPotential, Math.round(currentPotential)) : projectedPotential,
+    pot: Number.isFinite(currentPotential) ? Math.max(projectedPotential, Math.round(currentPotential)) : projectedPotential,
+  };
+}
+
+function getPlayerDisplayName(player = {}) {
+  return player?.name || player?.player || "Unknown Player";
+}
+
+function getStarRetentionAgeBucket(ageValue) {
+  const age = Math.round(toNum(ageValue, 27));
+  if (age <= 22) return 0;
+  if (age <= 25) return 1;
+  if (age <= 29) return 2;
+  if (age <= 32) return 3;
+  if (age <= 34) return 4;
+  return 5;
+}
+
+function getCpuOutgoingStarRetentionTaxForPlayer(player = {}) {
+  const overall = clamp(Math.round(toNum(player?.overall ?? player?.ovr, 0)), 0, 99);
+  if (overall < 91) return null;
+
+  const age = Math.round(toNum(player?.age, 27));
+  const bucket = getStarRetentionAgeBucket(age);
+  const row = STAR_RETENTION_TAX_BY_OVR[overall] || STAR_RETENTION_TAX_BY_OVR[99];
+  const tax = round4(Number(row?.[bucket] || 0));
+  if (tax <= TEAM_IMPACT_EPS) return null;
+
+  return {
+    playerName: getPlayerDisplayName(player),
+    overall,
+    age,
+    ageBucket: bucket,
+    tax,
+  };
+}
+
+function evaluateCpuOutgoingStarRetentionTax(players = [], cpuTeamName = "CPU team") {
+  const rows = (players || [])
+    .map(getCpuOutgoingStarRetentionTaxForPlayer)
+    .filter(Boolean)
+    .sort((a, b) => b.tax - a.tax);
+
+  if (!rows.length) {
+    return { tax: 0, rows, reasons: [] };
+  }
+
+  const weightedTax = rows.reduce((sum, row, idx) => {
+    const weight = idx === 0 ? 1 : idx === 1 ? 0.35 : idx === 2 ? 0.15 : 0;
+    return sum + row.tax * weight;
+  }, 0);
+  const tax = round4(clamp(weightedTax, 0, STAR_RETENTION_TAX_CAP));
+  const primary = rows[0];
+  const extraCount = Math.max(0, rows.length - 1);
+  const extraText = extraCount > 0
+    ? `, with reduced stacking credit for ${extraCount} other 91+ OVR outgoing player${extraCount === 1 ? "" : "s"}`
+    : "";
+
+  return {
+    tax,
+    rows,
+    reasons: [
+      `CPU star-retention tax: +${tax.toFixed(2)} threshold because ${cpuTeamName} is giving up ${primary.playerName}, a ${primary.overall} OVR age-${primary.age} star${extraText}.`,
+    ],
+  };
+}
+
+
+function getProspectRetentionAgeBucket(ageValue) {
+  const age = Math.round(toNum(ageValue, 27));
+  if (age <= 19) return 0;
+  if (age <= 20) return 1;
+  if (age <= 22) return 2;
+  if (age <= 24) return 3;
+  if (age <= 26) return 4;
+  return 5;
+}
+
+function getYoungCoreRetentionAgeBucket(ageValue) {
+  const age = Math.round(toNum(ageValue, 27));
+  if (age <= 21) return 0;
+  if (age <= 22) return 1;
+  if (age <= 23) return 2;
+  if (age <= 24) return 3;
+  if (age <= 25) return 4;
+  return 5;
+}
+
+function getProspectRetentionTeamMultiplier(rankValue) {
+  const rank = clamp(Math.round(toNum(rankValue, 15)), 1, 30);
+  if (rank <= 5) return 0.90;
+  if (rank <= 10) return 1.00;
+  if (rank <= 18) return 1.08;
+  if (rank <= 24) return 1.45;
+  return 1.90;
+}
+
+function getProspectRetentionTeamType(rankValue) {
+  const rank = clamp(Math.round(toNum(rankValue, 15)), 1, 30);
+  if (rank <= 5) return "elite contender";
+  if (rank <= 10) return "contender";
+  if (rank <= 18) return "middle team";
+  if (rank <= 24) return "bad team";
+  return "rebuilder";
+}
+
+function getProspectGapBonus(gapValue) {
+  const gap = Math.max(0, Math.round(toNum(gapValue, 0)));
+  const row = PROSPECT_GAP_TAX_BY_GAP.find((entry) => gap >= entry.min);
+  return row ? Number(row.tax || 0) : 0;
+}
+
+function getPotentialKicker(potentialValue) {
+  const potential = clamp(Math.round(toNum(potentialValue, 0)), 0, 99);
+  const row = YOUNG_CORE_POT_KICKER_BY_POT.find((entry) => potential >= entry.min);
+  return row ? Number(row.tax || 0) : 0;
+}
+
+function getHighPotentialRetentionSubtotal({ potential, overall, age }) {
+  const potRow = PROSPECT_RETENTION_TAX_BY_POT.find((entry) => potential >= entry.min);
+  if (!potRow) return null;
+  const ageBucket = getProspectRetentionAgeBucket(age);
+  const baseTax = Number(potRow?.tax?.[ageBucket] || 0);
+  if (baseTax <= TEAM_IMPACT_EPS) return null;
+  const gap = Math.max(0, potential - overall);
+  const gapBonus = getProspectGapBonus(gap);
+  const subtotal = round4(baseTax + gapBonus);
+  if (subtotal <= TEAM_IMPACT_EPS) return null;
+  return {
+    taxType: "high-potential",
+    subtotal,
+    baseTax: round4(baseTax),
+    gapBonus: round4(gapBonus),
+    potKicker: 0,
+    potGap: gap,
+  };
+}
+
+function getYoungCoreRetentionSubtotal({ potential, overall, age }) {
+  const coreRow = YOUNG_CORE_RETENTION_TAX_BY_OVR.find((entry) => overall >= entry.min);
+  if (!coreRow) return null;
+  const ageBucket = getYoungCoreRetentionAgeBucket(age);
+  const baseTax = Number(coreRow?.tax?.[ageBucket] || 0);
+  if (baseTax <= TEAM_IMPACT_EPS) return null;
+  const potKicker = getPotentialKicker(potential);
+  const subtotal = round4(baseTax + potKicker);
+  if (subtotal <= TEAM_IMPACT_EPS) return null;
+  return {
+    taxType: "young-core",
+    subtotal,
+    baseTax: round4(baseTax),
+    gapBonus: 0,
+    potKicker: round4(potKicker),
+    potGap: Math.max(0, potential - overall),
+  };
+}
+
+function getCpuOutgoingProspectRetentionTaxForPlayer(player = {}, powerRank = 15) {
+  const potential = clamp(Math.round(toNum(player?.potential ?? player?.pot ?? player?.overall ?? player?.ovr, 0)), 0, 99);
+  const overall = clamp(Math.round(toNum(player?.overall ?? player?.ovr, 0)), 0, 99);
+  const age = Math.round(toNum(player?.age, 27));
+
+  const highPotential = getHighPotentialRetentionSubtotal({ potential, overall, age });
+  const youngCore = getYoungCoreRetentionSubtotal({ potential, overall, age });
+  const chosen = [highPotential, youngCore]
+    .filter(Boolean)
+    .sort((a, b) => b.subtotal - a.subtotal)[0] || null;
+
+  if (!chosen) return null;
+
+  const teamMultiplier = getProspectRetentionTeamMultiplier(powerRank);
+  const tax = round4(chosen.subtotal * teamMultiplier);
+  if (tax <= TEAM_IMPACT_EPS) return null;
+
+  return {
+    playerName: getPlayerDisplayName(player),
+    overall,
+    potential,
+    age,
+    ageBucket: chosen.taxType === "young-core" ? getYoungCoreRetentionAgeBucket(age) : getProspectRetentionAgeBucket(age),
+    potGap: Math.max(0, potential - overall),
+    taxType: chosen.taxType,
+    baseTax: round4(chosen.baseTax),
+    gapBonus: round4(chosen.gapBonus),
+    potKicker: round4(chosen.potKicker),
+    preMultiplierTax: round4(chosen.subtotal),
+    teamMultiplier: round4(teamMultiplier),
+    tax,
+  };
+}
+
+function evaluateCpuOutgoingProspectRetentionTax(players = [], powerRank = 15, cpuTeamName = "CPU team") {
+  const rows = (players || [])
+    .map((player) => getCpuOutgoingProspectRetentionTaxForPlayer(player, powerRank))
+    .filter(Boolean)
+    .sort((a, b) => b.tax - a.tax);
+
+  if (!rows.length) return { tax: 0, rows, reasons: [] };
+
+  const weightedTax = rows.reduce((sum, row, idx) => {
+    const weight = PROSPECT_RETENTION_STACK_WEIGHTS[idx] ?? PROSPECT_RETENTION_STACK_FALLBACK;
+    return sum + row.tax * weight;
+  }, 0);
+  const tax = round4(clamp(weightedTax, 0, PROSPECT_RETENTION_TAX_CAP));
+  const primary = rows[0];
+  const teamType = getProspectRetentionTeamType(powerRank);
+  const extraCount = Math.max(0, rows.length - 1);
+  const extraText = extraCount > 0
+    ? `, with reduced stacking credit for ${extraCount} other outgoing premium young asset${extraCount === 1 ? "" : "s"}`
+    : "";
+  const kindText = primary.taxType === "young-core" ? "core-player" : "high-potential prospect";
+  const kickerText = primary.taxType === "young-core" && primary.potKicker > TEAM_IMPACT_EPS
+    ? `, including a +${primary.potKicker.toFixed(2)} POT kicker`
+    : primary.gapBonus > TEAM_IMPACT_EPS
+      ? `, including a +${primary.gapBonus.toFixed(2)} POT-gap bonus`
+      : "";
+
+  return {
+    tax,
+    rows,
+    reasons: [
+      `CPU ${kindText} retention tax: +${tax.toFixed(2)} threshold because ${cpuTeamName} is a ${teamType} giving up ${primary.playerName}, a ${primary.overall} OVR / ${primary.potential} POT age-${primary.age} ${kindText}${primary.potGap > 0 ? ` with a +${primary.potGap} POT gap` : ""}${kickerText}${extraText}.`,
+    ],
+  };
+}
+
+function getOwnFirstRetentionTeamMultiplier(rankValue) {
+  const rank = clamp(Math.round(toNum(rankValue, 15)), 1, 30);
+  if (rank <= 18) return 0;
+  if (rank <= 24) return 1.55;
+  return 2.00;
+}
+
+function getOwnFirstRetentionTeamType(rankValue) {
+  const rank = clamp(Math.round(toNum(rankValue, 15)), 1, 30);
+  if (rank <= 18) return "non-rebuilding team";
+  if (rank <= 24) return "bad team";
+  return "rebuilder";
+}
+
+function getOwnFirstRetentionBaseTax(expectedSlotValue) {
+  const rawSlot = Number(expectedSlotValue || 0);
+  if (!Number.isFinite(rawSlot) || rawSlot <= 0) return 0;
+  const slot = clamp(rawSlot, 1, 30);
+  if (slot <= 4) return 8.00;
+  if (slot <= 8) return 6.25;
+  if (slot <= 14) return 4.25;
+  if (slot <= 20) return 2.00;
+  if (slot <= 30) return 0.75;
+  return 0;
+}
+
+function getOwnFirstRetentionBaseTaxFromValue(value) {
+  const n = Math.abs(Number(value || 0));
+  if (!Number.isFinite(n) || n <= TEAM_IMPACT_EPS) return 0;
+  if (n >= 7.00) return 8.00;
+  if (n >= 5.00) return 6.25;
+  if (n >= 3.00) return 4.25;
+  if (n >= 1.35) return 2.00;
+  return 0.75;
+}
+
+function estimateOwnFirstRetentionSlotFromValue(value) {
+  const n = Math.abs(Number(value || 0));
+  if (!Number.isFinite(n) || n <= TEAM_IMPACT_EPS) return 0;
+  if (n >= 7.00) return 3;
+  if (n >= 5.00) return 7;
+  if (n >= 3.00) return 12;
+  if (n >= 1.35) return 18;
+  return 25;
+}
+
+function isSwapLikeDraftAsset(row = {}) {
+  return Boolean(row?.recipientDirection) || Boolean(row?.existingSwapAssetFullValue) || Boolean(row?.freeOptionFloorApplied);
+}
+
+function getSwapRetentionRiskFactor(row = {}) {
+  if (row?.freeOptionFloorApplied) return 0.18;
+  const direction = String(row?.recipientDirection || "").toLowerCase();
+  if (direction === "best") return 0.65;
+  if (direction === "worst") return 0.40;
+  return row?.existingSwapAssetFullValue ? 0.40 : 0.25;
+}
+
+function isOutgoingOwnFirstPick(row = {}, cpuTeamName = "") {
+  if (!row || Number(row.round) !== 1) return false;
+  if (isSwapLikeDraftAsset(row)) return false;
+  const originalTeam = row.originalTeam || row.originalTeamName || row.teamName || row.team || "";
+  return sameTeamName(originalTeam, cpuTeamName);
+}
+
+function isOutgoingOwnSwapExposure(row = {}, cpuTeamName = "") {
+  if (!row || Number(row.round) !== 1) return false;
+  if (!isSwapLikeDraftAsset(row)) return false;
+
+  const directTeams = [
+    row.originalTeam,
+    row.originalTeamName,
+    row.teamName,
+    row.team,
+    row.ownerTeam,
+    row.owner,
+  ].filter(Boolean);
+  if (directTeams.some((team) => sameTeamName(team, cpuTeamName))) return true;
+
+  const reasonNorm = normalizeName(row.reason || "");
+  const cpuNorm = normalizeName(cpuTeamName);
+  // Existing swap rows often only retain the reason text after valuation. If the
+  // bad CPU owns/sends the swap, tax it as future first exposure so swaps cannot
+  // become an easy workaround around the own-pick tax.
+  return Boolean(cpuNorm && reasonNorm.includes(cpuNorm));
+}
+
+function isResolvedCurrentDraftPickRow(row = {}) {
+  if (Number(row?.round) !== 1) return false;
+  const stage = String(row?.valuationStage || "").toLowerCase();
+  if (stage !== "exact_pick" && stage !== "live_draft") return false;
+  const slot = Number(row?.expectedSlot || row?.pickNumber || row?.slot || 0);
+  const year = Number(row?.year || 0);
+  const currentYear = Number(row?.currentYear || 0);
+  return Number.isFinite(slot) && slot > 0 && (!currentYear || !year || year === currentYear);
+}
+
+function getResolvedPickReplacementProtection(row = {}, powerRank = 15) {
+  if (!isResolvedCurrentDraftPickRow(row)) return 0;
+
+  const overall = Number(row?.expectedProspectOverall || 0);
+  const potential = Number(row?.expectedProspectPotential || 0);
+  const age = Number(row?.expectedProspectAge || 0);
+  if (overall <= 0 || potential <= 0 || age <= 0) return 0;
+
+  // Recalculate the expected prospect's protection using the receiving CPU's
+  // direction. The pick may have originated from an elite team, but once a
+  // rebuilding CPU acquires it, the expected prospect should be protected like
+  // that CPU's own premium young player would be after the selection.
+  const projectedProspect = {
+    name: row?.expectedProspectName || `prospect near #${Number(row?.expectedSlot || 0).toFixed(0)}`,
+    overall,
+    potential,
+    age,
+  };
+  const prospectRow = getCpuOutgoingProspectRetentionTaxForPlayer(projectedProspect, powerRank);
+  const certainty = clamp(Number(row?.draftAssetCertainty || 0), 0, 1);
+  return round4(Number(prospectRow?.tax || 0) * certainty);
+}
+
+function applyResolvedPickReplacementCredit(outgoingRows = [], incomingPickRows = [], powerRank = 15) {
+  const availableIncoming = (incomingPickRows || [])
+    .filter(isResolvedCurrentDraftPickRow)
+    .map((row, index) => ({
+      row,
+      index,
+      protection: getResolvedPickReplacementProtection(row, powerRank),
+      used: false,
+    }))
+    .filter((entry) => entry.protection > TEAM_IMPACT_EPS)
+    .sort((a, b) => b.protection - a.protection);
+
+  const adjustedRows = (outgoingRows || []).map((row) => {
+    if (!isResolvedCurrentDraftPickRow(row)) return row;
+
+    const match = availableIncoming.find((entry) => {
+      if (entry.used) return false;
+      return Number(entry.row?.year || 0) === Number(row?.year || 0) &&
+        Number(entry.row?.round || 0) === Number(row?.round || 0);
+    });
+    if (!match) return row;
+
+    match.used = true;
+    const grossTax = Math.max(0, Number(row?.tax || 0));
+    const outgoingSlot = Math.max(1, Number(row?.expectedSlot || 30));
+    const incomingSlot = Math.max(1, Number(match.row?.expectedSlot || 30));
+    // A better/equal incoming pick can replace almost all retention protection.
+    // A worse pick only replaces a proportional share, so moving down still
+    // requires a real sweetener even when both assets are resolved.
+    const slotQualityFactor = clamp(outgoingSlot / incomingSlot, 0, 1);
+    const rawReplacementCredit = round4(
+      match.protection * RESOLVED_PICK_REPLACEMENT_CREDIT_RATE * slotQualityFactor
+    );
+    const replacementCredit = round4(Math.min(grossTax, rawReplacementCredit));
+    const netTax = round4(Math.max(0, grossTax - replacementCredit));
+
+    return {
+      ...row,
+      grossTax: round4(grossTax),
+      tax: netTax,
+      replacementCredit,
+      replacementCreditRate: RESOLVED_PICK_REPLACEMENT_CREDIT_RATE,
+      replacementPickYear: match.row?.year,
+      replacementPickSlot: round4(Number(match.row?.expectedSlot || 0)),
+      replacementPickProtection: round4(match.protection),
+      replacementSlotQualityFactor: round4(slotQualityFactor),
+    };
+  });
+
+  return {
+    rows: adjustedRows,
+    totalCredit: round4(adjustedRows.reduce((sum, row) => sum + Number(row?.replacementCredit || 0), 0)),
+  };
+}
+
+function getRetentionRowForPickAsset(row = {}, teamMultiplier = 0, cpuTeamName = "CPU team") {
+  if (Number(row?.round) !== 1) return null;
+
+  const isOwnFirst = isOutgoingOwnFirstPick(row, cpuTeamName);
+  const isOwnSwap = isOutgoingOwnSwapExposure(row, cpuTeamName);
+  const expectedProspectTax = Math.max(0, Number(row?.expectedProspectRetentionTax || 0));
+  const draftAssetCertainty = clamp(Number(row?.draftAssetCertainty || 0), 0, 1);
+  // Any current-draft first can represent a premium prospect, even when the
+  // pick originally belonged to another team or the CPU is already a contender.
+  // Once the lottery/order is resolved, this protection should closely match
+  // the prospect-retention tax that will apply immediately after selection.
+  const hasCurrentDraftProspectParity =
+    !isOwnSwap && expectedProspectTax > TEAM_IMPACT_EPS && draftAssetCertainty > 0;
+  if (!isOwnFirst && !isOwnSwap && !hasCurrentDraftProspectParity) return null;
+
+  const valueForEstimate = Math.abs(Number(row.adjustedValue ?? row.value ?? 0));
+  const rawExpectedSlot = Number(row.expectedSlot || row.pickNumber || row.slot || 0);
+  const expectedSlot = Number.isFinite(rawExpectedSlot) && rawExpectedSlot > 0
+    ? clamp(rawExpectedSlot, 1, 30)
+    : estimateOwnFirstRetentionSlotFromValue(valueForEstimate);
+  const slotBaseTax = getOwnFirstRetentionBaseTax(expectedSlot);
+  const valueBaseTax = getOwnFirstRetentionBaseTaxFromValue(valueForEstimate);
+  const baseBeforeRisk = Math.max(slotBaseTax, valueBaseTax);
+  const swapRiskFactor = isOwnSwap ? getSwapRetentionRiskFactor(row) : 1.00;
+  const baseTax = round4(baseBeforeRisk * swapRiskFactor);
+  const traditionalTax = isOwnFirst || isOwnSwap
+    ? round4(baseTax * Math.max(0, teamMultiplier))
+    : 0;
+  const prospectParityTax = hasCurrentDraftProspectParity
+    ? round4(expectedProspectTax * draftAssetCertainty)
+    : 0;
+  const tax = round4(Math.max(traditionalTax, prospectParityTax));
+  if (tax <= TEAM_IMPACT_EPS) return null;
+
+  return {
+    year: row.year,
+    round: row.round,
+    originalTeam: row.originalTeam || row.originalTeamName || row.teamName || row.team || cpuTeamName,
+    expectedSlot: round4(expectedSlot),
+    baseTax: round4(baseTax),
+    baseBeforeRisk: round4(baseBeforeRisk),
+    teamMultiplier: round4(teamMultiplier),
+    traditionalTax,
+    expectedProspectTax: round4(expectedProspectTax),
+    expectedProspectName: row.expectedProspectName || "",
+    expectedProspectOverall: round4(Number(row.expectedProspectOverall || 0)),
+    expectedProspectPotential: round4(Number(row.expectedProspectPotential || 0)),
+    expectedProspectAge: round4(Number(row.expectedProspectAge || 0)),
+    currentYear: Number(row.currentYear || 0),
+    valuationStage: row.valuationStage || "",
+    draftAssetCertainty: round4(draftAssetCertainty),
+    prospectParityTax,
+    swapRiskFactor: round4(swapRiskFactor),
+    assetKind: isOwnSwap
+      ? "own-swap exposure"
+      : isOwnFirst
+        ? "own first"
+        : "current-draft premium pick",
+    tax,
+    protectionText: row.protectionText,
+    adjustedValue: row.adjustedValue,
+    value: row.value,
+    recipientDirection: row.recipientDirection,
+  };
+}
+
+function evaluateCpuOutgoingOwnFirstRetentionTax(pickImpact = {}, powerRank = 15, cpuTeamName = "CPU team") {
+  const teamMultiplier = getOwnFirstRetentionTeamMultiplier(powerRank);
+
+  const grossRows = (Array.isArray(pickImpact?.outgoing) ? pickImpact.outgoing : [])
+    .map((row) => getRetentionRowForPickAsset(row, teamMultiplier, cpuTeamName))
+    .filter(Boolean)
+    .sort((a, b) => b.tax - a.tax);
+
+  if (!grossRows.length) {
+    return { tax: 0, rows: [], grossRows: [], replacementCredit: 0, reasons: [] };
+  }
+
+  const replacementResult = applyResolvedPickReplacementCredit(
+    grossRows,
+    Array.isArray(pickImpact?.incoming) ? pickImpact.incoming : [],
+    powerRank
+  );
+  // Preserve the original gross-tax ordering for stack weights. A fully covered
+  // first asset must not cause the second outgoing pick to jump from the 0.70x
+  // stack slot to 1.00x.
+  const adjustedRows = replacementResult.rows;
+  const positiveRows = adjustedRows.filter((row) => Number(row?.tax || 0) > TEAM_IMPACT_EPS);
+  const hasProspectParityRow = grossRows.some((row) => row.prospectParityTax > TEAM_IMPACT_EPS);
+  const taxCap = hasProspectParityRow
+    ? DRAFT_ASSET_RETENTION_TAX_CAP
+    : OWN_FIRST_RETENTION_TAX_CAP;
+  const weightedGrossTax = grossRows.reduce((sum, row, idx) => {
+    const weight = OWN_FIRST_RETENTION_STACK_WEIGHTS[idx] ?? OWN_FIRST_RETENTION_STACK_FALLBACK;
+    return sum + Number(row?.tax || 0) * weight;
+  }, 0);
+  const weightedNetTax = adjustedRows.reduce((sum, row, idx) => {
+    const weight = OWN_FIRST_RETENTION_STACK_WEIGHTS[idx] ?? OWN_FIRST_RETENTION_STACK_FALLBACK;
+    return sum + Number(row?.tax || 0) * weight;
+  }, 0);
+  const grossTax = round4(clamp(weightedGrossTax, 0, taxCap));
+  const tax = round4(clamp(weightedNetTax, 0, taxCap));
+  const replacementCredit = round4(Math.max(0, grossTax - tax));
+
+  if (!positiveRows.length) {
+    return {
+      tax: 0,
+      rows: [],
+      grossRows,
+      replacementCredit,
+      reasons: replacementCredit > TEAM_IMPACT_EPS
+        ? [`CPU resolved-pick replacement credit: -${replacementCredit.toFixed(2)} threshold because ${cpuTeamName} receives a same-year exact pick that replaces 95% of the premium draft-asset protection it is sending.`]
+        : [],
+    };
+  }
+
+  const primary = positiveRows[0];
+  const teamType = getOwnFirstRetentionTeamType(powerRank);
+  const extraCount = Math.max(0, positiveRows.length - 1);
+  const extraText = extraCount > 0
+    ? `, with reduced stacking credit for ${extraCount} other outgoing draft asset${extraCount === 1 ? "" : "s"}`
+    : "";
+  const kindText = primary.assetKind === "own-swap exposure"
+    ? "own-swap retention"
+    : primary.assetKind === "current-draft premium pick"
+      ? "current-draft prospect retention"
+      : "own-first retention";
+  const swapText = primary.assetKind === "own-swap exposure"
+    ? ` through ${primary.recipientDirection || "first-round"} swap exposure at a ${primary.swapRiskFactor.toFixed(2)}x swap-risk factor`
+    : "";
+  const assetText = primary.assetKind === "current-draft premium pick"
+    ? `the ${primary.year || "current"} 1st projected around pick #${primary.expectedSlot.toFixed(2)}`
+    : `its own ${primary.year || "future"} 1st${swapText}, projected around pick #${primary.expectedSlot.toFixed(2)}`;
+  const parityText = primary.prospectParityTax > TEAM_IMPACT_EPS
+    ? `, expected to yield a premium prospect carrying ${primary.expectedProspectTax.toFixed(2)} of player-retention protection at ${(primary.draftAssetCertainty * 100).toFixed(0)}% draft certainty`
+    : "";
+  const replacementText = replacementCredit > TEAM_IMPACT_EPS
+    ? ` A 95% same-year resolved-pick replacement credit removes ${replacementCredit.toFixed(2)} from the gross ${grossTax.toFixed(2)} draft-asset retention cost.`
+    : "";
+
+  return {
+    tax,
+    rows: positiveRows,
+    grossRows,
+    grossTax,
+    replacementCredit,
+    reasons: [
+      `CPU ${kindText} tax: +${tax.toFixed(2)} threshold because ${cpuTeamName} is a ${teamType} giving up ${assetText}${parityText}${extraText}.${replacementText}`,
+    ],
+  };
+}
+
+function getPrimaryTradePickItems(items = []) {
+  return (items || []).filter((item) => {
+    if (item?.type !== "pick" || !item.pick) return false;
+    if (item.tradeValueExcluded) return false;
+    const rule = item.tradeRule || item.pick?.tradeRule || {};
+    return !rule.mirror;
+  });
+}
+
+function getResolvedExactPickDescriptor(item = {}) {
+  if (item?.type !== "pick" || !item.pick || item.tradeValueExcluded) return null;
+
+  const pick = item.pick || {};
+  const rule = item.tradeRule || pick.tradeRule || {};
+  const action = String(rule.action || "").toLowerCase();
+  if (rule.mirror || action === "swap") return null;
+
+  const assetType = String(pick.assetType || pick.type || pick.status || "").toLowerCase();
+  if (assetType !== "resolved") return null;
+
+  const slot = Number(
+    pick.pickNumber || pick.overallPick || pick.resolvedPickNumber || pick.draftPickNumber || pick.pick || 0
+  );
+  const year = Number(pick.year || pick.seasonYear || pick.draftYear || 0);
+  const round = getPickRound(pick);
+  if (!Number.isFinite(slot) || slot <= 0 || !Number.isFinite(year) || year <= 0) return null;
+  if (round !== 1 && round !== 2) return null;
+
+  return { year, round, slot };
+}
+
+function isMathematicallyStrictResolvedPickUpgrade(userItems = [], cpuItems = []) {
+  if (!userItems.length || !cpuItems.length) return false;
+
+  const incoming = userItems.map(getResolvedExactPickDescriptor);
+  const outgoing = cpuItems.map(getResolvedExactPickDescriptor);
+  if (incoming.some((row) => !row) || outgoing.some((row) => !row)) return false;
+
+  const incomingByGroup = new Map();
+  const outgoingByGroup = new Map();
+  const addToGroup = (map, row) => {
+    const key = `${row.year}|${row.round}`;
+    const slots = map.get(key) || [];
+    slots.push(row.slot);
+    map.set(key, slots);
+  };
+
+  incoming.forEach((row) => addToGroup(incomingByGroup, row));
+  outgoing.forEach((row) => addToGroup(outgoingByGroup, row));
+
+  let hasStrictUpgrade = incoming.length > outgoing.length;
+
+  for (const [key, outgoingSlotsRaw] of outgoingByGroup.entries()) {
+    const incomingSlots = [...(incomingByGroup.get(key) || [])].sort((a, b) => a - b);
+    const outgoingSlots = [...outgoingSlotsRaw].sort((a, b) => a - b);
+    if (incomingSlots.length < outgoingSlots.length) return false;
+
+    for (let index = 0; index < outgoingSlots.length; index += 1) {
+      if (incomingSlots[index] > outgoingSlots[index]) return false;
+      if (incomingSlots[index] < outgoingSlots[index]) hasStrictUpgrade = true;
+    }
+  }
+
+  return hasStrictUpgrade;
+}
+
+function buildCpuRosterAfterTrade(cpuTeam, userItems = [], cpuItems = [], cpuTeamName = "", leagueData = {}) {
+  const outgoingPlayers = getEvaluationTradePlayers(cpuItems, leagueData);
+  const incomingPlayers = getEvaluationTradePlayers(userItems, leagueData);
+
+  const roster = (cpuTeam?.players || [])
+    .filter((player) => !outgoingPlayers.some((outgoing) => samePlayer(player, outgoing)))
+    .map(clonePlain);
+
+  for (const incoming of incomingPlayers) {
+    if (roster.some((row) => samePlayer(row, incoming))) continue;
+    const moved = clonePlain(incoming);
+    if (moved.teamName !== undefined) moved.teamName = cpuTeamName;
+    if (moved.currentTeam !== undefined) moved.currentTeam = cpuTeamName;
+    if (typeof moved.team === "string") moved.team = cpuTeamName;
+    roster.push(moved);
+  }
+
+  return roster;
+}
+
+function getPickRound(pick = {}) {
+  const round = Number(pick.round || pick.rnd || pick.pickRound || 0);
+  if (round === 1 || round === 2) return round;
+  const pickNumber = Number(pick.pickNumber || pick.overallPick || pick.resolvedPickNumber || pick.pick || 0);
+  return pickNumber && pickNumber <= 30 ? 1 : 2;
+}
+
+function getPickSlot(item = {}) {
+  const pick = item.pick || item || {};
+  const values = [
+    pick.pickNumber,
+    pick.overallPick,
+    pick.resolvedPickNumber,
+    pick.projectedRank,
+    pick.recordRank,
+    pick.expectedRank,
+    pick.slot,
+  ];
+
+  for (const value of values) {
+    const n = Number(value || 0);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+
+  const rule = item.tradeRule || pick.tradeRule || {};
+  const range = rule.conveyedRange || rule.ownedRange || pick.ownedRange || pick.ownedSlots || null;
+  if (range) {
+    const start = Number(range.start || 0);
+    const end = Number(range.end || 0);
+    if (start > 0 && end >= start) return (start + end) / 2;
+  }
+
+  return 0;
+}
+
+function genericPickValue(item = {}) {
+  const pick = item.pick || item || {};
+  const rule = item.tradeRule || pick.tradeRule || {};
+  const round = getPickRound(pick);
+  const slot = getPickSlot(item);
+  const action = String(rule.action || "").toLowerCase();
+  const protectionText = String(
+    item.protection || pick.displayProtection || pick.protections || pick.protection || ""
+  ).toLowerCase();
+
+  if (action === "swap") {
+    return round === 1 ? 0.18 : 0.05;
+  }
+
+  let value;
+  if (round === 1) {
+    if (slot > 0) {
+      const firstRoundSlot = clamp(slot, 1, 30);
+      value = 1.00 + ((30 - firstRoundSlot) / 29) * 16.00;
+    } else {
+      value = 2.20;
+    }
+  } else {
+    if (slot > 0) {
+      const secondRoundSlot = clamp(slot, 31, 60);
+      value = 0.05 + ((60 - secondRoundSlot) / 29) * 0.63;
+    } else {
+      value = 0.22;
+    }
+  }
+
+  if (action === "protected" || protectionText.includes("protected")) value *= 0.78;
+  if (protectionText.includes("top 4") || protectionText.includes("top-4")) value *= 0.86;
+  if (protectionText.includes("top 10") || protectionText.includes("top-10")) value *= 0.70;
+  if (protectionText.includes("top 14") || protectionText.includes("top-14")) value *= 0.62;
+
+  return round4(value);
+}
+
+function genericPickScoreForCpu(userItems = [], cpuItems = []) {
+  const received = getPrimaryTradePickItems(userItems).reduce((sum, item) => sum + genericPickValue(item), 0);
+  const sent = getPrimaryTradePickItems(cpuItems).reduce((sum, item) => sum + genericPickValue(item), 0);
+  return round4(received - sent);
+}
+
+function genericPickImpactForCpu(userItems = [], cpuItems = []) {
+  const incomingItems = getPrimaryTradePickItems(userItems);
+  const outgoingItems = getPrimaryTradePickItems(cpuItems);
+  const bestIncomingPlayerOvr = (userItems || [])
+    .filter((item) => item?.type === "player")
+    .reduce((max, item) => Math.max(max, toNum(item.player?.overall ?? item.player?.ovr, 0)), 0);
+  const starPickCostDiscount = bestIncomingPlayerOvr >= 92 ? 0.42 : bestIncomingPlayerOvr >= 86 ? 0.62 : bestIncomingPlayerOvr >= 84 ? 0.78 : 1;
+  const incomingValue = round4(incomingItems.reduce((sum, item) => sum + genericPickValue(item), 0));
+  const outgoingValue = round4(outgoingItems.reduce((sum, item) => sum + genericPickValue(item), 0) * starPickCostDiscount);
+  const outgoingBaseValue = round4(outgoingItems.reduce((sum, item) => sum + genericPickValue(item), 0));
+  const netPickScore = round4(incomingValue - outgoingValue);
+
+  const reasons = [];
+  if (incomingItems.length || outgoingItems.length) {
+    reasons.push(
+      `Trade Finder fast-scan draft estimate: ${netPickScore >= 0 ? "+" : ""}${netPickScore.toFixed(3)} net pick score using cheap projected slot/protection values. Exact pick value is restored in rescue/refine/Propose Trade.`
+    );
+  }
+
+  return {
+    netPickScore,
+    incomingValue,
+    incomingBaseValue: incomingValue,
+    outgoingValue,
+    outgoingBaseValue,
+    incoming: [],
+    outgoing: [],
+    reasons,
+    invalidSwaps: [],
+    invalidSwapReasons: [],
+    hasPicks: incomingItems.length > 0 || outgoingItems.length > 0,
+    fastScanApproximation: true,
+  };
+}
+
+function formatDelta(value) {
+  const n = Number(value || 0);
+  const sign = n > TEAM_IMPACT_EPS ? "+" : "";
+  return `${sign}${round4(n).toFixed(4)}`;
+}
+
+function makeRejectedResult(message, reasons = []) {
+  return {
+    accepted: false,
+    decision: "reject",
+    score: 0,
+    message,
+    reasons: reasons.length ? reasons : [message],
+    counterSuggestions: [],
+  };
+}
+
+function evaluateTradeTeamImpactUncached({ leagueData, userTeam, cpuTeam, userTeamName, cpuTeamName, userItems = [], cpuItems = [], evaluationMode = "standard", cpuTradeRole = "", cpuTradeContext = null, __tfBreakdownMetrics = null }) {
+  const cpuName = cpuTeamName || getTeamName(cpuTeam) || "CPU team";
+  const userName = userTeamName || getTeamName(userTeam) || "Your team";
+  const isCpuCpuEvaluation = String(evaluationMode || "").toLowerCase() === "cpu_cpu_trade";
+  const normalizedCpuTradeRole = String(cpuTradeRole || "").toLowerCase();
+
+  if (!leagueData || !cpuTeam) {
+    return makeRejectedResult("CPU evaluation failed because the CPU team could not be found.");
+  }
+
+  if (!userItems.length && !cpuItems.length) {
+    return makeRejectedResult("Add at least one trade item before evaluation.");
+  }
+
+  const beforePlayers = Array.isArray(cpuTeam?.players) ? cpuTeam.players : [];
+  const afterRosterStart = tfImpactNow();
+  const afterPlayers = buildCpuRosterAfterTrade(cpuTeam, userItems, cpuItems, cpuName, leagueData);
+  addBreakdownMetric(__tfBreakdownMetrics, "afterRosterBuildMs", tfImpactNow() - afterRosterStart);
+
+  const useFastScanImpact = shouldUseTradeFinderFastScanImpact({
+    cpuTradeRole: normalizedCpuTradeRole,
+    cpuTradeContext,
+  });
+  const useFastFtr = !useFastScanImpact && shouldUseTradeFinderFastFtr({ cpuTradeRole: normalizedCpuTradeRole, cpuTradeContext });
+
+  const beforeRatingStart = tfImpactNow();
+  const before = rateTeamRoster(beforePlayers, { fastFtr: useFastFtr, fastScan: useFastScanImpact, breakdownMetrics: __tfBreakdownMetrics, ratingRole: "before" });
+  addBreakdownMetric(__tfBreakdownMetrics, "beforeRatingCallMs", tfImpactNow() - beforeRatingStart);
+
+  const afterRatingStart = tfImpactNow();
+  const after = rateTeamRoster(afterPlayers, { fastFtr: useFastFtr, fastScan: useFastScanImpact, breakdownMetrics: __tfBreakdownMetrics, ratingRole: "after" });
+  addBreakdownMetric(__tfBreakdownMetrics, "afterRatingCallMs", tfImpactNow() - afterRatingStart);
+
+  const powerContextStart = tfImpactNow();
+  const powerContext = getTeamPowerContext(leagueData, cpuName, __tfBreakdownMetrics);
+  addBreakdownMetric(__tfBreakdownMetrics, "powerContextCallMs", tfImpactNow() - powerContextStart);
+
+  const weightStart = tfImpactNow();
+  const { ovrWeight, potWeight } = getOvrPotWeights(powerContext.rank);
+  addBreakdownMetric(__tfBreakdownMetrics, "weightMs", tfImpactNow() - weightStart);
+
+  const deltaOVR = round4(after.exactOverall - before.exactOverall);
+  const deltaPOT = round4(after.exactPot - before.exactPot);
+  const deltaFTR = round4(after.exactFtr - before.exactFtr);
+  const positiveMovement = round4(Math.max(0, deltaOVR) + Math.max(0, deltaPOT) + Math.max(0, deltaFTR));
+  const noDownsideMinGain = NO_DOWNSIDE_MIN_GAIN + (powerContext.isTopConferenceTeam ? 0.05 : 0);
+  const pickImpactStart = tfImpactNow();
+  const cpuRosterChangedByTrade =
+    getTradePlayers(userItems).length > 0 || getTradePlayers(cpuItems).length > 0;
+  const projectedRatingSnapshotsByTeam =
+    isCpuCpuEvaluation &&
+    !useFastScanImpact &&
+    cpuRosterChangedByTrade &&
+    after?.__pickProjectionSnapshot
+      ? new Map([[normalizeName(cpuName), after.__pickProjectionSnapshot]])
+      : null;
+  const pickImpact = useFastScanImpact
+    ? genericPickImpactForCpu(userItems, cpuItems)
+    : evaluateTradePickImpact({
+        leagueData,
+        userItems,
+        cpuItems,
+        userTeamName: userName,
+        cpuTeamName: cpuName,
+        projectedRatingSnapshotsByTeam,
+      });
+  addBreakdownMetric(__tfBreakdownMetrics, "pickImpactMs", tfImpactNow() - pickImpactStart);
+
+  if (Array.isArray(pickImpact?.invalidSwapReasons) && pickImpact.invalidSwapReasons.length > 0) {
+    return makeRejectedResult(
+      "Trade has a stale pick swap that does not match the current two teams.",
+      [
+        "Pick swaps are tied to the exact two negotiating teams. Switch teams again or clear/re-add the swap.",
+        ...pickImpact.invalidSwapReasons,
+      ]
+    );
+  }
+
+  const pickScore = Number(pickImpact?.netPickScore || 0);
+  const tradePlayersStart = tfImpactNow();
+  const cpuIncomingPlayers = getEvaluationTradePlayers(userItems, leagueData);
+  const cpuOutgoingPlayers = getEvaluationTradePlayers(cpuItems, leagueData);
+  const cpuOutgoingRetentionPlayers = cpuOutgoingPlayers.map(getConservativeYoungRetentionPlayer);
+  addBreakdownMetric(__tfBreakdownMetrics, "tradePlayersMs", tfImpactNow() - tradePlayersStart);
+
+  const contractStart = tfImpactNow();
+  const contractImpact = evaluateCpuContractFriction({
+    leagueData,
+    cpuIncomingPlayers,
+    cpuOutgoingPlayers,
+    // The tiny bad-contract term nudge is intentionally user-trade-only.
+    // Trade Finder uses this same standard evaluator, so its final offers stay aligned
+    // with Propose Trade. CPU-to-CPU trade behavior is left untouched.
+    userTradeTermTuning: !isCpuCpuEvaluation,
+  });
+  addBreakdownMetric(__tfBreakdownMetrics, "contractMs", tfImpactNow() - contractStart);
+
+  const starTaxStart = tfImpactNow();
+  const starRetentionImpact = evaluateCpuOutgoingStarRetentionTax(cpuOutgoingPlayers, cpuName);
+  addBreakdownMetric(__tfBreakdownMetrics, "starTaxMs", tfImpactNow() - starTaxStart);
+
+  const prospectTaxStart = tfImpactNow();
+  const prospectRetentionImpact = evaluateCpuOutgoingProspectRetentionTax(cpuOutgoingRetentionPlayers, powerContext.rank, cpuName);
+  addBreakdownMetric(__tfBreakdownMetrics, "prospectTaxMs", tfImpactNow() - prospectTaxStart);
+
+  const ownFirstTaxStart = tfImpactNow();
+  const ownFirstRetentionImpact = evaluateCpuOutgoingOwnFirstRetentionTax(pickImpact, powerContext.rank, cpuName);
+  addBreakdownMetric(__tfBreakdownMetrics, "ownFirstTaxMs", tfImpactNow() - ownFirstTaxStart);
+  const assetRetentionTax = round4(
+    Number(starRetentionImpact?.tax || 0) +
+      Number(prospectRetentionImpact?.tax || 0) +
+      Number(ownFirstRetentionImpact?.tax || 0)
+  );
+
+  const hasNoMeaningfulDownside =
+    deltaOVR >= -TEAM_IMPACT_EPS &&
+    deltaPOT >= -TEAM_IMPACT_EPS &&
+    deltaFTR >= -TEAM_IMPACT_EPS;
+
+  let ftrScore = 0;
+  if (Math.abs(deltaOVR) <= FTR_FLAT_OVR_WINDOW) {
+    ftrScore = deltaFTR * FTR_TIEBREAKER_MULT;
+  }
+
+  const mainScore =
+    ovrWeight * deltaOVR * OVR_IMPACT_MULT +
+    potWeight * deltaPOT * POT_IMPACT_MULT +
+    ftrScore +
+    pickScore;
+
+  const topConferenceTax = powerContext.isTopConferenceTeam
+    ? isCpuCpuEvaluation
+      ? CPU_CPU_TOP_CONFERENCE_THRESHOLD_TAX
+      : TOP_CONFERENCE_THRESHOLD_TAX
+    : 0;
+  const eliteTeamTax = powerContext.rank <= 5
+    ? isCpuCpuEvaluation
+      ? CPU_CPU_ELITE_TEAM_THRESHOLD_TAX
+      : ELITE_TEAM_THRESHOLD_TAX
+    : 0;
+  const cpuCpuDebugMarksMegaTrade = Boolean(cpuTradeContext?.megaTrade);
+  const isCpuCpuNonMegaEvaluation = isCpuCpuEvaluation && !cpuCpuDebugMarksMegaTrade;
+  const buyerPhase = String(cpuTradeContext?.buyerPhase || "").toLowerCase();
+  const sellerPhase = String(cpuTradeContext?.sellerPhase || "").toLowerCase();
+  const cpuCpuNonMegaPhaseRelief = isCpuCpuNonMegaEvaluation
+    ? normalizedCpuTradeRole === "buyer"
+      ? cpuCpuPhaseRelief(CPU_CPU_NON_MEGA_BUYER_RELIEF_BY_PHASE, buyerPhase)
+      : normalizedCpuTradeRole === "seller"
+        ? cpuCpuPhaseRelief(CPU_CPU_NON_MEGA_SELLER_RELIEF_BY_PHASE, sellerPhase)
+        : 0
+    : 0;
+  const thresholdDiscount = isCpuCpuEvaluation ? CPU_CPU_THRESHOLD_DISCOUNT : 0;
+  const minimumBaseThreshold = isCpuCpuEvaluation ? CPU_CPU_MIN_ACCEPT_THRESHOLD : 0.18;
+  const baseThreshold = round4(
+    Math.max(minimumBaseThreshold, BASE_ACCEPT_THRESHOLD + topConferenceTax + eliteTeamTax - thresholdDiscount - cpuCpuNonMegaPhaseRelief)
+  );
+  const threshold = round4(
+    baseThreshold +
+      Number(contractImpact?.friction || 0) +
+      assetRetentionTax
+  );
+
+  const hasPlayerMovement = cpuIncomingPlayers.length > 0 || cpuOutgoingPlayers.length > 0;
+  const hasMeaningfulContractFriction = Number(contractImpact?.friction || 0) > 0.035;
+  const hasMeaningfulStarRetentionTax = Number(starRetentionImpact?.tax || 0) > 0.035;
+  const hasMeaningfulProspectRetentionTax = Number(prospectRetentionImpact?.tax || 0) > 0.035;
+  const hasMeaningfulOwnFirstRetentionTax = Number(ownFirstRetentionImpact?.tax || 0) > 0.035;
+  const hasMeaningfulAssetRetentionTax = assetRetentionTax > 0.035;
+  const mathematicallyStrictResolvedPickUpgradeAccept =
+    !hasPlayerMovement &&
+    !hasMeaningfulContractFriction &&
+    isMathematicallyStrictResolvedPickUpgrade(userItems, cpuItems);
+  const cleanPickUpgradeAccept =
+    !hasPlayerMovement &&
+    !hasMeaningfulContractFriction &&
+    !hasMeaningfulAssetRetentionTax &&
+    pickScore >= CLEAN_PICK_UPGRADE_ACCEPT_LINE;
+  const noDownsidePickSweetenerAccept =
+    hasNoMeaningfulDownside &&
+    !hasMeaningfulContractFriction &&
+    !hasMeaningfulAssetRetentionTax &&
+    pickScore >= NO_DOWNSIDE_PICK_SWEETENER_LINE;
+  const noDownsideAccept =
+    hasNoMeaningfulDownside &&
+    positiveMovement >= noDownsideMinGain &&
+    pickScore >= -TEAM_IMPACT_EPS &&
+    mainScore >= threshold - 0.25;
+  const tradeoffAccept = mainScore >= threshold;
+
+  const cpuCpuContractOkay = Number(contractImpact?.friction || 0) <= 0.34;
+  const bestIncomingPlayerOvr = cpuIncomingPlayers.reduce(
+    (max, player) => Math.max(max, toNum(player?.overall ?? player?.ovr, 0)),
+    0
+  );
+  const bestOutgoingPlayerOvr = cpuOutgoingPlayers.reduce(
+    (max, player) => Math.max(max, toNum(player?.overall ?? player?.ovr, 0)),
+    0
+  );
+  const incomingPremiumYoungPlayer = cpuIncomingPlayers.some((player) => {
+    const age = toNum(player?.age, 27);
+    const ovr = toNum(player?.overall ?? player?.ovr, 0);
+    const pot = toNum(player?.potential ?? player?.pot ?? ovr, ovr);
+    return age <= 24 && pot >= 79;
+  });
+  const cpuCpuBuyerPickFloor = bestIncomingPlayerOvr >= 86
+    ? -9.25
+    : bestIncomingPlayerOvr >= 83
+      ? -7.75
+      : bestIncomingPlayerOvr >= 76
+        ? -6.25
+        : bestIncomingPlayerOvr >= 76
+          ? -4.75
+          : CPU_CPU_BASE_BUYER_PICK_FLOOR;
+  const sellerIsFutureFocused = sellerPhase === "seller" || sellerPhase === "retool";
+  const sellerReceivesRealFutureValue = pickScore >= 0.45 || deltaPOT >= 0.040 || incomingPremiumYoungPlayer;
+  const cpuCpuSellerOvrDropFloor = sellerIsFutureFocused && bestOutgoingPlayerOvr >= 76 && sellerReceivesRealFutureValue
+    ? -4.15
+    : CPU_CPU_BASE_SELLER_OVR_DROP;
+  const cpuCpuBuyerPhaseSlack = isCpuCpuNonMegaEvaluation
+    ? cpuCpuPhaseRelief(CPU_CPU_NON_MEGA_BUYER_SLACK_BY_PHASE, buyerPhase)
+    : 0;
+  const cpuCpuSellerPhaseSlack = isCpuCpuNonMegaEvaluation
+    ? cpuCpuPhaseRelief(CPU_CPU_NON_MEGA_SELLER_SLACK_BY_PHASE, sellerPhase)
+    : 0;
+  const cpuCpuBuyerScoreSlack = (bestIncomingPlayerOvr >= 83 ? 1.55 : bestIncomingPlayerOvr >= 80 ? 1.35 : 1.15) + cpuCpuBuyerPhaseSlack;
+  const cpuCpuSellerScoreSlack = (bestOutgoingPlayerOvr >= 83 && sellerReceivesRealFutureValue ? 2.00 : bestOutgoingPlayerOvr >= 76 && sellerReceivesRealFutureValue ? 1.85 : 1.60) + cpuCpuSellerPhaseSlack;
+  const targetAge = toNum(cpuTradeContext?.targetAge, 27);
+  const cpuCpuAgingHighEndSellerAccept =
+    isCpuCpuEvaluation &&
+    normalizedCpuTradeRole === "seller" &&
+    cpuCpuContractOkay &&
+    sellerIsFutureFocused &&
+    bestOutgoingPlayerOvr >= 83 &&
+    targetAge >= 32 &&
+    sellerReceivesRealFutureValue &&
+    (pickScore >= 4.2 || incomingPremiumYoungPlayer) &&
+    bestIncomingPlayerOvr >= 74 &&
+    deltaOVR >= -5.25 &&
+    mainScore >= threshold - 8.75;
+
+  const cpuCpuBuyerAccept =
+    isCpuCpuEvaluation &&
+    normalizedCpuTradeRole === "buyer" &&
+    cpuCpuContractOkay &&
+    pickScore >= cpuCpuBuyerPickFloor &&
+    (deltaOVR >= 0.025 || deltaFTR >= 0.035 || positiveMovement >= 0.055 || bestIncomingPlayerOvr >= 76) &&
+    mainScore >= threshold - cpuCpuBuyerScoreSlack;
+
+  const cpuCpuSellerAccept =
+    isCpuCpuEvaluation &&
+    normalizedCpuTradeRole === "seller" &&
+    cpuCpuContractOkay &&
+    deltaOVR >= cpuCpuSellerOvrDropFloor &&
+    (sellerReceivesRealFutureValue || mainScore >= threshold - 1.15) &&
+    mainScore >= threshold - cpuCpuSellerScoreSlack;
+
+  const accepted = Boolean(
+    mathematicallyStrictResolvedPickUpgradeAccept ||
+      cleanPickUpgradeAccept ||
+      noDownsidePickSweetenerAccept ||
+      noDownsideAccept ||
+      tradeoffAccept ||
+      cpuCpuBuyerAccept ||
+      cpuCpuSellerAccept ||
+      cpuCpuAgingHighEndSellerAccept
+  );
+
+  // Internal-only negotiation margin. Unlike the old raw score-vs-threshold
+  // difference, this follows the actual acceptance path that fired so its sign
+  // always matches the CPU decision. We intentionally keep the raw score margin
+  // too for diagnostics/future negotiation features.
+  const rawScoreMargin = round4(mainScore - threshold);
+  let acceptancePath = "strict_threshold";
+  let decisionMargin = rawScoreMargin;
+
+  if (accepted && !tradeoffAccept) {
+    if (noDownsideAccept) {
+      acceptancePath = "no_downside";
+      decisionMargin = round4(mainScore - (threshold - 0.25));
+    } else if (noDownsidePickSweetenerAccept) {
+      acceptancePath = "no_downside_pick_sweetener";
+      decisionMargin = round4(pickScore - NO_DOWNSIDE_PICK_SWEETENER_LINE);
+    } else if (cleanPickUpgradeAccept) {
+      acceptancePath = "clean_pick_upgrade";
+      decisionMargin = round4(pickScore - CLEAN_PICK_UPGRADE_ACCEPT_LINE);
+    } else if (mathematicallyStrictResolvedPickUpgradeAccept) {
+      acceptancePath = "strict_resolved_pick_upgrade";
+      decisionMargin = round4(Math.max(0.0001, pickScore));
+    } else if (cpuCpuBuyerAccept) {
+      acceptancePath = "cpu_cpu_buyer";
+      decisionMargin = round4(mainScore - (threshold - cpuCpuBuyerScoreSlack));
+    } else if (cpuCpuSellerAccept) {
+      acceptancePath = "cpu_cpu_seller";
+      decisionMargin = round4(mainScore - (threshold - cpuCpuSellerScoreSlack));
+    } else if (cpuCpuAgingHighEndSellerAccept) {
+      acceptancePath = "cpu_cpu_aging_high_end_seller";
+      decisionMargin = round4(mainScore - (threshold - 8.75));
+    }
+  }
+
+  // A CPU decision margin should be intuitive internally even if a future
+  // acceptance path is added without a continuous score line.
+  if (accepted && decisionMargin < 0) decisionMargin = Math.abs(decisionMargin);
+  if (!accepted && decisionMargin > 0) decisionMargin = -decisionMargin;
+
+  const reasons = [
+    `${cpuName} power rank #${powerContext.rank}: values OVR ${(ovrWeight * 100).toFixed(1)}% / POT ${(potWeight * 100).toFixed(1)}%.`,
+    `Before trade: OVR ${before.exactOverall.toFixed(4)}, POT ${before.exactPot.toFixed(4)}, FTR ${before.exactFtr.toFixed(4)}.`,
+    `After trade: OVR ${after.exactOverall.toFixed(4)}, POT ${after.exactPot.toFixed(4)}, FTR ${after.exactFtr.toFixed(4)}.`,
+    `Team impact: OVR ${formatDelta(deltaOVR)}, POT ${formatDelta(deltaPOT)}, FTR ${formatDelta(deltaFTR)}.`,
+  ];
+
+  if (useFastScanImpact) {
+    reasons.push("Trade Finder fast-scan mode: using cheap OVR/POT/FTR and pick estimates only during the scan phase. Rescue, refine, and Propose Trade exact evaluation are unchanged.");
+  } else if (useFastFtr) {
+    reasons.push("Trade Finder speed mode: using fast full-roster rating approximation for FTR only; Propose Trade exact evaluation is unchanged.");
+  }
+
+  if (isCpuCpuEvaluation) {
+    const roleText = normalizedCpuTradeRole === "seller" ? "seller" : normalizedCpuTradeRole === "buyer" ? "buyer" : "CPU";
+    reasons.push(
+      `CPU-to-CPU ${roleText} mode: threshold ${threshold.toFixed(2)} using the expanded CPU market standard; manual/user trade standards remain stricter.`
+    );
+    if (isCpuCpuNonMegaEvaluation && cpuCpuNonMegaPhaseRelief > 0) {
+      reasons.push(
+        `PATCH58 non-mega CPU market smoothing applied ${cpuCpuNonMegaPhaseRelief.toFixed(2)} phase relief; mega trades, Trade Finder, and Propose Trade are unchanged.`
+      );
+    }
+  }
+
+  if (Array.isArray(pickImpact?.reasons) && pickImpact.reasons.length > 0) {
+    reasons.push(...pickImpact.reasons.slice(0, 5));
+  }
+
+  if (Array.isArray(starRetentionImpact?.reasons) && starRetentionImpact.reasons.length > 0) {
+    reasons.push(...starRetentionImpact.reasons);
+  }
+
+  if (Array.isArray(prospectRetentionImpact?.reasons) && prospectRetentionImpact.reasons.length > 0) {
+    reasons.push(...prospectRetentionImpact.reasons);
+  }
+
+  if (Array.isArray(ownFirstRetentionImpact?.reasons) && ownFirstRetentionImpact.reasons.length > 0) {
+    reasons.push(...ownFirstRetentionImpact.reasons);
+  }
+
+  if (Array.isArray(contractImpact?.reasons) && contractImpact.reasons.length > 0) {
+    reasons.push(...contractImpact.reasons);
+  }
+
+  if (powerContext.isTopConferenceTeam) {
+    reasons.push(`${cpuName} is currently the top team in its conference, so it needs a clearer reason to move pieces.`);
+  }
+
+  if (mathematicallyStrictResolvedPickUpgradeAccept) {
+    reasons.push("Accepted because this pick-only offer is a mathematically strict exact-slot upgrade for the CPU with no draft-asset downside.");
+  } else if (cleanPickUpgradeAccept) {
+    reasons.push("Accepted because this is a clean draft-asset upgrade for the CPU with no player, roster, salary, or contract downside.");
+  } else if (cpuCpuBuyerAccept) {
+    reasons.push("Accepted in CPU-to-CPU buyer mode because the team gets a meaningful rotation upgrade without an excessive pick/contract cost.");
+  } else if (cpuCpuAgingHighEndSellerAccept) {
+    reasons.push("Accepted in CPU-to-CPU seller mode because a low-direction team is converting an aging high-end player into meaningful future value and replacement salary.");
+  } else if (cpuCpuSellerAccept) {
+    reasons.push("Accepted in CPU-to-CPU seller mode because the team receives enough future/upside value without an excessive rotation drop.");
+  } else if (noDownsidePickSweetenerAccept) {
+    reasons.push("Accepted because the CPU receives enough draft-pick value without taking a meaningful team-impact or contract downside.");
+  } else if (noDownsideAccept) {
+    reasons.push("Accepted because the trade improves or holds every team-impact rating and stays close enough to the adjusted threshold.");
+  } else if (accepted) {
+    reasons.push(`Accepted because the weighted team-impact score clears the ${threshold.toFixed(2)} adjusted threshold.`);
+  } else if (!hasNoMeaningfulDownside) {
+    reasons.push(`Rejected because the gains do not justify the rating sacrifice for ${cpuName}'s current team direction.`);
+  } else if (pickImpact?.hasPicks && pickScore < CLEAN_PICK_UPGRADE_ACCEPT_LINE) {
+    reasons.push(
+      pickScore < -TEAM_IMPACT_EPS
+        ? `Rejected because ${cpuName} would lose net draft-pick value in a deal without enough team-impact compensation.`
+        : `Rejected because the draft-pick value is too small to justify anything beyond a no-downside asset cleanup.`
+    );
+  } else {
+    reasons.push("Rejected because the move is too close to neutral; CPU teams need a clear reason to trade.");
+  }
+
+  return {
+    accepted,
+    decision: accepted ? "accept" : "reject",
+    score: round4(mainScore),
+    // Internal-only: positive means accepted by this amount, negative means
+    // rejected by this amount. UI deliberately does not display this value.
+    decisionMargin: round4(decisionMargin),
+    rawScoreMargin,
+    acceptancePath,
+    message: accepted
+      ? `${cpuName} accepts the proposal.`
+      : `${cpuName} rejects the proposal.`,
+    reasons,
+    counterSuggestions: [],
+    teamImpact: {
+      userTeamName: userName,
+      cpuTeamName: cpuName,
+      evaluationMode,
+      cpuTradeRole: normalizedCpuTradeRole,
+      cpuTradeContext,
+      ratingMode: useFastScanImpact ? TRADE_FINDER_FAST_SCAN_MODE : useFastFtr ? TRADE_FINDER_FAST_FTR_MODE : "exact",
+      fastScan: Boolean(useFastScanImpact),
+      fastFtr: Boolean(useFastFtr),
+      rank: powerContext.rank,
+      isTopConferenceTeam: powerContext.isTopConferenceTeam,
+      useRecordPowerRankings: powerContext.useRecordPowerRankings,
+      weights: { ovrWeight, potWeight },
+      threshold,
+      baseThreshold,
+      decisionMargin: round4(decisionMargin),
+      rawScoreMargin,
+      acceptancePath,
+      cpuCpuDebugMarksMegaTrade,
+      isCpuCpuNonMegaEvaluation,
+      buyerPhase,
+      sellerPhase,
+      cpuCpuNonMegaPhaseRelief,
+      cpuCpuBuyerPhaseSlack,
+      cpuCpuSellerPhaseSlack,
+      cpuCpuBuyerPickFloor,
+      cpuCpuSellerOvrDropFloor,
+      bestIncomingPlayerOvr,
+      bestOutgoingPlayerOvr,
+      sellerReceivesRealFutureValue,
+      contractFriction: contractImpact?.friction || 0,
+      contractImpact,
+      starRetentionTax: starRetentionImpact?.tax || 0,
+      starRetentionImpact,
+      prospectRetentionTax: prospectRetentionImpact?.tax || 0,
+      prospectRetentionImpact,
+      ownFirstRetentionTax: ownFirstRetentionImpact?.tax || 0,
+      ownFirstRetentionImpact,
+      // Legacy ownFirst fields remain for saved diagnostics/Trade Finder
+      // compatibility. These aliases reflect that the same gate now also
+      // protects acquired current-draft premium picks.
+      draftAssetRetentionTax: ownFirstRetentionImpact?.tax || 0,
+      draftAssetRetentionImpact: ownFirstRetentionImpact,
+      assetRetentionTax,
+      noDownsideMinGain,
+      before,
+      after,
+      deltas: {
+        ovr: deltaOVR,
+        pot: deltaPOT,
+        ftr: deltaFTR,
+      },
+      scoreBreakdown: {
+        ovrScore: round4(ovrWeight * deltaOVR * OVR_IMPACT_MULT),
+        potScore: round4(potWeight * deltaPOT * POT_IMPACT_MULT),
+        ftrScore: round4(ftrScore),
+        pickScore,
+        pickImpact,
+        incomingPickValue: pickImpact?.incomingValue || 0,
+        outgoingPickValue: pickImpact?.outgoingValue || 0,
+        mathematicallyStrictResolvedPickUpgradeAccept,
+        cleanPickUpgradeAccept,
+        noDownsidePickSweetenerAccept,
+        cpuCpuBuyerAccept,
+        cpuCpuSellerAccept,
+        cpuCpuAgingHighEndSellerAccept,
+        hasMeaningfulStarRetentionTax,
+        hasMeaningfulProspectRetentionTax,
+        hasMeaningfulOwnFirstRetentionTax,
+        hasMeaningfulAssetRetentionTax,
+        contractFriction: contractImpact?.friction || 0,
+        starRetentionTax: starRetentionImpact?.tax || 0,
+        prospectRetentionTax: prospectRetentionImpact?.tax || 0,
+        ownFirstRetentionTax: ownFirstRetentionImpact?.tax || 0,
+        draftAssetRetentionTax: ownFirstRetentionImpact?.tax || 0,
+        assetRetentionTax,
+      },
+    },
+  };
+}
+
+export function evaluateTradeTeamImpact(args = {}) {
+  const totalStart = tfImpactNow();
+  const normalizedBreakdownRole = String(args?.cpuTradeRole || "").toLowerCase();
+  const tradeFinderBreakdownEnabled =
+    normalizedBreakdownRole === "trade_finder" && isTradeFinderImpactBreakdownEnabled();
+  const cpuBreakdownEnabled =
+    cpuTradeImpactBreakdownEnabled &&
+    String(args?.evaluationMode || "").toLowerCase() === "cpu_cpu_trade" &&
+    (normalizedBreakdownRole === "buyer" || normalizedBreakdownRole === "seller");
+  const breakdownEnabled = tradeFinderBreakdownEnabled || cpuBreakdownEnabled;
+  const metrics = breakdownEnabled ? {} : null;
+  const baseBreakdown = breakdownEnabled
+    ? {
+        ...makeTradeFinderImpactBreakdownBase(args),
+        ...(cpuBreakdownEnabled ? { impactMode: "exact" } : {}),
+      }
+    : null;
+
+  const recordImpactBreakdown = (row = {}) => {
+    if (tradeFinderBreakdownEnabled) recordTradeFinderImpactBreakdown(row);
+    if (cpuBreakdownEnabled) recordCpuTradeImpactBreakdown(row);
+  };
+
+  const cacheKeyStart = tfImpactNow();
+  const tradeFinderCacheKey = makeTradeFinderImpactCacheKey(args);
+  const cpuTradeCacheKey = tradeFinderCacheKey ? null : makeCpuTradeImpactCacheKey(args);
+  const cacheKey = tradeFinderCacheKey || cpuTradeCacheKey;
+  const resultCache = tradeFinderCacheKey ? tradeFinderImpactCache : cpuTradeCacheKey ? cpuTradeImpactCache : null;
+  addBreakdownMetric(metrics, "impactCacheKeyMs", tfImpactNow() - cacheKeyStart);
+
+  if (cacheKey && resultCache) {
+    const cacheLookupStart = tfImpactNow();
+    const cached = getLimitedCache(resultCache, cacheKey);
+    addBreakdownMetric(metrics, "impactCacheLookupMs", tfImpactNow() - cacheLookupStart);
+    if (cached) {
+      if (cpuTradeCacheKey) cpuTradeImpactCacheHits += 1;
+      const totalMs = tfImpactNow() - totalStart;
+      recordImpactBreakdown({
+        ...baseBreakdown,
+        cacheHit: true,
+        accepted: Boolean(cached?.accepted),
+        score: Number(cached?.score || 0),
+        threshold: Number(cached?.teamImpact?.threshold || 0),
+        totalMs: tfImpactRoundMs(totalMs),
+        metrics: Object.fromEntries(Object.entries(metrics || {}).map(([key, value]) => [key, tfImpactRoundMs(value)])),
+      });
+      debugTradeImpactEvaluation(args, cached, { cacheHit: true, totalMs: tfImpactRoundMs(totalMs) });
+      return {
+        ...cached,
+        ...(tradeFinderCacheKey ? { __tfImpactCacheHit: true } : {}),
+        ...(cpuTradeCacheKey ? { __cpuTradeImpactCacheHit: true } : {}),
+      };
+    }
+    if (cpuTradeCacheKey) cpuTradeImpactCacheMisses += 1;
+  }
+
+  const uncachedStart = tfImpactNow();
+  const result = evaluateTradeTeamImpactUncached({ ...args, __tfBreakdownMetrics: metrics });
+  addBreakdownMetric(metrics, "uncachedImpactMs", tfImpactNow() - uncachedStart);
+
+  if (cacheKey && resultCache) {
+    const cacheStoreStart = tfImpactNow();
+    touchLimitedCache(
+      resultCache,
+      cacheKey,
+      result,
+      tradeFinderCacheKey ? TRADE_FINDER_IMPACT_CACHE_MAX : CPU_TRADE_IMPACT_CACHE_MAX
+    );
+    addBreakdownMetric(metrics, "impactCacheStoreMs", tfImpactNow() - cacheStoreStart);
+  }
+
+  if (breakdownEnabled) {
+    const totalMs = tfImpactNow() - totalStart;
+    recordImpactBreakdown({
+      ...baseBreakdown,
+      cacheHit: false,
+      accepted: Boolean(result?.accepted),
+      score: Number(result?.score || 0),
+      threshold: Number(result?.teamImpact?.threshold || 0),
+      ratingMode: result?.teamImpact?.ratingMode || baseBreakdown?.impactMode || "exact",
+      rank: result?.teamImpact?.rank || null,
+      deltas: result?.teamImpact?.deltas || null,
+      totalMs: tfImpactRoundMs(totalMs),
+      metrics: Object.fromEntries(Object.entries(metrics || {}).map(([key, value]) => [key, tfImpactRoundMs(value)])),
+    });
+  }
+
+  debugTradeImpactEvaluation(args, result, { cacheHit: false, totalMs: tfImpactRoundMs(tfImpactNow() - totalStart) });
+  return result;
+}
+
+export function clearTradeFinderImpactCache() {
+  tradeFinderImpactCache.clear();
+}
+
+export function getTradeFinderImpactCacheSize() {
+  return tradeFinderImpactCache.size;
+}
+
+export function resetCpuTradeImpactCache() {
+  cpuTradeImpactCache.clear();
+  cpuTradeImpactCacheHits = 0;
+  cpuTradeImpactCacheMisses = 0;
+  cpuTradeImpactNextContextToken = 1;
+  cpuTradeImpactContextTokens.clear();
+  cpuTradeImpactLeagueContextCache = new WeakMap();
+}
+
+export function getCpuTradeImpactCacheStats() {
+  return {
+    size: cpuTradeImpactCache.size,
+    hits: cpuTradeImpactCacheHits,
+    misses: cpuTradeImpactCacheMisses,
+    maxSize: CPU_TRADE_IMPACT_CACHE_MAX,
+    contextCount: cpuTradeImpactContextTokens.size,
+    maxContexts: CPU_TRADE_IMPACT_CONTEXT_MAX,
+  };
+}
+

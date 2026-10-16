@@ -1,0 +1,45 @@
+html,
+body,
+#root {
+  min-height: 100%;
+  background: #050505;
+}
+
+.bm-page-fade {
+  min-height: 100vh;
+  background: #050505;
+}
+
+/*
+ * Global route entrance.
+ *
+ * All visible tuning lives in:
+ *   frontend/src/config/navigationFadeTuning.js
+ *
+ * There is deliberately NO exit hold/delay. The new route appears immediately
+ * and then settles in once, avoiding the old double-fade feeling.
+ */
+.bm-page-fade > * {
+  animation: bmPageContentIn var(--bm-nav-fade-duration, 190ms)
+    cubic-bezier(0.22, 0.61, 0.36, 1) both;
+  will-change: opacity, transform;
+}
+
+@keyframes bmPageContentIn {
+  from {
+    opacity: var(--bm-nav-fade-start-opacity, 0.78);
+    transform: translate3d(0, var(--bm-nav-fade-move-y, 2px), 0)
+      scale(var(--bm-nav-fade-start-scale, 0.998));
+  }
+
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bm-page-fade > * {
+    animation: none;
+  }
+}

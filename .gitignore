@@ -6,3 +6,6 @@ _patch_backups/
 
 # Local development safety backups
 frontend_backup_*/
+
+# Local environment settings
+**/.env.local

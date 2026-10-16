@@ -681,7 +681,34 @@ export default function Play() {
               <p className="mt-1 text-xs font-semibold text-white/48">Choose an occupied slot to continue, or an empty slot to start a new rebuild.</p>
             </div>
             <div className="flex shrink-0 gap-2">
-              <button type="button" onClick={() => navigate("/league-editor")} className={`${quietButton} px-3 py-2 text-xs`}>League Editor</button>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => navigate("/league-editor")}
+                  className={`${quietButton} px-2.5 py-2 text-[11px] opacity-75 hover:opacity-100`}
+                >
+                  League Editor
+                </button>
+                <span className="group relative inline-flex items-center">
+                  <button
+                    type="button"
+                    aria-label="What is League Editor?"
+                    aria-describedby="bm-league-editor-help"
+                    title="What is League Editor?"
+                    className="flex h-6 w-6 items-center justify-center rounded-full border border-white/15 bg-white/[0.035] text-[11px] font-black text-white/45 transition hover:border-orange-500/40 hover:text-orange-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-orange-400"
+                  >
+                    ?
+                  </button>
+                  <span
+                    id="bm-league-editor-help"
+                    role="tooltip"
+                    className="pointer-events-none invisible absolute right-0 top-full z-50 mt-2 w-64 rounded-lg border border-orange-500/25 bg-[#14100e] px-3 py-2.5 text-left text-[11px] font-medium leading-relaxed text-slate-300 opacity-0 shadow-[0_12px_30px_rgba(0,0,0,.6)] transition-opacity group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100"
+                  >
+                    <strong className="mb-1 block text-xs font-black text-orange-200">What is League Editor?</strong>
+                    Optional customization before starting a franchise. Import a roster, edit teams and players, or adjust free agents and draft classes. You can skip it and start a league from any empty save slot.
+                  </span>
+                </span>
+              </div>
               <button type="button" onClick={refreshSaveSlots} className={`${orangeButton} px-3 py-2 text-xs`}>Refresh</button>
             </div>
           </header>

@@ -1,0 +1,191 @@
+// GameContext.jsx
+import { createContext, useContext, useState, useEffect, useMemo } from "react";
+import { ensureGameplansForLeague } from "../utils/ensureGameplans.js";
+import { loadLeagueData, saveLeagueDataInBackground } from "../utils/leagueStorage.js";
+import { ensureLeagueFinancials } from "../utils/leagueFinancials.js";
+import { normalizeDevelopmentContracts } from "../utils/developmentContractUtils.js";
+import { withNormalizedSeasonContext, installSeasonContextAudit } from "../utils/seasonContext.js";
+import { ensureTradeRuleSettings } from "../utils/tradeRuleSettings.js";
+import { ensureInjurySettings } from "../utils/injurySystem.js";
+import { normalizePostRookieExtensionRights } from "../utils/postRookieRightsNormalization.js";
+import { updateActiveLeagueSaveSnapshotInBackground } from "../storage/leagueSaves.js";
+
+const GameContext = createContext();
+
+function getAllTeamsFromLeague(leagueData) {
+  if (!leagueData) return [];
+  if (Array.isArray(leagueData.teams)) return leagueData.teams;
+  if (leagueData.conferences) return Object.values(leagueData.conferences).flat();
+  return [];
+}
+
+function leagueHasTeams(leagueData) {
+  const teams = getAllTeamsFromLeague(leagueData);
+  return Array.isArray(teams) && teams.length > 0;
+}
+
+const FIRST_PLAYABLE_SEASON_YEAR = 2025;
+
+function normalizeLeagueTiming(leagueData) {
+  if (!leagueData || typeof leagueData !== "object") return leagueData;
+  return withNormalizedSeasonContext(leagueData);
+}
+
+function normalizeLeagueFinancials(leagueData) {
+  if (!leagueData || typeof leagueData !== "object") return leagueData;
+  const normalized = ensureInjurySettings(ensureTradeRuleSettings(normalizeDevelopmentContracts(ensureLeagueFinancials(normalizeLeagueTiming(leagueData)))));
+  normalizePostRookieExtensionRights(normalized);
+  return normalized;
+}
+
+export function GameProvider({ children }) {
+  const [leagueData, setLeagueDataRaw] = useState(null);
+
+  // Store only the team name. This prevents stale roster objects and localStorage bloat.
+  const [selectedTeamName, setSelectedTeamName] = useState(null);
+
+  useEffect(() => {
+    installSeasonContextAudit(() => leagueData);
+  }, [leagueData]);
+
+  const setLeagueData = (nextLeagueData, diagnostics = {}) => {
+    const normalized = normalizeLeagueFinancials(nextLeagueData);
+    setLeagueDataRaw(normalized);
+
+    if (diagnostics?.persist === false) return normalized;
+
+    if (normalized && leagueHasTeams(normalized)) {
+      const source = diagnostics?.source || "GameContext.setLeagueData";
+      saveLeagueDataInBackground(normalized, { source });
+      updateActiveLeagueSaveSnapshotInBackground({
+        leagueData: normalized,
+        selectedTeamName,
+        source,
+      });
+    }
+
+    return normalized;
+  };
+
+  // Load league from IndexedDB first, then migrate old localStorage saves.
+  useEffect(() => {
+    let cancelled = false;
+    let intervalId = null;
+
+    const tryHydrateLeague = async () => {
+      try {
+        const parsed = normalizeLeagueFinancials(await loadLeagueData());
+        if (!parsed || !leagueHasTeams(parsed)) return false;
+        if (cancelled) return true;
+
+        console.log("🔥 Loaded populated leagueData into GameContext:", parsed);
+
+        // Expose for older code paths that still expect a global in-memory league.
+        try {
+          window.__leagueData = parsed;
+          window.leagueData = parsed;
+        } catch {}
+
+        // Seed missing CPU gameplans automatically. Does not overwrite existing ones.
+        try {
+          const res = ensureGameplansForLeague(parsed);
+          console.log("✅ ensureGameplansForLeague:", res);
+        } catch (e) {
+          console.warn("ensureGameplansForLeague failed:", e);
+        }
+
+        setLeagueDataRaw(parsed);
+        saveLeagueDataInBackground(parsed, { source: "GameContext.hydrate" });
+        updateActiveLeagueSaveSnapshotInBackground({
+          leagueData: parsed,
+          selectedTeamName,
+          source: "GameContext.hydrate",
+        });
+        return true;
+      } catch (err) {
+        console.error("Failed to load leagueData:", err);
+        return false;
+      }
+    };
+
+    tryHydrateLeague().then((ok) => {
+      if (ok || cancelled) return;
+
+      intervalId = setInterval(() => {
+        tryHydrateLeague().then((done) => {
+          if (done && intervalId) {
+            clearInterval(intervalId);
+            intervalId = null;
+          }
+        });
+      }, 250);
+    });
+
+    return () => {
+      cancelled = true;
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, []);
+
+  // Restore selectedTeam. Supports old saved object and new saved string.
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("selectedTeam");
+      if (!saved) return;
+
+      const parsed = JSON.parse(saved);
+
+      if (parsed && typeof parsed === "object" && parsed.name) {
+        setSelectedTeamName(parsed.name);
+        localStorage.setItem("selectedTeam", JSON.stringify(parsed.name));
+      } else if (typeof parsed === "string") {
+        setSelectedTeamName(parsed);
+      }
+    } catch {}
+  }, []);
+
+  // Derive the live team object from leagueData every render.
+  const selectedTeam = useMemo(() => {
+    if (!leagueData || !selectedTeamName) return null;
+    const teams = getAllTeamsFromLeague(leagueData);
+    return teams.find((t) => t?.name === selectedTeamName) || null;
+  }, [leagueData, selectedTeamName]);
+
+  // Keep existing API: accepts setSelectedTeam(teamObj) or setSelectedTeam("Team Name").
+  const setSelectedTeam = (teamOrName) => {
+    const name =
+      typeof teamOrName === "string"
+        ? teamOrName
+        : teamOrName?.name || null;
+
+    setSelectedTeamName(name);
+
+    try {
+      if (name) localStorage.setItem("selectedTeam", JSON.stringify(name));
+      else localStorage.removeItem("selectedTeam");
+    } catch {}
+
+    updateActiveLeagueSaveSnapshotInBackground({
+      leagueData,
+      selectedTeamName: name,
+      source: "GameContext.setSelectedTeam",
+    });
+  };
+
+  return (
+    <GameContext.Provider
+      value={{
+        leagueData,
+        setLeagueData,
+        selectedTeam,
+        setSelectedTeam,
+      }}
+    >
+      {children}
+    </GameContext.Provider>
+  );
+}
+
+export function useGame() {
+  return useContext(GameContext);
+}

@@ -1,0 +1,317 @@
+// Standings.jsx
+import React, { useMemo, useState } from "react";
+import { useGame } from "../context/GameContext";
+import { useLocation, useNavigate } from "react-router-dom";
+import LZString from "lz-string";
+import PageFade from "../components/PageFade";
+import "../styles/BMAnimations.css";
+import "../styles/BMPageBackground.css";
+import { getArchivedStatsSnapshot, getLatestSeasonHistoryEntry, seasonLabelFromStartYear } from "../utils/seasonStatsArchive.js";
+import { DIVISION_NAMES, groupTeamsByDivision, resolveTeamDivision } from "../utils/leagueDivisions.js";
+import { readScheduleFromStorage } from "../utils/scheduleStorage.js";
+import { compareCanonicalTeams, computeCanonicalStandings, computeCanonicalStandingsFromRows } from "../utils/canonicalStandings.js";
+
+/* -----------------------------
+   Results V3 (per-game storage)
+   ----------------------------- */
+const RESULT_V3_INDEX_KEY = "bm_results_index_v3";
+const RESULT_V3_PREFIX = "bm_result_v3_";
+const resultV3Key = (gameId) => `${RESULT_V3_PREFIX}${gameId}`;
+function parseMaybeCompressed(raw, fallback = null) {
+  if (!raw) return fallback;
+  try {
+    if (String(raw).startsWith("lz:")) {
+      const decompressed = LZString.decompressFromUTF16(String(raw).slice(3));
+      return decompressed ? JSON.parse(decompressed) : fallback;
+    }
+  } catch {}
+  try {
+    return JSON.parse(raw);
+  } catch {}
+  try {
+    const decompressed = LZString.decompressFromUTF16(raw);
+    return decompressed ? JSON.parse(decompressed) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+
+function loadResultsIndexV3() {
+  try {
+    const raw = localStorage.getItem(RESULT_V3_INDEX_KEY);
+    if (!raw) return [];
+    const parsed = parseMaybeCompressed(raw, []);
+    if (!Array.isArray(parsed)) return [];
+    // ✅ normalize ids to strings so everything compares cleanly
+    return parsed.map((x) => String(x));
+  } catch {
+    return [];
+  }
+}
+
+function loadOneResultV3(gameIdStr) {
+  try {
+    const stored = localStorage.getItem(resultV3Key(gameIdStr));
+    if (!stored) return null;
+    return parseMaybeCompressed(stored, null);
+  } catch {
+    return null;
+  }
+}
+
+function loadAllResultsV3() {
+  const ids = loadResultsIndexV3();
+  const out = {};
+  for (const idStr of ids) {
+    const r = loadOneResultV3(idStr);
+    if (r) out[idStr] = r; // ✅ keep keys as strings
+  }
+  return out;
+}
+
+// pick a logo from whatever key the team uses
+const resolveLogo = (t) =>
+  t.logo || t.teamLogo || t.newTeamLogo || t.logoUrl || t.image || t.img || "";
+
+export default function Standings() {
+  const schedule = useMemo(() => readScheduleFromStorage(), []);
+
+  const { leagueData, selectedTeam } = useGame();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [viewMode, setViewMode] = useState("all");
+
+  const offseasonState = useMemo(() => {
+    try {
+      return JSON.parse(localStorage.getItem("bm_offseason_state_v1") || "{}");
+    } catch {
+      return {};
+    }
+  }, []);
+  const isOffseasonMode = Boolean(location.state?.offseasonMode || offseasonState?.active);
+  const archivedSeason = useMemo(
+    () => (isOffseasonMode ? getLatestSeasonHistoryEntry(leagueData) : null),
+    [isOffseasonMode, leagueData]
+  );
+  const archivedSnapshot = useMemo(
+    () => (isOffseasonMode ? getArchivedStatsSnapshot(leagueData, "regular") : null),
+    [isOffseasonMode, leagueData]
+  );
+  const archivedSeasonLabel = (archivedSnapshot?.seasonYear ?? archivedSeason?.seasonYear)
+    ? seasonLabelFromStartYear(archivedSnapshot?.seasonYear ?? archivedSeason?.seasonYear)
+    : "";
+
+  // ✅ load V3 per-game results once
+  const results = useMemo(() => loadAllResultsV3(), []);
+
+  const allTeams = useMemo(() => {
+    if (!leagueData?.conferences) return [];
+    return Object.entries(leagueData.conferences).flatMap(([conf, teams]) =>
+      teams.map((t) => ({
+        ...t,
+        conf,
+        division: resolveTeamDivision(t, conf),
+        logo: resolveLogo(t),
+      }))
+    );
+  }, [leagueData]);
+
+  const liveTeamByName = useMemo(() => new Map(allTeams.map((team) => [team.name, team])), [allTeams]);
+
+  const liveStandings = useMemo(() => computeCanonicalStandings({
+    teams: allTeams,
+    scheduleByDate: schedule,
+    resultsById: results,
+    confOf: (teamName) => liveTeamByName.get(teamName)?.conf || "",
+  }), [allTeams, schedule, results, liveTeamByName]);
+
+  const teamStats = useMemo(() => {
+    if (isOffseasonMode && Array.isArray(archivedSnapshot?.teamRows) && archivedSnapshot.teamRows.length) {
+      return archivedSnapshot.teamRows.map((row) => {
+        const wins = Number(row?.wins ?? 0);
+        const losses = Number(row?.losses ?? 0);
+        const pf = Number(row?.stats?.PTS || 0) * Number(row?.stats?.GP || 0);
+        const pa = Number(row?.stats?.PA || 0) * Number(row?.stats?.GP || 0);
+        return {
+          team: row?.teamName || "Unknown Team",
+          conf: row?.conference || "",
+          division: row?.division || resolveTeamDivision({ name: row?.teamName || row?.team }, row?.conference || ""),
+          logo: row?.logo || "",
+          w: wins,
+          l: losses,
+          pf: Math.round(pf),
+          pa: Math.round(pa),
+          pct: wins + losses > 0 ? (wins / (wins + losses)).toFixed(3) : "0.000",
+          diff: Number(row?.pointDifferential ?? pf - pa),
+        };
+      });
+    }
+
+    if (isOffseasonMode && Array.isArray(archivedSeason?.teams) && archivedSeason.teams.length) {
+      const liveByName = new Map(allTeams.map((team) => [team.name, team]));
+      return archivedSeason.teams.map((row) => {
+        const teamName = row?.teamName || row?.team || "Unknown Team";
+        const live = liveByName.get(teamName);
+        const wins = Number(row?.wins ?? row?.w ?? 0);
+        const losses = Number(row?.losses ?? row?.l ?? 0);
+        const pf = Number(row?.pointsFor ?? row?.pf ?? 0);
+        const pa = Number(row?.pointsAgainst ?? row?.pa ?? 0);
+        return {
+          team: teamName,
+          conf: row?.conference || row?.conf || live?.conf || "",
+          division: row?.division || live?.division || resolveTeamDivision({ name: teamName }, row?.conference || row?.conf || live?.conf || ""),
+          logo: live?.logo || "",
+          w: wins,
+          l: losses,
+          pf,
+          pa,
+          pct: wins + losses > 0 ? (wins / (wins + losses)).toFixed(3) : "0.000",
+          diff: Number(row?.pointDifferential ?? row?.diff ?? pf - pa),
+        };
+      });
+    }
+
+    return Object.values(liveStandings).map((row) => {
+      const meta = liveTeamByName.get(row.team) || {};
+      return {
+        team: row.team,
+        conf: row.conf || meta.conf || "",
+        division: meta.division || resolveTeamDivision({ name: row.team }, row.conf || meta.conf || ""),
+        logo: meta.logo || "",
+        w: row.wins,
+        l: row.losses,
+        pf: row.pf,
+        pa: row.pa,
+        pct: row.winPct.toFixed(3),
+        diff: row.diff,
+      };
+    });
+  }, [liveStandings, liveTeamByName, allTeams, isOffseasonMode, archivedSeason, archivedSnapshot]);
+
+  const archivedStandings = useMemo(() => {
+    if (!isOffseasonMode) return null;
+    return computeCanonicalStandingsFromRows(teamStats, { leagueData, teams: allTeams });
+  }, [teamStats, isOffseasonMode, leagueData, allTeams]);
+
+  const activeStandings = isOffseasonMode ? archivedStandings : liveStandings;
+
+  const filtered = useMemo(() => {
+    if (viewMode === "east")
+      return teamStats.filter((t) => t.conf?.toLowerCase() === "east");
+    if (viewMode === "west")
+      return teamStats.filter((t) => t.conf?.toLowerCase() === "west");
+    return teamStats;
+  }, [teamStats, viewMode]);
+
+  const sorted = useMemo(() => {
+    const rows = [...filtered];
+    return rows.sort((a, b) => compareCanonicalTeams(a.team, b.team, activeStandings || {}));
+  }, [filtered, activeStandings]);
+
+  const divisionGroups = useMemo(() => {
+    const sortedTeams = [...teamStats].sort((a, b) => compareCanonicalTeams(a.team, b.team, activeStandings || {}));
+    return groupTeamsByDivision(sortedTeams, leagueData);
+  }, [teamStats, leagueData, activeStandings]);
+
+  const renderStandingsTable = (rows, compact = false) => (
+    <table className="w-full text-sm text-center">
+      <thead className="sticky top-0 z-10 bg-neutral-800 text-gray-300">
+        <tr>
+          <th className="px-3 py-2 text-left pl-4">Team</th>
+          <th className="px-3 py-2">W</th>
+          <th className="px-3 py-2">L</th>
+          <th className="px-3 py-2">PCT</th>
+          <th className="px-3 py-2">PF</th>
+          <th className="px-3 py-2">PA</th>
+          <th className="px-3 py-2">DIFF</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((t, i) => (
+          <tr key={`${t.division || "league"}-${t.team}`} className={`hover:bg-neutral-800/60 ${selectedTeam?.name === t.team ? "bg-orange-600/70" : ""}`}>
+            <td className={`px-3 ${compact ? "py-1.5" : "py-2"} text-left pl-4 font-semibold`}>
+              <div className="flex items-center gap-2">
+                {t.logo && <img src={t.logo} alt={t.team} className="w-6 h-6 object-contain" />}
+                <span>{i + 1}. {t.team}</span>
+              </div>
+            </td>
+            <td className="px-3 py-2">{t.w}</td>
+            <td className="px-3 py-2">{t.l}</td>
+            <td className="px-3 py-2">{t.pct}</td>
+            <td className="px-3 py-2">{t.pf}</td>
+            <td className="px-3 py-2">{t.pa}</td>
+            <td className="px-3 py-2">{t.diff}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+
+  return (
+    <PageFade>
+    <div className="bmCourtPage h-screen min-h-0 overflow-hidden text-white px-4 py-3">
+      <div className="mx-auto flex h-full min-h-0 max-w-7xl flex-col">
+        <div className="flex shrink-0 items-center justify-between mb-3">
+          <div>
+            <h1 className="text-3xl font-bold text-orange-500 leading-none">Standings</h1>
+            {archivedSeasonLabel && <div className="mt-1 text-xs font-bold uppercase tracking-[0.14em] text-white/45">{archivedSeasonLabel} Final</div>}
+          </div>
+          <div className="flex gap-2">
+            {[
+              "all",
+              "east",
+              "west",
+              "div"
+            ].map((mode) => (
+              <button
+                key={mode}
+                onClick={() => setViewMode(mode)}
+                className={`px-3 py-1 rounded ${
+                  viewMode === mode ? "bg-orange-600" : "bg-neutral-700"
+                }`}
+              >
+                {mode === "all"
+                  ? "All"
+                  : mode === "div"
+                    ? "Div"
+                    : mode.charAt(0).toUpperCase() + mode.slice(1)}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="bmTableScroller min-h-0 flex-1 overflow-auto rounded-xl border border-neutral-800">
+          {viewMode === "div" ? (
+            <div className="grid grid-cols-1 gap-4 p-3 lg:grid-cols-2">
+              {DIVISION_NAMES.map((division) => {
+                const rows = divisionGroups[division] || [];
+                if (!rows.length) return null;
+                return (
+                  <div key={division} className="overflow-hidden rounded-xl border border-neutral-800 bg-neutral-950/55">
+                    <div className="border-b border-orange-500/25 bg-neutral-900/90 px-4 py-2 text-left text-lg font-black uppercase tracking-[0.14em] text-orange-400">
+                      {division}
+                    </div>
+                    {renderStandingsTable(rows, true)}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            renderStandingsTable(sorted)
+          )}
+        </div>
+
+
+        <button
+          onClick={() => navigate("/team-hub")}
+          className="hidden mt-4 px-6 py-3 bg-orange-600 hover:bg-orange-500 rounded-lg font-semibold lg:hidden"
+        >
+          Back to Team Hub
+        </button>
+      </div>
+    </div>
+
+    </PageFade>
+  );
+}

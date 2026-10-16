@@ -1,0 +1,10 @@
+{
+  "version": "bm_portrait_generation_queue_v1",
+  "instructions": {
+    "outputDirectory": "frontend/public/assets/portrait_studio/base/",
+    "requiredCanvas": "1040x760",
+    "requiredFormat": "RGBA/alpha PNG",
+    "visualRule": "Same identity, head/hair/face/neck/shoulders/upper chest, no jersey, no shirt/top, no team branding."
+  },
+  "remaining": []
+}

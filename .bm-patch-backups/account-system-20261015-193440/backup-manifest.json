@@ -1,0 +1,56 @@
+﻿{
+    "installed":  {
+                      "frontend/src/main.jsx":  "586f67621222398224689108ec22ab2c04ab93d4c508603b251967837442ec14",
+                      "frontend/src/storage/saveStorageRegistry.js":  "e190381a264f89bd917cb4f412568db4b9947f58146c07c4ca0e33062248fc2f",
+                      "frontend/src/auth/accountLocalVault.js":  "1c974409481bc60ac20eec5989b0b406112d4c9929523331bd3b6abd65fa5512",
+                      "frontend/src/auth/accountTabLock.js":  "b1b81b04fc14df23e97ec3b661ad6926088d5476e63d02cd93d6b213ae3ff03c",
+                      "frontend/src/auth/supabaseClient.js":  "ebd14b15e02ed839686e26fe3ec2610883d7359159c3ee03f176e78381c0c425",
+                      "frontend/src/auth/AccountRoot.jsx":  "e71fe16289e4225623bdb70454413de81b186e54a7f2a7666268c28dfd4cb7da",
+                      "frontend/src/auth/AccountControls.jsx":  "292540153e8c5326823939f292c0ca922b94c9e498b079def927e3713658b0e6",
+                      "frontend/src/auth/AccountRoot.css":  "491d1e390a699fc157c4adfdbb26f512f7f3f2efda5c1a1e661808ffa94499c0",
+                      "frontend/src/game/BasketballManagerGame.jsx":  "ac254d8e5b7272ef6974abbe73ca19376d6420a353820bbe47e7bc29c0f25c2d",
+                      "frontend/scripts/account-system.regression.mjs":  "cd6817d90ff3d3729b4c83ce708f11ada1aa5b22e95238ebcda686218fd4ea22"
+                  },
+    "files":  [
+                  {
+                      "existed":  true,
+                      "path":  "frontend/src/main.jsx"
+                  },
+                  {
+                      "existed":  true,
+                      "path":  "frontend/src/storage/saveStorageRegistry.js"
+                  },
+                  {
+                      "existed":  false,
+                      "path":  "frontend/src/auth/accountLocalVault.js"
+                  },
+                  {
+                      "existed":  false,
+                      "path":  "frontend/src/auth/accountTabLock.js"
+                  },
+                  {
+                      "existed":  false,
+                      "path":  "frontend/src/auth/supabaseClient.js"
+                  },
+                  {
+                      "existed":  false,
+                      "path":  "frontend/src/auth/AccountRoot.jsx"
+                  },
+                  {
+                      "existed":  false,
+                      "path":  "frontend/src/auth/AccountControls.jsx"
+                  },
+                  {
+                      "existed":  false,
+                      "path":  "frontend/src/auth/AccountRoot.css"
+                  },
+                  {
+                      "existed":  false,
+                      "path":  "frontend/src/game/BasketballManagerGame.jsx"
+                  },
+                  {
+                      "existed":  false,
+                      "path":  "frontend/scripts/account-system.regression.mjs"
+                  }
+              ]
+}

@@ -1,0 +1,12 @@
+﻿{
+    "files":  [
+                  {
+                      "sha":  "d984d1f4fc0bb51b2516d824d63e382e743fef86d62030efffdd6e09c79853c7",
+                      "path":  "frontend/src/pages/StudioLanding.jsx"
+                  },
+                  {
+                      "sha":  "b08243f0c2e31289ff4f316ba4351f8ff6422496ece9330bedbb54be0eed8fd4",
+                      "path":  "frontend/src/pages/Play.jsx"
+                  }
+              ]
+}

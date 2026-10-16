@@ -1,0 +1,4880 @@
+.dashboard {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 12px 18px 18px;
+  color: #f7f9fc;
+  background:
+    radial-gradient(circle at 82% 4%, rgba(74, 43, 145, 0.16), transparent 32%),
+    linear-gradient(180deg, #06101b 0%, #07111c 46%, #050d16 100%);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.dashboard::-webkit-scrollbar {
+  width: 8px;
+}
+
+.dashboard::-webkit-scrollbar-track {
+  background: rgba(5, 10, 18, 0.88);
+}
+
+.dashboard::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: #6d55bb;
+}
+
+.topBar {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 10px;
+}
+
+.seasonContext {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  color: #eef3fb;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.contextDivider {
+  width: 1px;
+  height: 20px;
+  background: rgba(154, 168, 191, 0.22);
+}
+
+.controlBox {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.controlBox > span {
+  color: #8d9aaf;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.controlBox select {
+  min-width: 188px;
+  height: 34px;
+  padding: 0 34px 0 12px;
+  border: 1px solid #26344a;
+  border-radius: 9px;
+  background: #101b2a;
+  color: #f8fafc;
+  font-size: 13px;
+  font-weight: 750;
+  outline: none;
+}
+
+.teamBanner {
+  position: relative;
+  min-height: 104px;
+  display: grid;
+  grid-template-columns: minmax(330px, 1.55fr) minmax(130px, 0.54fr) minmax(130px, 0.54fr) minmax(260px, 1fr);
+  align-items: center;
+  overflow: hidden;
+  margin-bottom: 10px;
+  border: 1px solid #223047;
+  border-radius: 12px;
+  background:
+    linear-gradient(
+      100deg,
+      rgba(29, 21, 61, 0.74) 0%,
+      rgba(12, 18, 31, 0.96) 24%,
+      rgba(8, 17, 27, 0.99) 58%,
+      rgba(8, 17, 27, 1) 100%
+    );
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.2);
+}
+
+.bannerWatermark {
+  position: absolute;
+  right: 120px;
+  top: 50%;
+  width: 420px;
+  height: 260px;
+  object-fit: contain;
+  transform: translateY(-50%) rotate(-6deg);
+  opacity: 0.045;
+  pointer-events: none;
+  filter: saturate(0.55);
+}
+
+.teamIdentity {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  min-width: 0;
+  padding: 14px 24px;
+}
+
+.teamLogo {
+  width: 112px;
+  height: 82px;
+  object-fit: contain;
+  flex: 0 0 auto;
+}
+
+.teamIdentity h1 {
+  margin: 0;
+  max-width: 360px;
+  color: #f7f8fb;
+  font-family: Arial, "Helvetica Neue", Helvetica, sans-serif;
+  font-size: clamp(25px, 1.95vw, 33px);
+  line-height: 0.98;
+  font-weight: 800;
+  letter-spacing: -0.025em;
+  text-transform: uppercase;
+}
+
+.heroMetric {
+  position: relative;
+  z-index: 1;
+  min-height: 64px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 0 20px;
+  border-left: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.heroMetric span,
+.nextGame span {
+  color: #93a0b4;
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.heroMetric strong {
+  margin-top: 4px;
+  color: white;
+  font-size: 22px;
+  line-height: 1;
+  font-weight: 900;
+}
+
+.heroMetric small {
+  margin-top: 5px;
+  color: #9eabc0;
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.nextGame {
+  position: relative;
+  z-index: 1;
+  min-height: 74px;
+  display: grid;
+  grid-template-columns: 1fr 54px auto;
+  align-items: center;
+  column-gap: 12px;
+  padding: 0 24px;
+  border-left: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.nextGame > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.nextGame strong {
+  color: white;
+  font-size: 18px;
+  font-weight: 900;
+}
+
+.nextGame img {
+  width: 48px;
+  height: 48px;
+  object-fit: contain;
+}
+
+.nextGame small {
+  color: #d5dce8;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.topGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(290px, 0.88fr) minmax(320px, 1.02fr);
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.middleGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.65fr) minmax(310px, 0.9fr);
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.bottomGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(330px, 1fr);
+  gap: 10px;
+}
+
+.panel {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid #223047;
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(10, 23, 38, 0.98), rgba(7, 17, 29, 0.98));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.018);
+}
+
+.panelHeading {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 14px;
+  border-bottom: 1px solid rgba(135, 151, 174, 0.12);
+}
+
+.panelHeading h2 {
+  margin: 0;
+  color: #f4f7fb;
+  font-size: 15px;
+  font-weight: 850;
+}
+
+.panelHeading button,
+.panelActions button {
+  border: 0;
+  background: transparent;
+  color: #b9c7dd;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.panelHeading button:hover,
+.panelActions button:hover {
+  color: #a78bfa;
+}
+
+.gameList,
+.recentList {
+  padding: 3px 12px 8px;
+}
+
+.gameRow {
+  min-height: 29px;
+  display: grid;
+  grid-template-columns: 55px 22px 28px 1fr auto;
+  align-items: center;
+  gap: 6px;
+  border-bottom: 1px solid rgba(133, 149, 172, 0.1);
+  color: #d8e0ec;
+  font-size: 11px;
+}
+
+.gameRow:last-child,
+.recentRow:last-child {
+  border-bottom: 0;
+}
+
+.gameRow img,
+.recentRow img,
+.standingTeam img {
+  width: 23px;
+  height: 23px;
+  object-fit: contain;
+}
+
+.gameRow strong,
+.recentRow strong {
+  color: #f5f7fb;
+  font-weight: 800;
+}
+
+.gameRow em {
+  color: #aab6c8;
+  font-style: normal;
+  font-weight: 650;
+  text-align: right;
+}
+
+.homeAway {
+  color: #8795aa;
+  text-align: center;
+}
+
+.metricList {
+  padding: 4px 12px 8px;
+}
+
+.metricList > div {
+  min-height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border-bottom: 1px solid rgba(133, 149, 172, 0.1);
+}
+
+.metricList > div:last-child {
+  border-bottom: 0;
+}
+
+.metricList span {
+  color: #a8b4c6;
+  font-size: 10px;
+}
+
+.metricList strong {
+  color: #f6f8fc;
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.accentValue {
+  color: #f4c84d !important;
+}
+
+.standingsHeader,
+.standingRow {
+  display: grid;
+  grid-template-columns: 24px minmax(140px, 1fr) 35px 35px 44px;
+  align-items: center;
+}
+
+.standingsHeader {
+  min-height: 26px;
+  padding: 0 12px;
+  color: #8593a8;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.standingRow {
+  min-height: 32px;
+  margin: 0 8px;
+  padding: 0 6px;
+  border-bottom: 1px solid rgba(133, 149, 172, 0.1);
+  color: #dbe3ef;
+  font-size: 10px;
+  border-radius: 6px;
+}
+
+.standingTeam {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 750;
+}
+
+.selectedStanding {
+  background: linear-gradient(90deg, rgba(148, 111, 28, 0.62), rgba(98, 75, 23, 0.26));
+  color: #fff6d8;
+}
+
+.rotationPanel {
+  min-height: 184px;
+}
+
+.panelActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.panelActions span {
+  width: 1px;
+  height: 12px;
+  background: #6d55bb;
+}
+
+.playerStrip {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+  padding: 8px 12px 11px;
+}
+
+.playerCard {
+  position: relative;
+  min-width: 0;
+  height: 128px;
+  overflow: hidden;
+  padding: 4px 8px 8px;
+  border: 1px solid #223047;
+  border-radius: 8px;
+  background: linear-gradient(180deg, #0b1726 0%, #08121e 100%);
+  color: white;
+  text-align: left;
+  cursor: pointer;
+}
+
+.playerCard:hover {
+  border-color: #6c5b9d;
+  transform: translateY(-1px);
+}
+
+.playerCard img {
+  position: absolute;
+  left: 50%;
+  bottom: 25px;
+  width: 92px;
+  height: 96px;
+  object-fit: contain;
+  object-position: bottom center;
+  transform: translateX(-50%);
+}
+
+.playerCard small {
+  position: absolute;
+  left: 8px;
+  bottom: 27px;
+  color: #aeb9ca;
+  font-size: 9px;
+  font-weight: 750;
+}
+
+.playerCard strong {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 7px;
+  overflow: hidden;
+  color: #f7f9fc;
+  font-size: 10px;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.overallBubble {
+  position: absolute;
+  z-index: 2;
+  top: 7px;
+  left: 8px;
+  width: 31px;
+  height: 31px;
+  display: grid;
+  place-items: center;
+  border: 2px solid #68d58c;
+  border-radius: 50%;
+  background: #0c1722;
+  color: #f5f9f7;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.recentRow {
+  min-height: 29px;
+  display: grid;
+  grid-template-columns: 52px 20px 26px 1fr 22px 62px;
+  align-items: center;
+  gap: 5px;
+  border-bottom: 1px solid rgba(133, 149, 172, 0.1);
+  color: #aeb9ca;
+  font-size: 10px;
+}
+
+.recentRow b {
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.recentRow em {
+  color: #f3f6fa;
+  font-style: normal;
+  font-weight: 750;
+  text-align: right;
+}
+
+.win {
+  color: #63e68d;
+}
+
+.loss {
+  color: #ff5d67;
+}
+
+.prospectGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  padding: 8px 12px 11px;
+}
+
+.prospect {
+  min-width: 0;
+  height: 34px;
+  display: grid;
+  grid-template-columns: 20px 28px minmax(0, 1fr) 26px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 7px;
+  border: 1px solid #1e2b40;
+  border-radius: 7px;
+  background: #0a1523;
+}
+
+.prospect > span {
+  color: #dfe6f1;
+  font-size: 10px;
+  font-weight: 850;
+}
+
+.prospect img,
+.prospect i {
+  width: 25px;
+  height: 29px;
+  object-fit: contain;
+  object-position: bottom center;
+  border-radius: 4px;
+  background: #111d2c;
+}
+
+.prospect strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #f1f5f9;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prospect small {
+  color: #8f9eb3;
+  font-size: 9px;
+  text-align: right;
+}
+
+.newsEmpty {
+  min-height: 78px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 10px 14px 14px;
+}
+
+.newsEmpty strong {
+  color: #dce4ef;
+  font-size: 11px;
+}
+
+.newsEmpty span {
+  margin-top: 5px;
+  max-width: 520px;
+  color: #8290a4;
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.emptyPanel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 58px;
+  padding: 12px;
+  color: #8190a5;
+  font-size: 10px;
+  text-align: center;
+}
+
+.emptyState {
+  width: 100%;
+  height: 100dvh;
+  display: grid;
+  place-content: center;
+  gap: 12px;
+  background: #07111c;
+  color: white;
+  text-align: center;
+}
+
+.emptyState h1 {
+  margin: 0;
+  font-size: 26px;
+}
+
+.emptyState button {
+  height: 38px;
+  border: 0;
+  border-radius: 8px;
+  background: #6d55bb;
+  color: white;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+@media (max-width: 1180px) {
+  .teamBanner {
+    grid-template-columns: minmax(300px, 1.45fr) 120px 120px minmax(220px, 0.9fr);
+  }
+
+  .teamLogo {
+    width: 92px;
+  }
+
+  .topGrid {
+    grid-template-columns: 1fr 0.85fr;
+  }
+
+  .topGrid > :last-child {
+    grid-column: 1 / -1;
+  }
+
+  .middleGrid,
+  .bottomGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 900px) {
+  .dashboard {
+    padding: 10px 12px 16px;
+  }
+
+  .teamBanner {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .teamIdentity {
+    grid-column: 1 / -1;
+  }
+
+  .nextGame {
+    border-top: 1px solid rgba(148, 163, 184, 0.16);
+  }
+
+  .playerStrip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .prospectGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+
+/* TEAM HUB BANNER MATCH PASS 2 */
+.teamBanner {
+  min-height: 112px;
+  grid-template-columns: minmax(390px, 1.62fr) minmax(145px, 0.56fr) minmax(145px, 0.56fr) minmax(270px, 1fr);
+  background:
+    linear-gradient(
+      96deg,
+      #170d35 0%,
+      #0c1120 20%,
+      #09121d 50%,
+      #08111b 72%,
+      #08111b 100%
+    );
+  border-color: #202a3b;
+}
+
+.teamIdentity {
+  gap: 20px;
+  padding: 12px 28px 12px 30px;
+}
+
+.teamLogo {
+  width: 118px;
+  height: 86px;
+}
+
+.teamWordmark {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+}
+
+.teamCity {
+  color: #f0f2f7;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 17px;
+  line-height: 1;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+}
+
+.teamIdentity h1 {
+  margin: 0;
+  max-width: 300px;
+  color: #f7f8fb;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 30px;
+  line-height: 0.98;
+  font-weight: 800;
+  letter-spacing: -0.025em;
+  text-transform: uppercase;
+}
+
+.heroMetric {
+  min-height: 66px;
+  padding: 0 24px;
+  border-left-color: rgba(148, 163, 184, 0.18);
+}
+
+.heroMetric span,
+.nextGame span {
+  color: #9ba7ba;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 11px;
+  line-height: 1;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.heroMetric strong {
+  margin-top: 6px;
+  color: #f7f8fb;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 24px;
+  line-height: 1;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.heroMetric small {
+  margin-top: 6px;
+  color: #9ea9bb;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 11px;
+  line-height: 1;
+  font-weight: 500;
+}
+
+.nextGame strong {
+  color: #f7f8fb;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+}
+
+.nextGame small {
+  color: #cfd6e2;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.bannerWatermark {
+  opacity: 0.035;
+}
+
+
+/* TEAM HUB TOPSTRIP + BANNER MATCH PASS 3 */
+.dashboard {
+  padding-top: 6px;
+}
+
+.topBar {
+  min-height: 34px;
+  margin-bottom: 6px;
+  gap: 16px;
+}
+
+.seasonContext {
+  gap: 28px;
+  color: #e7ebf2;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.contextItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+}
+
+.contextChevron {
+  position: relative;
+  top: -1px;
+  color: #a8b2c2;
+  font-size: 15px;
+  line-height: 1;
+  font-weight: 700;
+}
+
+.contextDivider,
+.controlBox {
+  display: none !important;
+}
+
+.topUtilities {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.searchShell {
+  width: 292px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 11px;
+  border: 1px solid rgba(84, 102, 128, 0.12);
+  border-radius: 8px;
+  background: #101a28;
+}
+
+.searchShell svg {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: #8f9caf;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.searchShell input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: #aab5c5;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 12px;
+  font-weight: 400;
+  pointer-events: none;
+}
+
+.searchShell input::placeholder {
+  color: #8b97aa;
+  opacity: 1;
+}
+
+.bellButton {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #dce3ed;
+  cursor: default;
+}
+
+.bellButton svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.avatarControl {
+  position: relative;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+}
+
+.avatarBadge {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #4a2a7d;
+  color: #ece6ff;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 11px;
+  font-weight: 750;
+  user-select: none;
+}
+
+.avatarControl select {
+  position: absolute;
+  inset: 0;
+  width: 34px;
+  height: 34px;
+  cursor: pointer;
+  opacity: 0;
+}
+
+/* Preserve team switching while making the visible top-right match the sampler. */
+
+.teamBanner {
+  min-height: 106px;
+  grid-template-columns: minmax(420px, 1.62fr) minmax(145px, 0.56fr) minmax(145px, 0.56fr) minmax(285px, 1fr);
+  margin-bottom: 10px;
+  background:
+    linear-gradient(
+      96deg,
+      #120a2b 0%,
+      #0b101d 18%,
+      #08111b 47%,
+      #07101a 72%,
+      #07101a 100%
+    );
+  border-color: #1d293b;
+}
+
+.teamIdentity {
+  gap: 18px;
+  padding: 10px 26px 10px 34px;
+}
+
+.teamLogo {
+  width: 128px;
+  height: 90px;
+}
+
+.teamCity {
+  color: #f0f2f7;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 17px;
+  line-height: 1.05;
+  font-weight: 600;
+  letter-spacing: 0.012em;
+}
+
+.teamIdentity h1 {
+  max-width: 310px;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 31px;
+  line-height: 0.96;
+  font-weight: 760;
+  letter-spacing: -0.03em;
+}
+
+.heroMetric {
+  min-height: 68px;
+  padding: 0 24px;
+  border-left: 1px solid rgba(130, 145, 165, 0.22);
+}
+
+.heroMetric span,
+.nextGame span {
+  color: #9ba6b8;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 11px;
+  line-height: 1;
+  font-weight: 400;
+}
+
+.heroMetric strong {
+  margin-top: 7px;
+  color: #f5f7fb;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 25px;
+  line-height: 1;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.heroMetric small {
+  margin-top: 6px;
+  color: #9da8ba;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 11px;
+  line-height: 1;
+  font-weight: 400;
+}
+
+.nextGame {
+  min-height: 68px;
+  grid-template-columns: 1fr 54px auto;
+  padding: 0 28px 0 28px;
+  border-left: 1px solid rgba(130, 145, 165, 0.18);
+}
+
+.nextGame strong {
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 19px;
+  line-height: 1;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.nextGame small {
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.bannerWatermark {
+  right: 165px;
+  width: 560px;
+  height: 330px;
+  opacity: 0.018;
+  transform: translateY(-50%) rotate(-5deg);
+  filter: saturate(0.45);
+}
+
+@media (max-width: 1180px) {
+  .searchShell {
+    width: 230px;
+  }
+
+  .teamBanner {
+    grid-template-columns: minmax(350px, 1.45fr) 130px 130px minmax(230px, 0.9fr);
+  }
+
+  .teamLogo {
+    width: 112px;
+  }
+}
+
+
+/* TEAM HUB BANNER HEIGHT SQUEEZE */
+.teamBanner {
+  min-height: 96px;
+}
+
+.teamIdentity {
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+
+.teamLogo {
+  height: 88px;
+}
+
+.heroMetric,
+.nextGame {
+  min-height: 60px;
+}
+
+
+/* TEAM HUB BANNER PROPORTION MATCH PASS 4 */
+
+/* Match the sampler's compact horizontal proportions:
+   identity ~30%, record ~13%, last-10 ~17%, next-game ~40%. */
+.teamBanner {
+  min-height: 84px;
+  grid-template-columns: 30% 13% 17% 40%;
+}
+
+.teamIdentity {
+  gap: 14px;
+  padding: 4px 18px 4px 28px;
+}
+
+.teamLogo {
+  width: 70px;
+  height: 70px;
+}
+
+/* Logo vertically tracks the city+nickname wordmark instead of towering over it. */
+.teamWordmark {
+  gap: 1px;
+}
+
+.teamCity {
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 15px;
+  line-height: 1.08;
+  font-weight: 600;
+  letter-spacing: 0.015em;
+}
+
+.teamIdentity h1 {
+  max-width: 240px;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 28px;
+  line-height: 0.98;
+  font-weight: 760;
+  letter-spacing: -0.025em;
+}
+
+.heroMetric {
+  min-height: 54px;
+  padding: 0 18px;
+}
+
+.heroMetric span {
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 11px;
+  line-height: 1;
+  font-weight: 400;
+  color: #9aa5b6;
+}
+
+.heroMetric strong {
+  margin-top: 5px;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 22px;
+  line-height: 1;
+  font-weight: 650;
+  letter-spacing: -0.018em;
+}
+
+.heroMetric small {
+  margin-top: 5px;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 10px;
+  line-height: 1;
+  font-weight: 400;
+  color: #9ca7b8;
+}
+
+.nextGame {
+  min-height: 54px;
+  grid-template-columns: minmax(110px, 1fr) 44px auto;
+  column-gap: 14px;
+  padding: 0 26px 0 24px;
+}
+
+.nextGame > div {
+  gap: 3px;
+  justify-self: end;
+  text-align: left;
+}
+
+.nextGame span {
+  color: #a98be8;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 11px;
+  line-height: 1;
+  font-weight: 500;
+}
+
+.nextGame strong {
+  color: #f6f7fb;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 18px;
+  line-height: 1;
+  font-weight: 650;
+  letter-spacing: -0.012em;
+}
+
+.nextGame img {
+  width: 42px;
+  height: 42px;
+}
+
+.nextGame small {
+  color: #d0d6e1;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 12px;
+  line-height: 1;
+  font-weight: 400;
+}
+
+.bannerWatermark {
+  right: 145px;
+  width: 520px;
+  height: 285px;
+  opacity: 0.016;
+}
+
+@media (max-width: 1180px) {
+  .teamBanner {
+    grid-template-columns: 31% 14% 17% 38%;
+  }
+
+  .teamLogo {
+    width: 64px;
+    height: 64px;
+  }
+
+  .teamCity {
+    font-size: 14px;
+  }
+
+  .teamIdentity h1 {
+    font-size: 25px;
+  }
+}
+
+
+/* TEAM HUB BANNER IDENTITY + METRICS MATCH PASS 5 */
+
+/* Identity: push the logo + wordmark right and let ATLANTA / HAWKS
+   use the maximum comfortable size inside the current pill. */
+.teamIdentity {
+  gap: 14px;
+  padding-left: 54px;
+  padding-right: 16px;
+}
+
+.teamLogo {
+  width: 66px;
+  height: 66px;
+}
+
+.teamWordmark {
+  gap: 0;
+}
+
+.teamCity {
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.02;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.teamIdentity h1 {
+  max-width: 250px;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 31px;
+  line-height: 0.94;
+  font-weight: 760;
+  letter-spacing: -0.03em;
+}
+
+/* Record / Last 10: smaller and lighter like the sampler. */
+.heroMetric {
+  padding-left: 16px;
+  padding-right: 16px;
+}
+
+.heroMetric span {
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 10px;
+  line-height: 1;
+  font-weight: 400;
+  color: #8f9aac;
+}
+
+.heroMetric strong {
+  margin-top: 5px;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 20px;
+  line-height: 1;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+
+.heroMetric small {
+  margin-top: 5px;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 10px;
+  line-height: 1;
+  font-weight: 400;
+  color: #939fb1;
+}
+
+/* Keep the next-game typography compact and sampler-like. */
+.nextGame span {
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.nextGame strong {
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.nextGame img {
+  width: 40px;
+  height: 40px;
+}
+
+.nextGame small {
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 11px;
+  font-weight: 400;
+}
+
+@media (max-width: 1180px) {
+  .teamIdentity {
+    padding-left: 42px;
+  }
+
+  .teamLogo {
+    width: 62px;
+    height: 62px;
+  }
+
+  .teamCity {
+    font-size: 15px;
+  }
+
+  .teamIdentity h1 {
+    font-size: 28px;
+  }
+}
+
+
+/* TEAM HUB ORANGE THEME + METRICS MATCH PASS 6 */
+
+/* Replace the cool navy cast with the game's orange/brown visual family.
+   Keep surfaces dark so the dashboard still reads like the sampler. */
+.dashboard {
+  background:
+    radial-gradient(circle at 78% 0%, rgba(255, 111, 0, 0.08), transparent 34%),
+    linear-gradient(180deg, #100b08 0%, #0d0a08 44%, #090807 100%);
+}
+
+.topBar {
+  color: #f5efe9;
+}
+
+.searchShell {
+  border-color: rgba(255, 128, 32, 0.14);
+  background: #17110e;
+}
+
+.searchShell svg {
+  stroke: #a99d94;
+}
+
+.searchShell input {
+  color: #b8ada5;
+}
+
+.searchShell input::placeholder {
+  color: #938981;
+}
+
+.avatarBadge {
+  background: #7a3512;
+  color: #fff1e7;
+}
+
+.teamBanner {
+  background:
+    linear-gradient(
+      96deg,
+      #241007 0%,
+      #17100c 18%,
+      #100d0a 47%,
+      #0d0b09 72%,
+      #0d0b09 100%
+    );
+  border-color: #3b2418;
+}
+
+.panel {
+  border-color: #352318;
+  background:
+    linear-gradient(
+      180deg,
+      rgba(25, 17, 12, 0.985),
+      rgba(16, 12, 9, 0.985)
+    );
+}
+
+.panelHeading {
+  border-bottom-color: rgba(255, 146, 72, 0.11);
+}
+
+.gameRow,
+.recentRow,
+.metricList > div,
+.standingRow {
+  border-bottom-color: rgba(255, 146, 72, 0.085);
+}
+
+.playerCard,
+.prospect {
+  border-color: #3a261a;
+  background: linear-gradient(180deg, #1b130f 0%, #120e0b 100%);
+}
+
+.playerCard:hover {
+  border-color: #a45122;
+}
+
+.selectedStanding {
+  background: linear-gradient(90deg, rgba(147, 69, 20, 0.62), rgba(91, 42, 15, 0.26));
+  color: #fff0e6;
+}
+
+.panelActions span {
+  background: #c45f24;
+}
+
+.dashboard::-webkit-scrollbar-track {
+  background: #0c0907;
+}
+
+.dashboard::-webkit-scrollbar-thumb {
+  background: #dd6a25;
+}
+
+/* Record and Last 10: same family, same scale, smaller like the sampler. */
+.heroMetric span,
+.heroMetric strong,
+.heroMetric small {
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+}
+
+.heroMetric span {
+  font-size: 9px;
+  font-weight: 400;
+  color: #998f88;
+}
+
+.heroMetric strong {
+  margin-top: 4px;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.012em;
+}
+
+.heroMetric small {
+  margin-top: 4px;
+  font-size: 9px;
+  font-weight: 400;
+  color: #9c928a;
+}
+
+/* Keep both metric blocks visually identical. */
+.heroMetric {
+  align-items: flex-start;
+  justify-content: center;
+}
+
+/* Next-game typography follows the same restrained scale. */
+.nextGame span {
+  font-size: 9px;
+  font-weight: 500;
+}
+
+.nextGame strong {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.nextGame small {
+  font-size: 10px;
+  font-weight: 400;
+}
+
+.nextGame img {
+  width: 38px;
+  height: 38px;
+}
+
+/* Orange-tint the large watermark very subtly instead of cool navy. */
+.bannerWatermark {
+  opacity: 0.018;
+  filter: sepia(0.45) saturate(0.8) hue-rotate(330deg);
+}
+
+
+/* TEAM HUB RECORD + LAST10 TYPOGRAPHY PASS 10 */
+.heroMetric span,
+.heroMetric strong,
+.heroMetric small {
+  font-family: Inter, "Segoe UI Variable Text", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+.heroMetric span {
+  font-weight: 450;
+  letter-spacing: -0.005em;
+}
+
+.heroMetric strong {
+  font-weight: 600;
+  letter-spacing: -0.025em;
+}
+
+.heroMetric small {
+  font-weight: 400;
+  letter-spacing: -0.006em;
+}
+
+
+/* TEAM HUB SAMPLER SURFACE PASS 11 */
+
+/*
+  SURFACE-ONLY PASS.
+  Intentionally does NOT change:
+  - banner height
+  - banner grid
+  - team logo x/y/size
+  - team city x/y/size
+  - team name x/y/size
+  - Record / Last 10 manual x/y/size controls
+  - watermark x/y/scale/opacity/rotation
+  - Next Game manual controls
+*/
+
+/* 1. Restore the sampler's cool blue-black atmosphere.
+      Orange remains an accent instead of tinting every surface. */
+.dashboard {
+  background:
+    radial-gradient(circle at 82% 0%, rgba(63, 78, 105, 0.10), transparent 30%),
+    linear-gradient(180deg, #07111b 0%, #07101a 48%, #050c14 100%);
+  color: #f3f6fa;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+}
+
+.topBar {
+  color: #edf2f8;
+}
+
+.searchShell {
+  border-color: rgba(128, 150, 178, 0.14);
+  background: #101a27;
+}
+
+.searchShell svg {
+  stroke: #94a2b5;
+}
+
+.searchShell input {
+  color: #b8c2d0;
+}
+
+.searchShell input::placeholder {
+  color: #8f9caf;
+}
+
+.avatarBadge {
+  background: #4b2e72;
+  color: #f0eaff;
+}
+
+/* 2. Neutral/cool banner surface. Team identity comes from the actual team logo,
+      not a permanent orange wash. */
+.teamBanner {
+  border-color: rgba(115, 139, 169, 0.20);
+  background:
+    linear-gradient(
+      100deg,
+      rgba(24, 18, 45, 0.96) 0%,
+      rgba(10, 20, 34, 0.985) 27%,
+      rgba(7, 17, 29, 0.99) 58%,
+      rgba(6, 15, 26, 0.995) 100%
+    );
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.018),
+    0 8px 22px rgba(0, 0, 0, 0.18);
+}
+
+/* Do not touch opacity/transform: those remain under your manual controls. */
+.bannerWatermark {
+  filter: saturate(0.42) brightness(0.78);
+}
+
+/* 3. Card surfaces: darker, cooler, and flatter like the sampler. */
+.panel {
+  border-color: rgba(105, 132, 164, 0.20);
+  background:
+    linear-gradient(
+      180deg,
+      rgba(9, 22, 36, 0.985) 0%,
+      rgba(7, 17, 29, 0.99) 100%
+    );
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.015);
+}
+
+.panelHeading {
+  border-bottom-color: rgba(129, 151, 178, 0.11);
+}
+
+.gameRow,
+.recentRow,
+.metricList > div,
+.standingRow {
+  border-bottom-color: rgba(122, 145, 173, 0.095);
+}
+
+.playerCard {
+  border-color: rgba(105, 132, 164, 0.22);
+  background: linear-gradient(180deg, #0a1725 0%, #08131f 100%);
+}
+
+.playerCard:hover {
+  border-color: rgba(249, 115, 22, 0.58);
+}
+
+.prospect {
+  border-color: rgba(105, 132, 164, 0.20);
+  background: #091522;
+}
+
+.prospect img,
+.prospect i {
+  background: #101c2a;
+}
+
+/* 4. Typography hierarchy. Sizes are left alone; this normalizes the
+      overly stylized/heavy look to the sampler's cleaner UI sans. */
+.panelHeading h2,
+.panelHeading button,
+.panelActions button,
+.gameRow,
+.recentRow,
+.metricList,
+.standingsHeader,
+.standingRow,
+.playerCard,
+.prospect,
+.newsEmpty,
+.emptyPanel {
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+}
+
+.panelHeading h2 {
+  font-weight: 650;
+  letter-spacing: -0.012em;
+}
+
+.panelHeading button,
+.panelActions button {
+  color: #aebed2;
+  font-weight: 500;
+}
+
+.panelHeading button:hover,
+.panelActions button:hover {
+  color: #f59a5b;
+}
+
+.gameRow,
+.recentRow,
+.standingRow {
+  color: #cfd8e5;
+}
+
+.gameRow strong,
+.recentRow strong,
+.standingTeam,
+.playerCard strong,
+.prospect strong {
+  font-weight: 600;
+}
+
+.metricList span,
+.playerCard small,
+.prospect small,
+.newsEmpty span,
+.emptyPanel {
+  color: #8f9eb2;
+  font-weight: 400;
+}
+
+.metricList strong {
+  color: #eef3f8;
+  font-weight: 650;
+}
+
+.standingsHeader {
+  color: #8493a8;
+  font-weight: 600;
+}
+
+/* 5. Sampler-like selected standings: muted gold, not orange-brown. */
+.selectedStanding {
+  background: linear-gradient(
+    90deg,
+    rgba(111, 83, 20, 0.66) 0%,
+    rgba(84, 65, 20, 0.38) 72%,
+    rgba(60, 49, 23, 0.20) 100%
+  );
+  color: #f6efd7;
+}
+
+/* 6. Keep BM orange as a restrained accent. */
+.panelActions span {
+  background: #f97316;
+}
+
+.accentValue {
+  color: #e7bf43 !important;
+}
+
+.dashboard::-webkit-scrollbar-track {
+  background: #060d15;
+}
+
+.dashboard::-webkit-scrollbar-thumb {
+  background: #e86f22;
+}
+
+/* 7. Keep success / loss colors clean and modern. */
+.win {
+  color: #56d883;
+}
+
+.loss {
+  color: #ff5e68;
+}
+
+/* 8. Next Game gets the cool lavender cue from the sampler.
+      No x/y/size/geometry is changed here. */
+.nextGame span {
+  color: #b694ee;
+}
+
+.nextGame small {
+  color: #c8d1de;
+}
+
+/* 9. Empty-state surfaces follow the same cool palette. */
+.emptyState {
+  background: #07111b;
+}
+
+.emptyState button {
+  background: #f97316;
+}
+
+
+/* TEAM HUB DARK SAMPLER SURFACE PASS 12 */
+
+/*
+  SURFACE / TYPOGRAPHY / TOP-ROW EQUALITY ONLY.
+  IMPORTANT: teamHubBannerLayout.js remains authoritative for ALL banner manual
+  controls. This pass does not alter any x/y/size/height values in that file.
+*/
+
+/* Main canvas: neutral black/charcoal like the sampler, not navy and not brown. */
+.dashboard {
+  background:
+    radial-gradient(circle at 80% -10%, rgba(255,255,255,0.025), transparent 34%),
+    linear-gradient(180deg, #08090b 0%, #07080a 52%, #060709 100%);
+  color: #f3f5f7;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+}
+
+/* Top strip stays nearly black. */
+.topBar {
+  color: #f2f4f6;
+}
+
+/* Team banner is the ONE warm/orange surface, kept dark enough to match BM. */
+.teamBanner {
+  border-color: rgba(214, 92, 26, 0.30);
+  background:
+    linear-gradient(
+      100deg,
+      rgba(78, 28, 7, 0.92) 0%,
+      rgba(48, 20, 9, 0.92) 18%,
+      rgba(23, 14, 10, 0.97) 46%,
+      rgba(11, 11, 12, 0.99) 78%,
+      rgba(9, 10, 11, 0.995) 100%
+    );
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.018),
+    0 8px 22px rgba(0,0,0,0.20);
+}
+
+/* Preserve manual watermark opacity/position/scale/rotation; only remove blue cast. */
+.bannerWatermark {
+  filter: saturate(0.42) brightness(0.70);
+}
+
+/* Everything below the hero returns to true dark/black surfaces. */
+.panel {
+  border-color: rgba(255,255,255,0.085);
+  background:
+    linear-gradient(
+      180deg,
+      rgba(14, 15, 17, 0.99) 0%,
+      rgba(9, 10, 12, 0.995) 100%
+    );
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.012),
+    0 6px 18px rgba(0,0,0,0.10);
+}
+
+.panelHeading {
+  border-bottom-color: rgba(255,255,255,0.07);
+}
+
+.gameRow,
+.recentRow,
+.metricList > div,
+.standingRow {
+  border-bottom-color: rgba(255,255,255,0.06);
+}
+
+.playerCard,
+.prospect {
+  border-color: rgba(255,255,255,0.085);
+  background: linear-gradient(180deg, #101113 0%, #0b0c0e 100%);
+}
+
+.playerCard:hover {
+  border-color: rgba(249,115,22,0.55);
+}
+
+/* Search/control chrome: neutral, not navy. */
+.searchShell,
+.controlBox select {
+  border-color: rgba(255,255,255,0.10);
+  background: #101113;
+  color: #e7ebef;
+}
+
+.searchShell input,
+.searchShell input::placeholder {
+  color: #9da5ae;
+}
+
+/* Record + Last 10:
+   Same typography family/weights as one another; sizes remain controlled by
+   the manual config so the user's tuning is preserved. */
+.heroMetric span,
+.heroMetric strong,
+.heroMetric small {
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+  font-style: normal;
+  letter-spacing: 0;
+}
+
+.heroMetric span {
+  color: #9da4ad;
+  font-weight: 400;
+  line-height: 1.05;
+}
+
+.heroMetric strong {
+  color: #f4f5f7;
+  font-weight: 650;
+  line-height: 1;
+}
+
+.heroMetric small {
+  color: #929aa4;
+  font-weight: 400;
+  line-height: 1.05;
+}
+
+/* Sampler-like content hierarchy. */
+.panelHeading h2 {
+  color: #f2f4f6;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+  font-weight: 650;
+  letter-spacing: -0.012em;
+}
+
+.panelHeading button,
+.panelActions button {
+  color: #aeb5bd;
+  font-weight: 500;
+}
+
+.panelHeading button:hover,
+.panelActions button:hover {
+  color: #f58a42;
+}
+
+.metricList span,
+.playerCard small,
+.prospect small,
+.newsEmpty span,
+.emptyPanel {
+  color: #8e969f;
+}
+
+.metricList strong,
+.gameRow strong,
+.recentRow strong,
+.standingTeam,
+.playerCard strong,
+.prospect strong {
+  color: #f1f3f5;
+}
+
+/* Muted sampler-style gold selection instead of an orange/brown slab. */
+.selectedStanding {
+  background: linear-gradient(
+    90deg,
+    rgba(102, 78, 23, 0.68) 0%,
+    rgba(73, 59, 27, 0.38) 72%,
+    rgba(40, 36, 27, 0.18) 100%
+  );
+  color: #f6efd9;
+}
+
+/* Keep Next Game lavender like the reference. */
+.nextGame span {
+  color: #b793ee;
+}
+
+/* Make Upcoming Games / Team Overview / Standings exactly the same height
+   whenever they are in the same three-column row. */
+@media (min-width: 1181px) {
+  .topGrid {
+    align-items: stretch;
+    grid-auto-rows: 1fr;
+  }
+
+  .topGrid > .panel {
+    height: 100%;
+    min-height: 0;
+  }
+}
+
+/* Keep BM orange as an accent only. */
+.panelActions span {
+  background: #f97316;
+}
+
+.dashboard::-webkit-scrollbar-track {
+  background: #07080a;
+}
+
+.dashboard::-webkit-scrollbar-thumb {
+  background: #e96f22;
+}
+
+/* Team-Hub-only sidebar cooling.
+   CSS-module class names retain their source name, so this catches the persistent
+   sidebar without changing its layout or active orange nav item. */
+:global(body.th-no-scroll) :global([class*="sidebar"]),
+:global(body.th-no-scroll) :global([class*="sideBar"]),
+:global(body.th-no-scroll) :global([class*="sideNav"]),
+:global(body.th-no-scroll) :global([class*="shellNav"]) {
+  background: linear-gradient(180deg, #0b0c0e 0%, #090a0c 48%, #070809 100%) !important;
+  border-color: rgba(255,255,255,0.07) !important;
+  box-shadow: none !important;
+}
+
+/* If the sidebar uses a decorative wash pseudo-element, neutralize just that wash. */
+:global(body.th-no-scroll) :global([class*="sidebar"])::before,
+:global(body.th-no-scroll) :global([class*="sideBar"])::before,
+:global(body.th-no-scroll) :global([class*="sideNav"])::before,
+:global(body.th-no-scroll) :global([class*="shellNav"])::before {
+  background: transparent !important;
+  opacity: 0 !important;
+}
+
+/* TEAM HUB CONSOLIDATED VISUAL PASS 20 */
+/*
+  Context-verified consolidation of the visual overrides from Passes 13-19.
+  This intentionally removes the old stacked override blocks and replaces them
+  with ONE authoritative section so border/watermark/card rules stop fighting.
+
+  Preserved:
+  - all manual values in teamHubBannerLayout.js
+  - current OVR/POT ring presentation
+  - current Team Hub data/gameplay wiring
+*/
+
+/* --- Hero/banner surface: one surface, one faint neutral edge. --- */
+.teamBanner {
+  border: 1px solid rgba(255, 255, 255, 0.024);
+  background:
+    linear-gradient(
+      90deg,
+      rgba(77, 37, 22, 0.28) 0%,
+      rgba(61, 30, 21, 0.22) 16%,
+      rgba(38, 23, 20, 0.14) 34%,
+      rgba(18, 18, 20, 0.09) 53%,
+      rgba(11, 13, 17, 0.065) 73%,
+      rgba(9, 11, 15, 0.045) 100%
+    ),
+    linear-gradient(180deg, #0d0f12 0%, #090b0e 100%);
+  box-shadow: 0 5px 13px rgba(0, 0, 0, 0.13);
+}
+
+/* Kill every old pseudo-edge/highlight layer. */
+.teamBanner::before,
+.teamBanner::after {
+  content: none !important;
+  display: none !important;
+  background: none !important;
+  box-shadow: none !important;
+}
+
+/*
+  The inline transform + opacity still come from the user's manual controls.
+  This only defines the base box/placement/filter so the logo reads visibly.
+*/
+.bannerWatermark {
+  position: absolute;
+  left: auto;
+  right: 215px;
+  top: 50%;
+  width: 430px;
+  height: 285px;
+  object-fit: contain;
+  z-index: 0;
+  filter: saturate(0.88) brightness(0.72) contrast(1.08);
+  pointer-events: none;
+}
+
+/* --- Starting Five / Bench cards. --- */
+.playerCard {
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.playerVisual {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 92px;
+  overflow: hidden;
+  border-bottom: 4px solid rgba(149, 157, 170, 0.38);
+  background: linear-gradient(180deg, rgba(255,255,255,0.01) 0%, rgba(255,255,255,0) 100%);
+}
+
+.playerRatingBadge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 3;
+  transform: scale(0.88);
+  transform-origin: top left;
+}
+
+.playerPortrait {
+  position: absolute !important;
+  left: 50% !important;
+  bottom: 0 !important;
+  width: 96px !important;
+  height: 94px !important;
+  object-fit: contain !important;
+  object-position: bottom center !important;
+  transform: translateX(-50%) !important;
+}
+
+/* Beat the legacy .playerCard small declaration and pin position to top-right. */
+.playerCard .playerPositionBadge {
+  position: absolute !important;
+  top: 8px !important;
+  right: 10px !important;
+  left: auto !important;
+  bottom: auto !important;
+  z-index: 5;
+  display: block;
+  width: auto;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: #cbd2dc;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+}
+
+.playerCardMeta {
+  min-height: 38px;
+  padding: 7px 8px 8px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+}
+
+.playerCardMeta strong,
+.playerCard strong {
+  position: static;
+  overflow: hidden;
+  color: #f6f8fb;
+  font-size: 11px;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.overallBubble {
+  display: none !important;
+}
+
+
+/* TEAM HUB MIDDLE PANELS POLISH PASS 22 */
+
+/*
+  Sampler-match pass for ONLY the three top content panels:
+  Upcoming Games / Team Overview / Standings.
+  The banner, manual banner controls, Starting Five, prospects, news, sidebar,
+  and all gameplay/data logic are intentionally untouched.
+*/
+
+.topGrid {
+  -webkit-font-smoothing: antialiased;
+  text-rendering: geometricPrecision;
+  font-family: Inter, "Segoe UI Variable Text", "Segoe UI", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Arial, sans-serif;
+}
+
+/* Flatter, quieter card shell like the sampler. */
+.topGrid > .panel {
+  border-color: rgba(255, 255, 255, 0.055);
+  background: linear-gradient(180deg, rgba(12, 13, 15, 0.992) 0%, rgba(8, 9, 11, 0.996) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.008),
+    0 4px 12px rgba(0,0,0,0.08);
+}
+
+/* Header separator becomes a ghost line instead of a visible rule. */
+.topGrid .panelHeading {
+  min-height: 38px;
+  border-bottom-color: rgba(255, 255, 255, 0.035);
+}
+
+.topGrid .panelHeading h2 {
+  color: #f1f3f5;
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 610;
+  letter-spacing: -0.018em;
+}
+
+.topGrid .panelHeading button,
+.topGrid .panelActions button {
+  color: #9fa8b2;
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.topGrid .panelHeading button:hover,
+.topGrid .panelActions button:hover {
+  color: #c6cbd1;
+}
+
+/* Row rules are intentionally very faint, matching the sampler. */
+.topGrid .gameRow,
+.topGrid .metricList > div,
+.topGrid .standingRow {
+  border-bottom-color: rgba(255, 255, 255, 0.026);
+}
+
+/* Upcoming Games typography + breathing room. */
+.topGrid .gameRow {
+  min-height: 30px;
+  color: #c6cdd5;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 430;
+}
+
+.topGrid .gameRow strong {
+  color: #edf0f3;
+  font-weight: 575;
+}
+
+.topGrid .gameRow em {
+  color: #b9c0c8;
+  font-weight: 520;
+}
+
+.topGrid .homeAway {
+  color: #7f8994;
+  font-weight: 450;
+}
+
+/* Team Overview: softer labels, crisp but not heavy values. */
+.topGrid .metricList > div {
+  min-height: 25px;
+}
+
+.topGrid .metricList span {
+  color: #929ba5;
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 430;
+  letter-spacing: 0;
+}
+
+.topGrid .metricList strong {
+  color: #eef1f4;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 610;
+  letter-spacing: -0.005em;
+}
+
+/* Standings: cleaner columns and calmer selected-team wash. */
+.topGrid .standingsHeader {
+  color: #818b96;
+  font-family: inherit;
+  font-size: 9px;
+  font-weight: 560;
+  letter-spacing: 0.01em;
+}
+
+.topGrid .standingRow {
+  min-height: 32px;
+  color: #cbd2da;
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 470;
+}
+
+.topGrid .standingTeam {
+  color: #e7eaee;
+  font-weight: 560;
+}
+
+.topGrid .selectedStanding {
+  background: linear-gradient(
+    90deg,
+    rgba(104, 80, 27, 0.50) 0%,
+    rgba(78, 64, 31, 0.28) 72%,
+    rgba(47, 42, 31, 0.12) 100%
+  );
+  color: #f2ecd9;
+}
+
+/* Keep all three cards locked to equal height on the desktop/laptop layout. */
+@media (min-width: 1181px) {
+  .topGrid {
+    align-items: stretch;
+    grid-auto-rows: 1fr;
+  }
+
+  .topGrid > .panel {
+    height: 100%;
+    min-height: 0;
+  }
+}
+
+
+/* TEAM HUB MIDDLE FINAL POLISH PASS 23 */
+
+/*
+  Final sampler-match polish for the content area only.
+  IMPORTANT: top banner/manual controls, sidebar, schedule/data/gameplay logic,
+  and navigation behavior are intentionally untouched.
+*/
+
+/* 1. Refine the typography hierarchy across the content panels. */
+.topGrid,
+.middleGrid,
+.bottomGrid {
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  font-family: Inter, "Segoe UI Variable Text", "Segoe UI", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Arial, sans-serif;
+}
+
+.topGrid .panelHeading h2,
+.middleGrid .panelHeading h2,
+.bottomGrid .panelHeading h2 {
+  color: #f1f3f5;
+  font-size: 14.5px;
+  font-weight: 600;
+  letter-spacing: -0.016em;
+}
+
+.topGrid .panelHeading button,
+.middleGrid .panelHeading button,
+.bottomGrid .panelHeading button,
+.topGrid .panelActions button,
+.middleGrid .panelActions button {
+  color: #959da7;
+  font-size: 9.5px;
+  font-weight: 470;
+  letter-spacing: 0;
+}
+
+.topGrid .panelHeading button:hover,
+.middleGrid .panelHeading button:hover,
+.bottomGrid .panelHeading button:hover,
+.topGrid .panelActions button:hover,
+.middleGrid .panelActions button:hover {
+  color: #bcc2c8;
+}
+
+/* 2. Make every separator feel like a guide, not a box edge. */
+.topGrid > .panel,
+.middleGrid > .panel,
+.bottomGrid > .panel {
+  border-color: rgba(255,255,255,0.047);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.006),
+    0 3px 10px rgba(0,0,0,0.065);
+}
+
+.topGrid .panelHeading,
+.middleGrid .panelHeading,
+.bottomGrid .panelHeading {
+  border-bottom-color: rgba(255,255,255,0.026);
+}
+
+.topGrid .gameRow,
+.topGrid .metricList > div,
+.topGrid .standingRow,
+.middleGrid .recentRow,
+.bottomGrid .prospect {
+  border-bottom-color: rgba(255,255,255,0.018);
+}
+
+/* 3. Slightly tighter, more deliberate vertical rhythm. */
+.topGrid .gameRow {
+  min-height: 28px;
+}
+
+.topGrid .metricList > div {
+  min-height: 24px;
+}
+
+.topGrid .standingRow {
+  min-height: 31px;
+}
+
+.middleGrid .recentRow {
+  min-height: 28px;
+}
+
+/* 4. Softer labels + cleaner values / column alignment. */
+.topGrid .gameRow,
+.middleGrid .recentRow,
+.topGrid .standingRow {
+  color: #c3cad2;
+  font-size: 10.5px;
+  font-weight: 430;
+}
+
+.topGrid .gameRow strong,
+.middleGrid .recentRow strong,
+.topGrid .standingTeam {
+  color: #eceff2;
+  font-weight: 560;
+}
+
+.topGrid .gameRow em,
+.middleGrid .recentRow em {
+  color: #d6dbe0;
+  font-weight: 540;
+}
+
+.topGrid .metricList span {
+  color: #8b939c;
+  font-size: 9.7px;
+  font-weight: 420;
+}
+
+.topGrid .metricList strong {
+  color: #eef1f4;
+  font-size: 10.7px;
+  font-weight: 590;
+  font-variant-numeric: tabular-nums;
+}
+
+.topGrid .standingsHeader {
+  color: #7d858e;
+  font-size: 8.7px;
+  font-weight: 520;
+}
+
+.topGrid .standingRow {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Selected team stays readable but no longer looks like a heavy gold bar. */
+.topGrid .selectedStanding {
+  background: linear-gradient(
+    90deg,
+    rgba(100, 76, 25, 0.43) 0%,
+    rgba(72, 58, 29, 0.22) 72%,
+    rgba(44, 40, 31, 0.08) 100%
+  );
+  color: #efe9d6;
+}
+
+/* 5. Starting Five becomes calmer: quieter cards, smaller ring dominance,
+      cleaner name treatment, while preserving the OVR/POT ring design. */
+.middleGrid .playerCard {
+  border-color: rgba(255,255,255,0.052);
+  background: linear-gradient(180deg, #0e0f11 0%, #0a0b0d 100%);
+}
+
+.middleGrid .playerCard:hover {
+  border-color: rgba(249,115,22,0.30);
+  transform: translateY(-1px);
+}
+
+.middleGrid .playerRatingBadge {
+  transform: scale(0.82);
+  transform-origin: top left;
+}
+
+.middleGrid .playerCard .playerPositionBadge {
+  color: #aeb5bd;
+  font-size: 9px;
+  font-weight: 650;
+}
+
+.middleGrid .playerVisual {
+  border-bottom-color: rgba(154, 160, 169, 0.22);
+}
+
+.middleGrid .playerCardMeta strong,
+.middleGrid .playerCard strong {
+  color: #edf0f2;
+  font-size: 10.2px;
+  font-weight: 560;
+  letter-spacing: -0.008em;
+}
+
+/* Recent Games + bottom cards share the same quiet hierarchy. */
+.middleGrid .recentRow {
+  border-bottom-color: rgba(255,255,255,0.018);
+}
+
+.bottomGrid .prospect {
+  border-color: rgba(255,255,255,0.050);
+  background: #0b0c0e;
+}
+
+.bottomGrid .prospect strong,
+.bottomGrid .newsEmpty strong {
+  color: #e9ecef;
+  font-weight: 560;
+}
+
+.bottomGrid .prospect small,
+.bottomGrid .newsEmpty span,
+.bottomGrid .emptyPanel {
+  color: #858d96;
+  font-weight: 420;
+}
+
+
+/* TEAM HUB MIDDLE BREATHING / TYPOGRAPHY PASS 24 */
+
+/*
+  Tiny final correction after Pass 23:
+  - restore a little typography presence
+  - add a little vertical breathing room to Starting Five
+  - keep the quieter borders / separators / panel surfaces from Pass 23 exactly as-is
+  - top banner/manual controls/sidebar remain untouched
+*/
+
+.topGrid .panelHeading h2,
+.middleGrid .panelHeading h2,
+.bottomGrid .panelHeading h2 {
+  font-size: 15.4px;
+  font-weight: 640;
+  letter-spacing: -0.014em;
+}
+
+.topGrid .panelHeading button,
+.middleGrid .panelHeading button,
+.bottomGrid .panelHeading button,
+.topGrid .panelActions button,
+.middleGrid .panelActions button {
+  font-size: 9.9px;
+  font-weight: 500;
+}
+
+.topGrid .gameRow,
+.middleGrid .recentRow,
+.topGrid .standingRow {
+  font-size: 10.9px;
+  font-weight: 440;
+}
+
+.topGrid .gameRow strong,
+.middleGrid .recentRow strong,
+.topGrid .standingTeam {
+  font-weight: 580;
+}
+
+.topGrid .metricList span {
+  font-size: 10px;
+  font-weight: 430;
+}
+
+.topGrid .metricList strong {
+  font-size: 11.1px;
+  font-weight: 610;
+}
+
+.topGrid .standingsHeader {
+  font-size: 9px;
+  font-weight: 530;
+}
+
+/* Slightly more air without making the row loose again. */
+.topGrid .gameRow {
+  min-height: 29px;
+}
+
+.topGrid .metricList > div {
+  min-height: 25px;
+}
+
+.topGrid .standingRow {
+  min-height: 32px;
+}
+
+.middleGrid .recentRow {
+  min-height: 29px;
+}
+
+/* Starting Five: preserve current ring scale and separator styling; only restore room. */
+.middleGrid .playerCard {
+  height: 134px;
+}
+
+.middleGrid .playerVisual {
+  min-height: 96px;
+}
+
+.middleGrid .playerCardMeta {
+  min-height: 38px;
+  padding: 7px 8px 9px;
+}
+
+.middleGrid .playerCardMeta strong,
+.middleGrid .playerCard strong {
+  font-size: 10.5px;
+  font-weight: 580;
+  line-height: 1.12;
+}
+
+.middleGrid .playerCard .playerPositionBadge {
+  font-size: 9.2px;
+  font-weight: 670;
+}
+
+/* Lower panels get only a tiny type correction; geometry stays untouched. */
+.bottomGrid .prospect strong,
+.bottomGrid .newsEmpty strong {
+  font-weight: 580;
+}
+
+.bottomGrid .prospect small,
+.bottomGrid .newsEmpty span,
+.bottomGrid .emptyPanel {
+  font-weight: 430;
+}
+
+/* TEAM HUB FUNCTIONAL GLOBAL SEARCH PASS 25 */
+.searchWrap {
+  position: relative;
+  z-index: 260;
+  width: 292px;
+}
+
+.searchShell {
+  box-sizing: border-box;
+  width: 100%;
+  transition: border-color 140ms ease, background 140ms ease, box-shadow 140ms ease;
+}
+
+.searchShellActive {
+  border-color: rgba(148, 163, 184, 0.24);
+  background: rgba(15, 17, 21, 0.98);
+  box-shadow: 0 7px 20px rgba(0, 0, 0, 0.20);
+}
+
+.searchShell input {
+  pointer-events: auto !important;
+  cursor: text;
+  color: #e8edf4;
+}
+
+.searchShell input::-webkit-search-cancel-button {
+  opacity: 0.45;
+  cursor: pointer;
+}
+
+.searchResults {
+  position: absolute;
+  top: calc(100% + 7px);
+  right: 0;
+  z-index: 400;
+  box-sizing: border-box;
+  width: 360px;
+  max-width: min(360px, calc(100vw - var(--bm-persistent-sidebar-width, 236px) - 38px));
+  max-height: min(430px, calc(100vh - 116px));
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 11px;
+  background: rgba(10, 12, 15, 0.985);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.42);
+  backdrop-filter: blur(14px);
+}
+
+.searchResults::-webkit-scrollbar {
+  width: 5px;
+}
+
+.searchResults::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.20);
+}
+
+.searchGroup + .searchGroup {
+  margin-top: 5px;
+  padding-top: 5px;
+  border-top: 1px solid rgba(148, 163, 184, 0.075);
+}
+
+.searchGroupLabel {
+  padding: 5px 8px 4px;
+  color: #8792a3;
+  font-size: 8.5px;
+  font-weight: 650;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.searchResult {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 46px;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #eef2f7;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.searchResult:hover,
+.searchResult:focus-visible {
+  outline: none;
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.searchResultMedia {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.searchResultMedia img {
+  width: 29px;
+  height: 29px;
+  object-fit: contain;
+}
+
+.searchPlayerMedia {
+  align-self: stretch;
+  height: 36px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.searchPlayerMedia img {
+  width: 34px;
+  height: 36px;
+  object-fit: contain;
+  object-position: center bottom;
+}
+
+.searchPlayerMedia > span {
+  color: #aab4c2;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.searchResultCopy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.searchResultCopy strong {
+  overflow: hidden;
+  color: #f2f5f8;
+  font-size: 11.5px;
+  font-weight: 590;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.searchResultCopy small {
+  overflow: hidden;
+  color: #8793a5;
+  font-size: 9.4px;
+  font-weight: 430;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.searchResultArrow {
+  color: #7e8999;
+  font-size: 13px;
+}
+
+.searchPlayerOverall {
+  min-width: 27px;
+  color: #d9a05c;
+  font-size: 11px;
+  font-weight: 680;
+  text-align: right;
+}
+
+.searchEmpty {
+  padding: 18px 12px;
+  color: #8490a1;
+  font-size: 10.5px;
+  font-weight: 440;
+  text-align: center;
+}
+
+.avatarControl,
+.avatarBadge {
+  display: none !important;
+}
+
+@media (max-width: 1200px) {
+  .searchWrap { width: 250px; }
+  .searchResults { width: 330px; }
+}
+
+
+/* CONTROLLED TEAM PREVIEW SAFETY PASS 33 */
+.previewReturnButton {
+  height: 32px;
+  flex: 0 0 auto;
+  padding: 0 11px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+  color: #b8c1ce;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.015em;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease, color 140ms ease;
+}
+
+.previewReturnButton:hover {
+  border-color: rgba(249, 115, 22, 0.34);
+  background: rgba(249, 115, 22, 0.08);
+  color: #f0f3f7;
+}
+
+
+/* V14.6 banner fit guard: keep every team header clean at normal desktop width. */
+.teamBanner {
+  grid-template-columns: minmax(360px, 1.55fr) minmax(112px, 0.48fr) minmax(112px, 0.48fr) minmax(220px, 0.86fr) !important;
+  min-height: 82px !important;
+  overflow: hidden !important;
+}
+
+.teamIdentity {
+  min-width: 0 !important;
+  overflow: hidden !important;
+  gap: 12px !important;
+  padding-right: 10px !important;
+}
+
+.teamWordmark {
+  min-width: 0 !important;
+  overflow: hidden !important;
+  max-width: min(360px, 100%) !important;
+}
+
+.teamCity,
+.teamIdentity h1 {
+  max-width: 100% !important;
+  min-width: 0 !important;
+  overflow: hidden !important;
+  text-overflow: clip !important;
+  word-break: normal !important;
+  overflow-wrap: normal !important;
+}
+
+.teamCity {
+  white-space: nowrap !important;
+  font-size: clamp(13px, 1.15vw, 18px) !important;
+  line-height: 1 !important;
+}
+
+.teamIdentity h1 {
+  display: block !important;
+  white-space: normal !important;
+  font-size: clamp(24px, 2.15vw, 33px) !important;
+  line-height: 0.91 !important;
+  max-height: 2.02em !important;
+}
+
+.heroMetric {
+  min-width: 0 !important;
+  padding-left: 14px !important;
+  padding-right: 12px !important;
+}
+
+.heroMetric small {
+  max-width: 100% !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+.nextGame {
+  min-width: 0 !important;
+  grid-template-columns: minmax(74px, 1fr) 42px minmax(92px, auto) !important;
+  gap: 10px !important;
+  padding-left: 16px !important;
+  padding-right: 16px !important;
+  overflow: hidden !important;
+}
+
+.nextGame > div {
+  min-width: 0 !important;
+  justify-self: start !important;
+}
+
+.nextGame span,
+.nextGame strong,
+.nextGame small {
+  max-width: 100% !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+.nextGame img {
+  width: 38px !important;
+  height: 38px !important;
+  transform: none !important;
+}
+
+.nextGame small {
+  justify-self: end !important;
+  text-align: right !important;
+}
+
+.bannerWatermark {
+  max-width: 48vw !important;
+}
+
+@media (max-width: 1280px) {
+  .teamBanner {
+    grid-template-columns: minmax(320px, 1.4fr) minmax(100px, 0.42fr) minmax(104px, 0.42fr) minmax(210px, 0.82fr) !important;
+  }
+  .teamIdentity h1 {
+    font-size: clamp(22px, 2vw, 29px) !important;
+  }
+}
+
+/* V14.7 banner/rotation fit polish:
+   - give Next Game enough room so "No game scheduled" never truncates
+   - tighten metric columns and keep identity readable across long team names
+   - move the Starting Five OVR/POT ring away from player faces */
+.teamBanner {
+  grid-template-columns: minmax(315px, 1.08fr) minmax(92px, 0.30fr) minmax(96px, 0.32fr) minmax(315px, 1.02fr) !important;
+  column-gap: 0 !important;
+}
+
+.teamIdentity {
+  padding-left: 24px !important;
+  padding-right: 12px !important;
+  gap: 10px !important;
+}
+
+.teamLogo {
+  width: 62px !important;
+  height: 62px !important;
+}
+
+.teamWordmark {
+  max-width: 265px !important;
+}
+
+.teamCity {
+  font-size: clamp(12px, 1.05vw, 16px) !important;
+  line-height: 1.04 !important;
+}
+
+.teamIdentity h1 {
+  font-size: clamp(21px, 1.72vw, 29px) !important;
+  line-height: 0.95 !important;
+  max-height: 2.08em !important;
+  letter-spacing: -0.026em !important;
+}
+
+.heroMetric {
+  padding-left: 12px !important;
+  padding-right: 10px !important;
+}
+
+.nextGame {
+  grid-template-columns: minmax(98px, 0.9fr) 36px minmax(142px, 1.1fr) !important;
+  column-gap: 12px !important;
+  padding-left: 16px !important;
+  padding-right: 18px !important;
+}
+
+.nextGame > div {
+  justify-self: start !important;
+  text-align: left !important;
+}
+
+.nextGame strong {
+  min-height: 19px !important;
+  line-height: 1.1 !important;
+}
+
+.nextGame small {
+  min-width: 0 !important;
+  width: 100% !important;
+  text-align: right !important;
+  line-height: 1.2 !important;
+  padding-bottom: 1px !important;
+}
+
+.nextGameNoGame {
+  grid-template-columns: minmax(98px, auto) minmax(164px, 1fr) !important;
+}
+
+.nextGameNoGame small {
+  justify-self: start !important;
+  text-align: left !important;
+  max-width: none !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+  white-space: nowrap !important;
+  font-size: 11px !important;
+  line-height: 1.2 !important;
+}
+
+.nextGameNoGame img {
+  display: none !important;
+}
+
+.middleGrid .playerRatingBadge {
+  top: 2px !important;
+  left: 3px !important;
+  transform: scale(0.66) !important;
+  transform-origin: top left !important;
+}
+
+.middleGrid .playerPortrait {
+  width: 90px !important;
+  height: 91px !important;
+}
+
+.middleGrid .playerCard .playerPositionBadge {
+  top: 7px !important;
+  right: 9px !important;
+}
+
+@media (max-width: 1280px) {
+  .teamBanner {
+    grid-template-columns: minmax(285px, 1fr) minmax(84px, 0.28fr) minmax(90px, 0.30fr) minmax(300px, 1fr) !important;
+  }
+
+  .teamWordmark {
+    max-width: 235px !important;
+  }
+
+  .teamIdentity h1 {
+    font-size: clamp(19px, 1.6vw, 26px) !important;
+  }
+}
+
+/* === V14.8B ONE PAGE FIT START === */
+/* Make Team Hub fit cleanly in one normal desktop viewport without clipping labels. */
+.dashboard {
+  overflow: hidden !important;
+  padding: 7px 14px 8px !important;
+}
+
+.topBar {
+  min-height: 31px !important;
+  margin-bottom: 6px !important;
+}
+
+.seasonContext {
+  font-size: 13px !important;
+}
+
+.teamBanner {
+  height: 72px !important;
+  min-height: 72px !important;
+  margin-bottom: 7px !important;
+  grid-template-columns: minmax(370px, 1.62fr) minmax(112px, 0.48fr) minmax(112px, 0.48fr) minmax(360px, 1.22fr) !important;
+  overflow: hidden !important;
+}
+
+.teamIdentity {
+  gap: 10px !important;
+  padding: 8px 18px !important;
+  min-width: 0 !important;
+}
+
+.teamLogo {
+  width: 64px !important;
+  height: 52px !important;
+  flex: 0 0 auto !important;
+}
+
+.teamCity {
+  font-size: clamp(11px, 0.95vw, 15px) !important;
+  line-height: 1 !important;
+  white-space: nowrap !important;
+}
+
+.teamIdentity h1 {
+  font-size: clamp(20px, 1.55vw, 27px) !important;
+  line-height: 0.9 !important;
+  max-height: 1.9em !important;
+  overflow: hidden !important;
+  text-wrap: balance !important;
+}
+
+.heroMetric {
+  min-height: 48px !important;
+  padding-left: 12px !important;
+  padding-right: 10px !important;
+}
+
+.heroMetric span,
+.nextGame span {
+  font-size: 9px !important;
+  line-height: 1.05 !important;
+}
+
+.heroMetric strong {
+  font-size: 17px !important;
+  margin-top: 2px !important;
+}
+
+.heroMetric small {
+  font-size: 9px !important;
+  margin-top: 2px !important;
+  line-height: 1.1 !important;
+}
+
+.nextGame {
+  min-height: 48px !important;
+  grid-template-columns: minmax(80px, 0.58fr) minmax(18px, 24px) minmax(190px, 1.2fr) !important;
+  gap: 8px !important;
+  padding-left: 14px !important;
+  padding-right: 18px !important;
+  overflow: visible !important;
+}
+
+.nextGame:not(:has(img)) {
+  grid-template-columns: minmax(84px, 0.52fr) minmax(22px, 28px) minmax(190px, 1.2fr) !important;
+}
+
+.nextGame:not(:has(img)) small {
+  grid-column: 3 !important;
+  justify-self: start !important;
+  text-align: left !important;
+}
+
+.nextGame:has(img) small {
+  grid-column: 3 !important;
+}
+
+.nextGame strong {
+  font-size: 13px !important;
+  line-height: 1.05 !important;
+}
+
+.nextGame small {
+  font-size: 10.5px !important;
+  line-height: 1.18 !important;
+  white-space: nowrap !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+  max-width: none !important;
+}
+
+.nextGame img {
+  width: 30px !important;
+  height: 30px !important;
+}
+
+.bannerWatermark {
+  width: 360px !important;
+  height: 200px !important;
+}
+
+.topGrid,
+.middleGrid,
+.bottomGrid {
+  gap: 7px !important;
+  margin-bottom: 7px !important;
+}
+
+.bottomGrid {
+  margin-bottom: 0 !important;
+}
+
+.panel {
+  border-radius: 9px !important;
+}
+
+.panelHeading {
+  min-height: 28px !important;
+  padding: 0 12px !important;
+}
+
+.panelHeading h2 {
+  font-size: 14px !important;
+}
+
+.panelHeading button,
+.panelActions button {
+  font-size: 9.5px !important;
+}
+
+.gameList,
+.recentList {
+  padding: 2px 10px 6px !important;
+}
+
+.gameRow,
+.recentRow {
+  min-height: 22px !important;
+}
+
+.gameRow img,
+.recentRow img,
+.standingTeam img {
+  width: 19px !important;
+  height: 19px !important;
+}
+
+.metricList {
+  padding: 3px 11px 6px !important;
+}
+
+.metricList > div,
+.topGrid .metricList > div {
+  min-height: 20px !important;
+}
+
+.metricList span,
+.topGrid .metricList span {
+  font-size: 9px !important;
+}
+
+.metricList strong,
+.topGrid .metricList strong {
+  font-size: 10.2px !important;
+}
+
+.standingsHeader {
+  min-height: 21px !important;
+  padding: 0 10px !important;
+}
+
+.standingRow,
+.topGrid .standingRow {
+  min-height: 25px !important;
+  margin: 0 7px !important;
+  font-size: 9.5px !important;
+}
+
+.emptyPanel {
+  min-height: 42px !important;
+  padding: 8px !important;
+  font-size: 9.5px !important;
+}
+
+.rotationPanel {
+  min-height: 149px !important;
+}
+
+.playerStrip {
+  gap: 7px !important;
+  padding: 6px 10px 8px !important;
+}
+
+.playerCard,
+.middleGrid .playerCard {
+  height: 112px !important;
+  border-radius: 7px !important;
+}
+
+.playerVisual,
+.middleGrid .playerVisual {
+  min-height: 80px !important;
+}
+
+.playerPortrait,
+.middleGrid .playerPortrait {
+  width: 78px !important;
+  height: 80px !important;
+}
+
+.playerRatingBadge,
+.middleGrid .playerRatingBadge {
+  top: 2px !important;
+  left: 3px !important;
+  transform: scale(0.62) !important;
+  transform-origin: top left !important;
+}
+
+.playerCard .playerPositionBadge,
+.middleGrid .playerCard .playerPositionBadge {
+  top: 6px !important;
+  right: 7px !important;
+  font-size: 8.4px !important;
+}
+
+.playerCardMeta,
+.middleGrid .playerCardMeta {
+  min-height: 27px !important;
+  padding: 5px 7px 6px !important;
+}
+
+.playerCardMeta strong,
+.playerCard strong,
+.middleGrid .playerCardMeta strong,
+.middleGrid .playerCard strong {
+  font-size: 9.5px !important;
+  line-height: 1.08 !important;
+}
+
+.prospectGrid {
+  gap: 5px !important;
+  padding: 6px 10px 8px !important;
+}
+
+.prospect {
+  height: 28px !important;
+  grid-template-columns: 18px 24px minmax(0, 1fr) 24px !important;
+}
+
+.prospect img,
+.prospect i {
+  width: 22px !important;
+  height: 25px !important;
+}
+
+.newsEmpty {
+  min-height: 50px !important;
+  padding: 8px 12px 10px !important;
+}
+
+.newsEmpty strong {
+  font-size: 10px !important;
+}
+
+.newsEmpty span {
+  font-size: 8.8px !important;
+  line-height: 1.3 !important;
+}
+
+@media (max-height: 820px) {
+  .dashboard {
+    padding-top: 6px !important;
+    padding-bottom: 7px !important;
+  }
+
+  .teamBanner {
+    height: 68px !important;
+    min-height: 68px !important;
+  }
+
+  .teamLogo {
+    width: 58px !important;
+    height: 48px !important;
+  }
+
+  .teamIdentity h1 {
+    font-size: clamp(18px, 1.43vw, 24px) !important;
+  }
+
+  .panelHeading {
+    min-height: 27px !important;
+  }
+
+  .rotationPanel {
+    min-height: 142px !important;
+  }
+
+  .playerCard,
+  .middleGrid .playerCard {
+    height: 105px !important;
+  }
+
+  .playerVisual,
+  .middleGrid .playerVisual {
+    min-height: 76px !important;
+  }
+
+  .playerPortrait,
+  .middleGrid .playerPortrait {
+    width: 74px !important;
+    height: 76px !important;
+  }
+
+  .playerCardMeta,
+  .middleGrid .playerCardMeta {
+    min-height: 25px !important;
+    padding-top: 4px !important;
+    padding-bottom: 5px !important;
+  }
+}
+/* === V14.8B ONE PAGE FIT END === */
+/* V14.9 TEAM HUB SPACE / DRAFT LIST POLISH START */
+/* Let Team Hub use available screen width/height again while keeping a clean scroll fallback. */
+.dashboard {
+  height: 100% !important;
+  min-height: 100vh !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  padding: 10px 20px 16px !important;
+  background: #050505 !important;
+}
+
+.topBar {
+  min-height: 36px !important;
+  margin-bottom: 8px !important;
+}
+
+.teamBanner {
+  height: 76px !important;
+  min-height: 76px !important;
+  margin-bottom: 9px !important;
+  grid-template-columns: minmax(340px, 1.38fr) minmax(106px, 0.44fr) minmax(106px, 0.44fr) minmax(345px, 1.14fr) !important;
+}
+
+.nextGame {
+  grid-template-columns: minmax(86px, 0.62fr) 34px minmax(170px, 1.08fr) !important;
+  padding-left: 13px !important;
+  padding-right: 18px !important;
+}
+
+.nextGame:not(:has(img)) {
+  grid-template-columns: minmax(86px, 0.52fr) minmax(185px, 1.15fr) !important;
+}
+
+.nextGame small {
+  min-width: 0 !important;
+  max-width: 100% !important;
+  white-space: nowrap !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+  line-height: 1.2 !important;
+}
+
+.topGrid,
+.middleGrid,
+.bottomGrid {
+  width: 100% !important;
+  gap: 10px !important;
+  margin-bottom: 10px !important;
+}
+
+.middleGrid {
+  grid-template-columns: minmax(0, 1.56fr) minmax(320px, 0.88fr) !important;
+}
+
+.bottomGrid {
+  grid-template-columns: minmax(0, 1.35fr) minmax(360px, 1fr) !important;
+}
+
+.panel {
+  background: linear-gradient(180deg, rgba(12, 12, 13, 0.98), rgba(7, 7, 8, 0.98)) !important;
+  border-color: rgba(255, 255, 255, 0.075) !important;
+}
+
+.panelHeading {
+  min-height: 34px !important;
+  padding-inline: 14px !important;
+}
+
+.panelHeading h2 {
+  font-size: 15px !important;
+}
+
+.rotationPanel {
+  min-height: 164px !important;
+}
+
+.playerStrip {
+  gap: 9px !important;
+  padding: 8px 12px 10px !important;
+}
+
+.playerCard,
+.middleGrid .playerCard {
+  height: 124px !important;
+}
+
+.playerVisual,
+.middleGrid .playerVisual {
+  min-height: 90px !important;
+}
+
+.playerPortrait,
+.middleGrid .playerPortrait {
+  width: 86px !important;
+  height: 86px !important;
+}
+
+.playerRatingBadge,
+.middleGrid .playerRatingBadge {
+  top: 3px !important;
+  left: 4px !important;
+  transform: scale(0.64) !important;
+  transform-origin: top left !important;
+}
+
+.prospectGrid {
+  grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+  gap: 6px !important;
+  padding: 8px 12px 10px !important;
+}
+
+.prospect {
+  height: 30px !important;
+  grid-template-columns: 18px 23px minmax(0, 1fr) 24px !important;
+  background: #0d0d0e !important;
+  border-color: rgba(255, 255, 255, 0.08) !important;
+}
+
+.prospect strong {
+  font-size: 10px !important;
+}
+
+.newsEmpty {
+  min-height: 62px !important;
+}
+
+@media (max-height: 820px) {
+  .dashboard {
+    padding-top: 8px !important;
+    padding-bottom: 12px !important;
+  }
+  .teamBanner {
+    height: 72px !important;
+    min-height: 72px !important;
+  }
+  .rotationPanel {
+    min-height: 154px !important;
+  }
+  .playerCard,
+  .middleGrid .playerCard {
+    height: 116px !important;
+  }
+  .playerVisual,
+  .middleGrid .playerVisual {
+    min-height: 84px !important;
+  }
+  .playerPortrait,
+  .middleGrid .playerPortrait {
+    width: 82px !important;
+    height: 82px !important;
+  }
+  .prospectGrid {
+    grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+  }
+}
+/* V14.9 TEAM HUB SPACE / DRAFT LIST POLISH END */
+
+
+/* V14.10 TEAM HUB DATA/FIT POLISH START */
+.prospect i {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 8px;
+  border: 1px solid rgba(249, 115, 22, 0.35);
+  background: rgba(249, 115, 22, 0.12);
+  color: #fed7aa;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 1000;
+}
+
+.prospect small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prospect strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (min-width: 900px) and (max-height: 900px) {
+  .hub {
+    padding-top: 8px;
+    gap: 8px;
+  }
+  .hero {
+    min-height: 74px;
+  }
+  .topGrid,
+  .middleGrid,
+  .bottomGrid {
+    gap: 8px;
+  }
+}
+/* V14.10 TEAM HUB DATA/FIT POLISH END */
+
+/* V14.11 DRAFT ASSET READABILITY / HUB FIT START */
+.draftAssetList {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  padding: 8px 12px 10px;
+}
+
+.draftAssetRow {
+  min-width: 0;
+  min-height: 32px;
+  display: grid;
+  grid-template-columns: 20px 38px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(255,255,255,0.085);
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(18,18,19,0.96), rgba(9,9,10,0.98));
+  padding: 5px 8px;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.015);
+}
+
+.draftAssetNumber {
+  color: rgba(255,255,255,0.72);
+  font-size: 10px;
+  font-weight: 1000;
+  text-align: center;
+}
+
+.draftAssetRound {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  height: 22px;
+  border-radius: 8px;
+  border: 1px solid rgba(249,115,22,0.42);
+  background: rgba(249,115,22,0.12);
+  color: #fed7aa;
+  font-size: 10px;
+  font-weight: 1000;
+}
+
+.draftAssetText {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.draftAssetText strong,
+.draftAssetText small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.draftAssetText strong {
+  color: rgba(255,255,255,0.94);
+  font-size: 10.8px;
+  line-height: 1.05;
+  font-weight: 1000;
+}
+
+.draftAssetText small {
+  color: rgba(255,255,255,0.46);
+  font-size: 8.3px;
+  line-height: 1;
+  font-weight: 900;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+}
+
+@media (max-height: 820px) {
+  .draftAssetList {
+    gap: 5px;
+    padding-top: 7px;
+    padding-bottom: 8px;
+  }
+  .draftAssetRow {
+    min-height: 29px;
+    padding-top: 4px;
+    padding-bottom: 4px;
+  }
+  .draftAssetText strong {
+    font-size: 10px;
+  }
+  .draftAssetText small {
+    font-size: 7.9px;
+  }
+}
+/* V14.11 DRAFT ASSET READABILITY / HUB FIT END */
+
+
+/* V14.12 DRAFT ASSET SIX FIT START */
+.draftAssetList {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  grid-auto-rows: 34px !important;
+  gap: 6px !important;
+  padding: 7px 12px 9px !important;
+  max-height: 122px !important;
+  overflow: hidden !important;
+}
+
+.draftAssetRow {
+  min-height: 34px !important;
+  height: 34px !important;
+  grid-template-columns: 18px 36px minmax(0, 1fr) !important;
+  gap: 7px !important;
+  padding: 5px 8px !important;
+}
+
+.draftAssetRound {
+  min-width: 32px !important;
+  height: 22px !important;
+}
+
+.draftAssetText strong {
+  font-size: 10.6px !important;
+}
+
+.draftAssetText small {
+  font-size: 7.8px !important;
+}
+/* V14.12 DRAFT ASSET SIX FIT END */
+
+/* V14.13 TEAM HUB TRUE ONE SCREEN FIT START */
+/* This pass keeps Team Hub locked to one viewport. It trims empty vertical air instead of hiding content. */
+.dashboard {
+  height: 100% !important;
+  max-height: 100% !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+  padding: 7px 18px 8px !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 0 !important;
+}
+
+.topBar {
+  min-height: 32px !important;
+  height: 32px !important;
+  margin-bottom: 7px !important;
+}
+
+.seasonContext {
+  gap: 12px !important;
+  font-size: 13px !important;
+}
+
+.teamBanner {
+  flex: 0 0 66px !important;
+  min-height: 66px !important;
+  height: 66px !important;
+  margin-bottom: 7px !important;
+  grid-template-columns: minmax(315px, 1.46fr) minmax(112px, 0.45fr) minmax(112px, 0.45fr) minmax(250px, 0.94fr) !important;
+}
+
+.teamIdentity {
+  gap: 12px !important;
+  padding: 8px 18px !important;
+}
+
+.teamLogo {
+  width: 76px !important;
+  height: 54px !important;
+}
+
+.teamIdentity h1 {
+  max-width: 300px !important;
+  font-size: clamp(18px, 1.55vw, 25px) !important;
+  line-height: 0.94 !important;
+}
+
+.heroMetric {
+  min-height: 52px !important;
+  padding-inline: 15px !important;
+}
+
+.heroMetric span,
+.nextGame span {
+  font-size: 9px !important;
+}
+
+.heroMetric strong {
+  margin-top: 2px !important;
+  font-size: 18px !important;
+}
+
+.heroMetric small {
+  margin-top: 3px !important;
+  font-size: 9px !important;
+}
+
+.nextGame {
+  min-height: 54px !important;
+  grid-template-columns: minmax(0, 1fr) 40px auto !important;
+  column-gap: 9px !important;
+  padding: 0 18px !important;
+}
+
+.nextGame strong {
+  font-size: 14px !important;
+  line-height: 0.96 !important;
+}
+
+.nextGame img {
+  width: 36px !important;
+  height: 36px !important;
+}
+
+.nextGame small {
+  font-size: 10px !important;
+}
+
+.topGrid,
+.middleGrid,
+.bottomGrid {
+  gap: 7px !important;
+  min-height: 0 !important;
+}
+
+.topGrid {
+  flex: 0 0 188px !important;
+  height: 188px !important;
+  margin-bottom: 7px !important;
+}
+
+.middleGrid {
+  flex: 0 0 171px !important;
+  height: 171px !important;
+  margin-bottom: 7px !important;
+}
+
+.bottomGrid {
+  flex: 1 1 0 !important;
+  height: auto !important;
+  min-height: 0 !important;
+  margin-bottom: 0 !important;
+}
+
+.topGrid > .panel,
+.middleGrid > .panel,
+.bottomGrid > .panel {
+  min-height: 0 !important;
+  height: 100% !important;
+}
+
+.panelHeading {
+  min-height: 30px !important;
+  height: 30px !important;
+  padding-inline: 12px !important;
+}
+
+.panelHeading h2 {
+  font-size: 14px !important;
+}
+
+.panelHeading button,
+.panelActions button {
+  font-size: 9.5px !important;
+}
+
+.gameList,
+.recentList {
+  padding: 3px 11px 5px !important;
+}
+
+.gameRow,
+.recentRow {
+  min-height: 23px !important;
+  height: 23px !important;
+  font-size: 10px !important;
+}
+
+.gameRow {
+  grid-template-columns: 47px 18px 24px 1fr auto !important;
+  gap: 5px !important;
+}
+
+.gameRow img,
+.recentRow img,
+.standingTeam img {
+  width: 20px !important;
+  height: 20px !important;
+}
+
+.metricList {
+  padding: 3px 12px 5px !important;
+}
+
+.metricList > div {
+  min-height: 22px !important;
+}
+
+.metricList span {
+  font-size: 9.5px !important;
+}
+
+.metricList strong {
+  font-size: 10.5px !important;
+}
+
+.standingsHeader {
+  min-height: 22px !important;
+}
+
+.standingRow {
+  min-height: 27px !important;
+  height: 27px !important;
+  margin-inline: 8px !important;
+  font-size: 9.5px !important;
+}
+
+.rotationPanel {
+  min-height: 0 !important;
+}
+
+.playerStrip {
+  height: calc(100% - 30px) !important;
+  padding: 6px 12px 8px !important;
+  gap: 7px !important;
+}
+
+.playerCard,
+.middleGrid .playerCard {
+  height: 100% !important;
+  min-height: 0 !important;
+  max-height: 130px !important;
+}
+
+.playerVisual,
+.middleGrid .playerVisual {
+  min-height: 82px !important;
+}
+
+.playerPortrait,
+.middleGrid .playerPortrait {
+  width: 76px !important;
+  height: 78px !important;
+}
+
+.playerRatingBadge,
+.middleGrid .playerRatingBadge {
+  top: 3px !important;
+  left: 4px !important;
+  transform: scale(0.57) !important;
+  transform-origin: top left !important;
+}
+
+.playerPositionBadge,
+.middleGrid .playerPositionBadge {
+  right: 8px !important;
+  top: 7px !important;
+  font-size: 9px !important;
+}
+
+.playerCardMeta {
+  min-height: 23px !important;
+  padding: 5px 8px !important;
+}
+
+.playerCardMeta strong {
+  font-size: 9.5px !important;
+  line-height: 1.05 !important;
+}
+
+.draftAssetList {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  grid-auto-rows: 29px !important;
+  max-height: 101px !important;
+  padding: 6px 12px 7px !important;
+  gap: 5px !important;
+  overflow: hidden !important;
+}
+
+.draftAssetRow {
+  height: 29px !important;
+  min-height: 29px !important;
+  grid-template-columns: 17px 33px minmax(0, 1fr) !important;
+  gap: 6px !important;
+  padding: 3px 7px !important;
+  border-radius: 9px !important;
+}
+
+.draftAssetRound {
+  min-width: 30px !important;
+  height: 20px !important;
+  font-size: 9.5px !important;
+}
+
+.draftAssetText strong {
+  font-size: 9.8px !important;
+  line-height: 1 !important;
+}
+
+.draftAssetText small {
+  font-size: 7.2px !important;
+  line-height: 1 !important;
+}
+
+.newsEmpty {
+  min-height: 0 !important;
+  height: calc(100% - 30px) !important;
+  padding: 10px 14px !important;
+  justify-content: flex-start !important;
+}
+
+.newsEmpty strong {
+  font-size: 11px !important;
+}
+
+.newsEmpty span {
+  font-size: 9.5px !important;
+  line-height: 1.25 !important;
+}
+
+@media (max-height: 820px) {
+  .dashboard {
+    padding-top: 6px !important;
+    padding-bottom: 7px !important;
+  }
+  .topBar {
+    height: 30px !important;
+    min-height: 30px !important;
+    margin-bottom: 6px !important;
+  }
+  .teamBanner {
+    flex-basis: 62px !important;
+    min-height: 62px !important;
+    height: 62px !important;
+    margin-bottom: 6px !important;
+  }
+  .teamLogo {
+    width: 68px !important;
+    height: 50px !important;
+  }
+  .topGrid {
+    flex-basis: 180px !important;
+    height: 180px !important;
+    margin-bottom: 6px !important;
+  }
+  .middleGrid {
+    flex-basis: 160px !important;
+    height: 160px !important;
+    margin-bottom: 6px !important;
+  }
+  .playerPortrait,
+  .middleGrid .playerPortrait {
+    width: 72px !important;
+    height: 74px !important;
+  }
+  .draftAssetList {
+    grid-auto-rows: 27px !important;
+    max-height: 91px !important;
+  }
+  .draftAssetRow {
+    height: 27px !important;
+    min-height: 27px !important;
+  }
+}
+/* V14.13 TEAM HUB TRUE ONE SCREEN FIT END */
+
+/* V14.14 TEAM HUB REPAIR - SURGICAL FIT START */
+/* Repair the V14.13 over-tightening: keep the hub non-scrollable, but make the grid rows fit instead of hiding the bottom sections. */
+.dashboard {
+  height: 100% !important;
+  min-height: 0 !important;
+  max-height: 100% !important;
+  overflow: hidden !important;
+  display: grid !important;
+  grid-template-rows: 28px 62px minmax(158px, 1.05fr) minmax(142px, 0.86fr) minmax(124px, 0.78fr) !important;
+  row-gap: 6px !important;
+  padding: 6px 18px 7px !important;
+  box-sizing: border-box !important;
+}
+
+.topBar,
+.teamBanner,
+.topGrid,
+.middleGrid,
+.bottomGrid {
+  min-height: 0 !important;
+  margin-bottom: 0 !important;
+}
+
+.topBar {
+  height: 28px !important;
+  min-height: 28px !important;
+}
+
+.teamBanner {
+  height: 62px !important;
+  min-height: 62px !important;
+  flex: none !important;
+}
+
+.topGrid,
+.middleGrid,
+.bottomGrid {
+  height: 100% !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+}
+
+.topGrid > .panel,
+.middleGrid > .panel,
+.bottomGrid > .panel {
+  height: 100% !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+}
+
+.panelHeading {
+  height: 28px !important;
+  min-height: 28px !important;
+  padding-inline: 12px !important;
+}
+
+.panelHeading h2 {
+  font-size: 13.5px !important;
+}
+
+.gameList,
+.recentList,
+.metricList {
+  padding-top: 2px !important;
+  padding-bottom: 4px !important;
+}
+
+.gameRow,
+.recentRow,
+.standingRow {
+  min-height: 21px !important;
+  height: 21px !important;
+}
+
+.rotationPanel {
+  min-height: 0 !important;
+}
+
+.playerStrip {
+  height: calc(100% - 28px) !important;
+  min-height: 0 !important;
+  padding: 5px 10px 6px !important;
+  gap: 7px !important;
+}
+
+.playerCard,
+.middleGrid .playerCard {
+  height: 100% !important;
+  min-height: 0 !important;
+  max-height: none !important;
+}
+
+.playerVisual,
+.middleGrid .playerVisual {
+  min-height: 0 !important;
+  height: calc(100% - 28px) !important;
+}
+
+.playerPortrait,
+.middleGrid .playerPortrait {
+  width: 72px !important;
+  height: 74px !important;
+}
+
+.playerRatingBadge,
+.middleGrid .playerRatingBadge {
+  top: 3px !important;
+  left: 4px !important;
+  transform: scale(0.55) !important;
+  transform-origin: top left !important;
+}
+
+.playerCardMeta,
+.middleGrid .playerCardMeta {
+  min-height: 28px !important;
+  height: 28px !important;
+  padding: 4px 7px !important;
+}
+
+.draftAssetList {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  grid-auto-rows: 25px !important;
+  max-height: calc(100% - 28px) !important;
+  padding: 5px 12px 6px !important;
+  gap: 4px 6px !important;
+  overflow: hidden !important;
+}
+
+.draftAssetRow {
+  height: 25px !important;
+  min-height: 25px !important;
+  grid-template-columns: 16px 31px minmax(0, 1fr) !important;
+  gap: 6px !important;
+  padding: 2px 7px !important;
+  border-radius: 8px !important;
+}
+
+.draftAssetRound {
+  min-width: 28px !important;
+  height: 18px !important;
+  font-size: 9px !important;
+}
+
+.draftAssetText strong {
+  font-size: 9.4px !important;
+  line-height: 1 !important;
+}
+
+.draftAssetText small {
+  font-size: 6.8px !important;
+  line-height: 1 !important;
+}
+
+.newsEmpty {
+  height: calc(100% - 28px) !important;
+  min-height: 0 !important;
+  padding: 8px 12px !important;
+  justify-content: flex-start !important;
+}
+
+@media (max-height: 820px) {
+  .dashboard {
+    grid-template-rows: 26px 58px minmax(148px, 1.02fr) minmax(132px, 0.84fr) minmax(112px, 0.72fr) !important;
+    row-gap: 5px !important;
+    padding-top: 5px !important;
+    padding-bottom: 5px !important;
+  }
+  .topBar { height: 26px !important; min-height: 26px !important; }
+  .teamBanner { height: 58px !important; min-height: 58px !important; }
+  .panelHeading { height: 27px !important; min-height: 27px !important; }
+  .gameRow,
+  .recentRow,
+  .standingRow { height: 20px !important; min-height: 20px !important; }
+  .draftAssetList { grid-auto-rows: 23px !important; }
+  .draftAssetRow { height: 23px !important; min-height: 23px !important; }
+}
+/* V14.14 TEAM HUB REPAIR - SURGICAL FIT END */
+
+/* V14.15 TEAM HUB FULL VIEWPORT FIT START */
+/* Surgical final fit: fill the visible game canvas without allowing the Team Hub page itself to scroll. */
+:global(html[data-bm-route="team-hub"]),
+:global(body[data-bm-route="team-hub"]) {
+  overflow: hidden !important;
+}
+
+.dashboard {
+  height: 100dvh !important;
+  min-height: 100dvh !important;
+  max-height: 100dvh !important;
+  overflow: hidden !important;
+  display: grid !important;
+  grid-template-rows: 30px 70px minmax(182px, 1.12fr) minmax(154px, 0.96fr) minmax(134px, 0.84fr) !important;
+  row-gap: 7px !important;
+  padding: 8px 18px 9px !important;
+  box-sizing: border-box !important;
+}
+
+.topBar,
+.teamBanner,
+.topGrid,
+.middleGrid,
+.bottomGrid,
+.topGrid > .panel,
+.middleGrid > .panel,
+.bottomGrid > .panel {
+  min-height: 0 !important;
+  height: 100% !important;
+  margin-bottom: 0 !important;
+  overflow: hidden !important;
+}
+
+.topBar {
+  height: 30px !important;
+  min-height: 30px !important;
+}
+
+.teamBanner {
+  height: 70px !important;
+  min-height: 70px !important;
+  flex: none !important;
+}
+
+.teamLogo {
+  width: 72px !important;
+  height: 56px !important;
+}
+
+.teamNameBlock h1 {
+  font-size: clamp(19px, 2.05vw, 30px) !important;
+  line-height: 0.92 !important;
+}
+
+.teamNameBlock span {
+  font-size: 12px !important;
+  line-height: 1 !important;
+}
+
+.bannerStat,
+.nextGame {
+  min-height: 0 !important;
+}
+
+.nextGame {
+  grid-template-columns: minmax(68px, max-content) 1fr auto !important;
+  column-gap: 13px !important;
+  align-items: center !important;
+  min-width: 0 !important;
+}
+
+.nextGame strong,
+.nextGame span,
+.nextGame small {
+  white-space: nowrap !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+}
+
+.nextGame img {
+  width: 34px !important;
+  height: 34px !important;
+}
+
+.panelHeading {
+  height: 29px !important;
+  min-height: 29px !important;
+  padding-inline: 13px !important;
+}
+
+.panelHeading h2 {
+  font-size: 14px !important;
+  line-height: 1 !important;
+}
+
+.gameList,
+.recentList,
+.metricList {
+  height: calc(100% - 29px) !important;
+  min-height: 0 !important;
+  padding: 4px 12px 6px !important;
+  box-sizing: border-box !important;
+}
+
+.gameRow,
+.recentRow,
+.standingRow {
+  min-height: 22px !important;
+  height: 22px !important;
+}
+
+.gameRow {
+  grid-template-columns: 48px 18px 24px minmax(36px, 1fr) auto !important;
+  gap: 6px !important;
+}
+
+.gameRow img,
+.recentRow img,
+.standingTeam img {
+  width: 20px !important;
+  height: 20px !important;
+}
+
+.metricList > div {
+  min-height: 23px !important;
+}
+
+.standingsHeader {
+  min-height: 22px !important;
+}
+
+.standingRow {
+  margin-inline: 8px !important;
+}
+
+.playerStrip {
+  height: calc(100% - 29px) !important;
+  min-height: 0 !important;
+  padding: 6px 12px 7px !important;
+  gap: 8px !important;
+  box-sizing: border-box !important;
+}
+
+.playerCard,
+.middleGrid .playerCard {
+  height: 100% !important;
+  min-height: 0 !important;
+  max-height: none !important;
+}
+
+.playerVisual,
+.middleGrid .playerVisual {
+  min-height: 0 !important;
+  height: calc(100% - 30px) !important;
+}
+
+.playerPortrait,
+.middleGrid .playerPortrait {
+  width: 78px !important;
+  height: 80px !important;
+}
+
+.playerRatingBadge,
+.middleGrid .playerRatingBadge {
+  top: 4px !important;
+  left: 6px !important;
+  transform: scale(0.54) !important;
+  transform-origin: top left !important;
+}
+
+.playerCardMeta,
+.middleGrid .playerCardMeta {
+  height: 30px !important;
+  min-height: 30px !important;
+  padding: 4px 8px !important;
+}
+
+.draftAssetList {
+  height: calc(100% - 29px) !important;
+  max-height: none !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  grid-template-rows: repeat(3, minmax(0, 1fr)) !important;
+  grid-auto-rows: 0 !important;
+  padding: 6px 12px 8px !important;
+  gap: 6px 7px !important;
+  overflow: hidden !important;
+  box-sizing: border-box !important;
+}
+
+.draftAssetRow {
+  height: 100% !important;
+  min-height: 0 !important;
+  grid-template-columns: 17px 32px minmax(0, 1fr) !important;
+  gap: 7px !important;
+  padding: 3px 8px !important;
+  border-radius: 9px !important;
+}
+
+.draftAssetRound {
+  min-width: 29px !important;
+  height: 19px !important;
+  font-size: 9px !important;
+}
+
+.draftAssetText strong {
+  font-size: 9.6px !important;
+  line-height: 1.02 !important;
+}
+
+.draftAssetText small {
+  font-size: 7px !important;
+  line-height: 1 !important;
+}
+
+.newsEmpty {
+  height: calc(100% - 29px) !important;
+  min-height: 0 !important;
+  padding: 9px 14px !important;
+  justify-content: flex-start !important;
+}
+
+@media (max-height: 820px) {
+  .dashboard {
+    grid-template-rows: 28px 66px minmax(170px, 1.08fr) minmax(145px, 0.94fr) minmax(124px, 0.78fr) !important;
+    row-gap: 6px !important;
+    padding: 6px 16px 7px !important;
+  }
+  .topBar { height: 28px !important; min-height: 28px !important; }
+  .teamBanner { height: 66px !important; min-height: 66px !important; }
+  .panelHeading { height: 28px !important; min-height: 28px !important; }
+  .gameList,
+  .recentList,
+  .metricList,
+  .playerStrip,
+  .draftAssetList,
+  .newsEmpty { height: calc(100% - 28px) !important; }
+  .gameRow,
+  .recentRow,
+  .standingRow { height: 21px !important; min-height: 21px !important; }
+  .playerPortrait,
+  .middleGrid .playerPortrait { width: 74px !important; height: 76px !important; }
+  .playerCardMeta,
+  .middleGrid .playerCardMeta { height: 28px !important; min-height: 28px !important; }
+}
+/* V14.15 TEAM HUB FULL VIEWPORT FIT END */
+
+
+/* TEAM HUB CONTENT FILL + ROTATION MANUAL CONTROLS PASS
+   Visual-only:
+   - distribute the three top-panel rows through the available card height
+   - slightly strengthen type so the panels feel intentionally filled
+   - expose Team Hub Starting Five / Bench portrait + OVR/POT ring tuning through
+     frontend/src/config/teamHubRotationLayout.js
+   No data, roster, simulation, standings, schedule, or trade logic is changed.
+*/
+
+/* Fill the available vertical space instead of leaving a dead strip under the rows. */
+.topGrid .gameList,
+.topGrid .metricList,
+.topGrid .standingsRows {
+  display: flex !important;
+  flex-direction: column !important;
+  min-height: 0 !important;
+}
+
+.topGrid .gameList,
+.topGrid .metricList {
+  height: calc(100% - 29px) !important;
+}
+
+.topGrid .standingsRows {
+  height: calc(100% - 51px) !important; /* 29px panel heading + 22px column heading */
+  padding-bottom: 5px !important;
+  box-sizing: border-box !important;
+}
+
+.topGrid .gameRow,
+.topGrid .metricList > div,
+.topGrid .standingRow {
+  flex: 1 1 0 !important;
+  height: auto !important;
+  min-height: 0 !important;
+}
+
+/* Slightly fuller typography while remaining safe on laptop widths/heights. */
+.topGrid .panelHeading h2 {
+  font-size: clamp(14px, 0.72vw, 15px) !important;
+}
+
+.topGrid .gameRow,
+.topGrid .standingRow {
+  font-size: clamp(10.5px, 0.56vw, 11.6px) !important;
+}
+
+.topGrid .gameRow strong,
+.topGrid .standingTeam {
+  font-weight: 620 !important;
+}
+
+.topGrid .metricList span {
+  font-size: clamp(10px, 0.52vw, 10.8px) !important;
+}
+
+.topGrid .metricList strong {
+  font-size: clamp(11px, 0.58vw, 12px) !important;
+  font-weight: 640 !important;
+}
+
+.topGrid .standingsHeader {
+  font-size: clamp(9px, 0.47vw, 9.8px) !important;
+}
+
+.topGrid .gameRow img,
+.topGrid .standingTeam img {
+  width: 21px !important;
+  height: 21px !important;
+}
+
+/* Manual Team Hub player-headshot controls.
+   Defaults exactly preserve the pre-patch final V14.15 dimensions (78 x 80). */
+.playerPortrait,
+.middleGrid .playerPortrait {
+  width: var(--team-hub-headshot-width, 78px) !important;
+  height: var(--team-hub-headshot-height, 80px) !important;
+  transform:
+    translateX(-50%)
+    translate(
+      var(--team-hub-headshot-x, 0px),
+      var(--team-hub-headshot-y, 0px)
+    ) !important;
+  transform-origin: bottom center !important;
+}
+
+/* Manual Team Hub OVR/POT ring controls.
+   Defaults exactly preserve the pre-patch final V14.15 placement/scale. */
+.playerRatingBadge,
+.middleGrid .playerRatingBadge {
+  top: calc(4px + var(--team-hub-ring-y, 0px)) !important;
+  left: calc(6px + var(--team-hub-ring-x, 0px)) !important;
+  transform: scale(var(--team-hub-ring-scale, 0.54)) !important;
+  transform-origin: top left !important;
+}
+
+@media (max-height: 820px) {
+  .topGrid .standingsRows {
+    height: calc(100% - 49px) !important; /* 27px compact heading + 22px table header */
+  }
+
+  .topGrid .gameRow,
+  .topGrid .standingRow {
+    font-size: 10.4px !important;
+  }
+
+  .topGrid .metricList span {
+    font-size: 9.8px !important;
+  }
+
+  .topGrid .metricList strong {
+    font-size: 10.8px !important;
+  }
+}
+/* TEAM HUB CONTENT FILL + ROTATION MANUAL CONTROLS END */
+
+
+/* TEAM HUB PLAYER SOURCE OVERRIDE + DRAFT ASSET WATERMARK PASS
+   Visual-only:
+   - allows per-player portrait scale/offset exceptions for differently cropped source images
+   - removes the redundant orange 1st/2nd Draft Assets badge
+   - adds the pick's original-team logo as a subtle, manually tunable watermark
+   No draft ownership, pick value, trade, roster, simulation, or save logic is changed.
+*/
+
+.playerPortrait,
+.middleGrid .playerPortrait {
+  transform:
+    translateX(-50%)
+    translate(
+      var(--team-hub-headshot-x, 0px),
+      var(--team-hub-headshot-y, 0px)
+    )
+    scale(var(--team-hub-headshot-scale, 1)) !important;
+  transform-origin: bottom center !important;
+}
+
+.draftAssetRow {
+  position: relative !important;
+  grid-template-columns: 17px minmax(0, 1fr) !important;
+  overflow: hidden !important;
+  isolation: isolate;
+}
+
+.draftAssetRound {
+  display: none !important;
+}
+
+.draftAssetNumber,
+.draftAssetText {
+  position: relative;
+  z-index: 2;
+}
+
+
+.draftAssetLogo {
+  position: absolute;
+  z-index: 1;
+  right: 8px;
+  top: 50%;
+  width: var(--team-hub-draft-logo-size, 64px);
+  height: var(--team-hub-draft-logo-size, 64px);
+  object-fit: contain;
+  object-position: center;
+  opacity: var(--team-hub-draft-logo-opacity, 0.055);
+  transform:
+    translate(
+      var(--team-hub-draft-logo-x, 0px),
+      calc(-50% + var(--team-hub-draft-logo-y, 0px))
+    )
+    rotate(var(--team-hub-draft-logo-rotation, -8deg))
+    scale(var(--team-hub-draft-logo-scale, 1));
+  transform-origin: center;
+  filter: saturate(0.75) brightness(0.95);
+  pointer-events: none;
+  user-select: none;
+}
+
+/* TEAM HUB PLAYER SOURCE OVERRIDE + DRAFT ASSET WATERMARK END */
+
+/* TEAM HUB MULTI-DRAFT-LOGO + STARTING-FIVE TEAM WATERMARK PASS START
+   Visual-only. Draft ownership/trade semantics and rotation/gameplay are unchanged. */
+
+.playerTeamWatermark {
+  position: absolute;
+  z-index: 0;
+  left: 50%;
+  top: 50%;
+  width: 112px;
+  height: 112px;
+  object-fit: contain;
+  object-position: center;
+  opacity: var(--team-hub-player-logo-opacity, 0.06);
+  transform:
+    translate(-50%, -50%)
+    translate(
+      var(--team-hub-player-logo-x, 0px),
+      var(--team-hub-player-logo-y, 0px)
+    )
+    scale(var(--team-hub-player-logo-scale, 1));
+  transform-origin: center;
+  filter: saturate(0.72) brightness(0.78);
+  pointer-events: none;
+  user-select: none;
+}
+
+.playerPortrait,
+.middleGrid .playerPortrait {
+  z-index: 2 !important;
+}
+
+.draftAssetLogoGroup {
+  position: absolute;
+  z-index: 1;
+  right: 8px;
+  top: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  opacity: var(--team-hub-draft-logo-opacity, 0.055);
+  transform:
+    translate(
+      var(--team-hub-draft-logo-x, 0px),
+      calc(-50% + var(--team-hub-draft-logo-y, 0px))
+    )
+    rotate(var(--team-hub-draft-logo-rotation, -8deg))
+    scale(var(--team-hub-draft-logo-scale, 1));
+  transform-origin: right center;
+  pointer-events: none;
+  user-select: none;
+}
+
+.draftAssetLogoGroup .draftAssetLogo {
+  position: relative !important;
+  inset: auto !important;
+  flex: 0 0 auto;
+  width: var(--team-hub-draft-logo-size, 64px) !important;
+  height: var(--team-hub-draft-logo-size, 64px) !important;
+  object-fit: contain;
+  object-position: center;
+  opacity: 1 !important;
+  transform: none !important;
+  filter: saturate(0.75) brightness(0.95);
+}
+
+.draftAssetLogoGroupMulti {
+  max-width: 52%;
+}
+
+/* TEAM HUB MULTI-DRAFT-LOGO + STARTING-FIVE TEAM WATERMARK PASS END */
+
+/* TEAM HUB PANEL COLUMN ALIGNMENT v5
+   Visual-only:
+   - aligns the Draft Assets / League News divider with
+     the Starting Five / Recent Games divider
+   - preserves all player, logo, draft-pick, manual tuning and gameplay logic
+*/
+.middleGrid,
+.bottomGrid {
+  grid-template-columns: minmax(0, 1.56fr) minmax(320px, 0.88fr) !important;
+}
+
+/* Keep the same vertical divider on compact laptop-height layouts too. */
+@media (max-height: 900px) and (min-width: 900px) {
+  .middleGrid,
+  .bottomGrid {
+    grid-template-columns: minmax(0, 1.56fr) minmax(320px, 0.88fr) !important;
+  }
+}
+
+/* TEAM HUB PANEL COLUMN ALIGNMENT v5 END */
+/* TEAM HUB TOP ROW ALIGNMENT v6
+   Visual-only desktop column redistribution.
+
+   Goal:
+   - move Team Overview slightly left
+   - widen Standings toward the left
+   - bring the Team Overview / Standings divider into line with the
+     Starting Five / Recent Games and Draft Assets / League News divider
+
+   Existing <=1180px responsive stacking remains authoritative.
+*/
+@media (min-width: 1181px) {
+  .topGrid {
+    grid-template-columns:
+      minmax(0, 0.94fr)
+      minmax(290px, 0.88fr)
+      minmax(340px, 1.04fr) !important;
+  }
+}
+
+/* TEAM HUB TOP ROW ALIGNMENT v6 END */
+
+/* TEAM HUB EXACT RIGHT-COLUMN ALIGNMENT v7
+   Desktop visual-only polish.
+
+   One shared right-column width now drives:
+   - Standings
+   - Recent Games
+   - League News
+
+   This makes their left edges mathematically identical instead of relying
+   on three slightly different fractional grid calculations.
+
+   The two left-side top panels split the remaining room with Team Overview
+   receiving a tiny bit more space, shifting it slightly left as requested.
+*/
+@media (min-width: 1181px) {
+  .topGrid,
+  .middleGrid,
+  .bottomGrid {
+    --team-hub-right-column-width: 37%;
+    --team-hub-shared-panel-gap: 10px;
+    gap: var(--team-hub-shared-panel-gap) !important;
+  }
+
+  .middleGrid,
+  .bottomGrid {
+    grid-template-columns:
+      minmax(0, 1fr)
+      minmax(320px, var(--team-hub-right-column-width)) !important;
+  }
+
+  .topGrid {
+    grid-template-columns:
+      minmax(0, 0.96fr)
+      minmax(290px, 1.04fr)
+      minmax(340px, var(--team-hub-right-column-width)) !important;
+  }
+}
+
+/* TEAM HUB EXACT RIGHT-COLUMN ALIGNMENT v7 END */
+
+/* TEAM HUB STANDINGS SCROLL + CONFERENCE SWITCH v8
+   Visual-only standings polish:
+   - full conference is available inside the existing card
+   - slim muted-orange scrollbar
+   - tiny conference toggle
+*/
+.standingsHeadingActions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.conferenceSwitchButton {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 49px;
+  height: 20px;
+  padding: 0 7px !important;
+  border: 1px solid rgba(249, 115, 22, 0.34) !important;
+  border-radius: 999px !important;
+  background: rgba(249, 115, 22, 0.075) !important;
+  color: rgba(255, 203, 151, 0.92) !important;
+  font-size: 8px !important;
+  line-height: 1 !important;
+  font-weight: 850 !important;
+  letter-spacing: 0.07em !important;
+  text-transform: uppercase;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
+}
+
+.conferenceSwitchButton b {
+  color: #f97316;
+  font-size: 9px;
+  line-height: 1;
+  font-weight: 900;
+}
+
+.conferenceSwitchButton:hover:not(:disabled) {
+  background: rgba(249, 115, 22, 0.13) !important;
+  border-color: rgba(249, 115, 22, 0.55) !important;
+  color: #fff1e6 !important;
+}
+
+.conferenceSwitchButton:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+
+.topGrid .standingsRows {
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(249, 115, 22, 0.82) rgba(255, 255, 255, 0.035);
+  padding-right: 3px !important;
+}
+
+.topGrid .standingsRows .standingRow {
+  flex: 0 0 34px !important;
+  min-height: 34px !important;
+  height: 34px !important;
+}
+
+.topGrid .standingsRows::-webkit-scrollbar {
+  width: 5px;
+}
+
+.topGrid .standingsRows::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.025);
+  border-radius: 999px;
+}
+
+.topGrid .standingsRows::-webkit-scrollbar-thumb {
+  background: linear-gradient(
+    180deg,
+    rgba(251, 146, 60, 0.92),
+    rgba(234, 88, 12, 0.88)
+  );
+  border-radius: 999px;
+}
+
+.topGrid .standingsRows::-webkit-scrollbar-thumb:hover {
+  background: rgba(249, 115, 22, 0.98);
+}
+
+@media (max-height: 820px) {
+  .topGrid .standingsRows .standingRow {
+    flex-basis: 30px !important;
+    min-height: 30px !important;
+    height: 30px !important;
+  }
+
+  .conferenceSwitchButton {
+    height: 18px;
+    min-width: 45px;
+    padding: 0 6px !important;
+    font-size: 7.5px !important;
+  }
+}
+
+/* TEAM HUB STANDINGS SCROLL + CONFERENCE SWITCH v8 END */

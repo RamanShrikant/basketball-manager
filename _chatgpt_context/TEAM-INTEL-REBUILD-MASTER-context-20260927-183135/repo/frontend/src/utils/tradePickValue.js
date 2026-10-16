@@ -1,0 +1,2056 @@
+import LZString from "lz-string";
+import { computeTeamRatings } from "../api/teamRatings.js";
+import {
+  buildSmartRotation,
+  calculateTeamPotentialRating,
+} from "./ensureGameplans.js";
+import { getScheduleStructureFingerprint, readScheduleFromStorage } from "./scheduleStorage.js";
+
+const RESULT_V3_INDEX_KEY = "bm_results_index_v3";
+const RESULT_V3_PREFIX = "bm_result_v3_";
+
+const CPU_INCOMING_PICK_VALUE_MULT = 1.06;
+const CPU_OUTGOING_PICK_VALUE_MULT = 1.125;
+
+const YEAR_BLEND_BY_OFFSET = [
+  // 2025-26 starts with 2026 draft picks. Offset 0 means the current draft class.
+  // Current-year picks should mostly follow Power Ranking order. Future picks slowly
+  // shift toward POT / long-term outlook without creating hard lottery cliffs.
+  { power: 1.0, pot: 0.0, certainty: 1.0 },
+  { power: 0.82, pot: 0.18, certainty: 0.985 },
+  { power: 0.66, pot: 0.34, certainty: 0.97 },
+  { power: 0.50, pot: 0.50, certainty: 0.955 },
+  { power: 0.36, pot: 0.64, certainty: 0.94 },
+  { power: 0.24, pot: 0.76, certainty: 0.925 },
+  { power: 0.14, pot: 0.86, certainty: 0.91 },
+];
+
+// Rank 1 is the best team / lowest-value pick. Rank 30 is the worst team / highest-value pick.
+// These explicit tables keep every single Power Ranking and POT rank from carrying the same value.
+const CURRENT_POWER_FIRST_VALUE_BY_RANK = {
+  1: 0.35, 2: 0.37, 3: 0.39, 4: 0.42, 5: 0.45,
+  6: 0.49, 7: 0.53, 8: 0.58, 9: 0.64, 10: 0.71,
+  11: 0.79, 12: 0.88, 13: 0.98, 14: 1.09, 15: 1.21,
+  16: 1.34, 17: 1.47, 18: 1.6, 19: 1.72, 20: 1.84,
+  21: 1.95, 22: 2.05, 23: 2.15, 24: 2.24, 25: 2.34,
+  26: 2.45, 27: 2.57, 28: 2.69, 29: 2.82, 30: 2.96,
+};
+
+const CURRENT_POWER_SECOND_VALUE_BY_RANK = {
+  1: 0.025, 2: 0.027, 3: 0.03, 4: 0.033, 5: 0.036,
+  6: 0.04, 7: 0.044, 8: 0.049, 9: 0.055, 10: 0.062,
+  11: 0.07, 12: 0.079, 13: 0.089, 14: 0.1, 15: 0.112,
+  16: 0.125, 17: 0.139, 18: 0.153, 19: 0.166, 20: 0.178,
+  21: 0.189, 22: 0.199, 23: 0.208, 24: 0.216, 25: 0.224,
+  26: 0.232, 27: 0.24, 28: 0.248, 29: 0.256, 30: 0.265,
+};
+
+const FUTURE_POT_FIRST_VALUE_BY_RANK = {
+  1: 0.34, 2: 0.36, 3: 0.38, 4: 0.41, 5: 0.44,
+  6: 0.48, 7: 0.52, 8: 0.57, 9: 0.63, 10: 0.7,
+  11: 0.78, 12: 0.87, 13: 0.97, 14: 1.08, 15: 1.19,
+  16: 1.31, 17: 1.43, 18: 1.55, 19: 1.66, 20: 1.76,
+  21: 1.85, 22: 1.93, 23: 2.0, 24: 2.07, 25: 2.14,
+  26: 2.2, 27: 2.26, 28: 2.32, 29: 2.38, 30: 2.45,
+};
+
+const FUTURE_POT_SECOND_VALUE_BY_RANK = {
+  1: 0.024, 2: 0.026, 3: 0.028, 4: 0.031, 5: 0.034,
+  6: 0.038, 7: 0.042, 8: 0.047, 9: 0.053, 10: 0.06,
+  11: 0.068, 12: 0.077, 13: 0.087, 14: 0.098, 15: 0.11,
+  16: 0.122, 17: 0.135, 18: 0.148, 19: 0.16, 20: 0.171,
+  21: 0.181, 22: 0.19, 23: 0.198, 24: 0.205, 25: 0.212,
+  26: 0.218, 27: 0.224, 28: 0.23, 29: 0.236, 30: 0.242,
+};
+
+const FIRST_SLOT_VALUE = {
+  // These values are trade-score units. This scale intentionally makes firsts
+  // feel like real NBA trade capital: bad-team firsts can bridge starter-level
+  // gaps, mid firsts matter, and late firsts are more than tiny throw-ins.
+  1: 8.9, 2: 8.3, 3: 7.75, 4: 7.2, 5: 6.65,
+  6: 6.15, 7: 5.7, 8: 5.25, 9: 4.85, 10: 4.5,
+  11: 4.15, 12: 3.8, 13: 3.5, 14: 3.2, 15: 2.9,
+  16: 2.65, 17: 2.43, 18: 2.23, 19: 2.05, 20: 1.88,
+  21: 1.72, 22: 1.58, 23: 1.45, 24: 1.33, 25: 1.22,
+  26: 1.12, 27: 1.03, 28: 0.95, 29: 0.88, 30: 0.82,
+};
+
+const SECOND_SLOT_VALUE = {
+  // Seconds are still sweeteners, but early seconds should be real assets.
+  31: 0.68, 32: 0.64, 33: 0.6, 34: 0.55, 35: 0.51,
+  36: 0.47, 37: 0.43, 38: 0.39, 39: 0.36, 40: 0.33,
+  41: 0.3, 42: 0.275, 43: 0.25, 44: 0.228, 45: 0.208,
+  46: 0.19, 47: 0.173, 48: 0.157, 49: 0.143, 50: 0.13,
+  51: 0.118, 52: 0.107, 53: 0.097, 54: 0.088, 55: 0.08,
+  56: 0.073, 57: 0.066, 58: 0.06, 59: 0.054, 60: 0.049,
+};
+
+const TRADE_PICK_EPS = 0.005;
+const FREE_SWAP_OPTION_VALUE = 0.04;
+const TRADE_PICK_BREAKDOWN_KEY = "bm_trade_pick_breakdown_v1";
+
+const round4 = (value) => Math.round(Number(value || 0) * 10000) / 10000;
+const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+
+function toNum(value, fallback = 0) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function normalizeName(value = "") {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "")
+    .trim();
+}
+
+function displayTeamName(value = "") {
+  return String(value || "").trim() || "Unknown team";
+}
+
+function sameTeamName(a = "", b = "") {
+  return normalizeName(a) === normalizeName(b);
+}
+
+function isSwapTradeItem(item = {}) {
+  const rule = item?.tradeRule || item?.pick?.tradeRule || {};
+  return item?.type === "pick" && (String(rule.action || "").toLowerCase() === "swap" || Boolean(rule.swapId));
+}
+
+function swapTeamPairMatches(item = {}, userTeamName = "", cpuTeamName = "") {
+  if (!isSwapTradeItem(item)) return true;
+  if (!userTeamName || !cpuTeamName) return true;
+
+  const rule = item?.tradeRule || item?.pick?.tradeRule || {};
+  const from = rule.fromTeamName || rule.fromTeam || rule.sourceOwnerTeam || "";
+  const to = rule.toTeamName || rule.toTeam || rule.swapRightHolder || rule.targetOwnerTeam || "";
+
+  // Older saved swap items may not have explicit from/to fields. Do not break
+  // those unless the fields prove the swap is stale.
+  if (!from || !to) return true;
+
+  const direct = sameTeamName(from, userTeamName) && sameTeamName(to, cpuTeamName);
+  const reverse = sameTeamName(from, cpuTeamName) && sameTeamName(to, userTeamName);
+  return direct || reverse;
+}
+
+function describeSwapTeamPair(item = {}) {
+  const rule = item?.tradeRule || item?.pick?.tradeRule || {};
+  const from = displayTeamName(rule.fromTeamName || rule.fromTeam || "one side");
+  const to = displayTeamName(rule.toTeamName || rule.toTeam || rule.swapRightHolder || "the other side");
+  const year = getPickYear(rule.sourcePick || item?.pick || {}, {});
+  const round = getPickRound(rule.sourcePick || item?.pick || {});
+  return `${year} ${formatRound(round)} swap between ${from} and ${to}`;
+}
+
+function getTeamName(team = {}) {
+  return team?.name || team?.teamName || team?.team || "";
+}
+
+function getAllTeamsFromLeague(leagueData) {
+  if (!leagueData) return [];
+  if (Array.isArray(leagueData.teams)) return leagueData.teams;
+  if (leagueData.conferences) return Object.values(leagueData.conferences).flat();
+  return [];
+}
+
+function getTeamByName(leagueData, teamName = "") {
+  const key = normalizeName(teamName);
+  if (!key) return null;
+  return getAllTeamsFromLeague(leagueData).find((team) => sameTeamName(getTeamName(team), teamName)) || null;
+}
+
+function getPlayerIdentity(player = {}) {
+  const id = player?.id ?? player?.playerId ?? player?.player_id ?? player?.uuid ?? null;
+  if (id !== null && id !== undefined && String(id).trim() !== "") return `id:${String(id)}`;
+  return `name:${normalizeName(player?.name || player?.player || "")}`;
+}
+
+function samePlayer(a = {}, b = {}) {
+  const aid = getPlayerIdentity(a);
+  const bid = getPlayerIdentity(b);
+  return Boolean(aid && bid && aid === bid);
+}
+
+function clonePlain(value) {
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    return { ...(value || {}) };
+  }
+}
+
+function getTradePlayers(items = []) {
+  return (items || [])
+    .filter((item) => item?.type === "player" && item.player)
+    .map((item) => item.player);
+}
+
+function buildRosterAfterTrade(team, incomingPlayers = [], outgoingPlayers = [], newTeamName = "") {
+  const roster = (Array.isArray(team?.players) ? team.players : [])
+    .filter((player) => !outgoingPlayers.some((outgoing) => samePlayer(player, outgoing)))
+    .map(clonePlain);
+
+  for (const incoming of incomingPlayers || []) {
+    if (roster.some((row) => samePlayer(row, incoming))) continue;
+    const moved = clonePlain(incoming);
+    if (moved.teamName !== undefined) moved.teamName = newTeamName;
+    if (moved.currentTeam !== undefined) moved.currentTeam = newTeamName;
+    if (typeof moved.team === "string") moved.team = newTeamName;
+    roster.push(moved);
+  }
+
+  return roster;
+}
+
+function buildPostTradePickProjection(
+  leagueData,
+  userItems = [],
+  cpuItems = [],
+  userTeamName = "",
+  cpuTeamName = "",
+  projectedRatingSnapshotsByTeam = null
+) {
+  const userTeam = getTeamByName(leagueData, userTeamName);
+  const cpuTeam = getTeamByName(leagueData, cpuTeamName);
+  const userOutgoingPlayers = getTradePlayers(userItems);
+  const cpuOutgoingPlayers = getTradePlayers(cpuItems);
+
+  if (!userOutgoingPlayers.length && !cpuOutgoingPlayers.length) return null;
+
+  const adjustedRostersByTeam = new Map();
+
+  if (userTeam && userTeamName) {
+    adjustedRostersByTeam.set(
+      normalizeName(userTeamName),
+      buildRosterAfterTrade(userTeam, cpuOutgoingPlayers, userOutgoingPlayers, userTeamName)
+    );
+  }
+
+  if (cpuTeam && cpuTeamName) {
+    adjustedRostersByTeam.set(
+      normalizeName(cpuTeamName),
+      buildRosterAfterTrade(cpuTeam, userOutgoingPlayers, cpuOutgoingPlayers, cpuTeamName)
+    );
+  }
+
+  return adjustedRostersByTeam.size
+    ? {
+        adjustedRostersByTeam,
+        // Optional exact rating snapshots supplied by the caller for rosters it
+        // has already rated. These are semantic equivalents of
+        // calculatePickTeamRatingSnapshot and only avoid duplicate work.
+        projectedRatingSnapshotsByTeam:
+          projectedRatingSnapshotsByTeam && typeof projectedRatingSnapshotsByTeam.get === "function"
+            ? projectedRatingSnapshotsByTeam
+            : null,
+      }
+    : null;
+}
+
+function parseMaybeCompressed(raw, fallback = null) {
+  if (!raw) return fallback;
+
+  try {
+    if (raw.startsWith("lz:")) {
+      const decompressed = LZString.decompressFromUTF16(raw.slice(3));
+      return decompressed ? JSON.parse(decompressed) : fallback;
+    }
+  } catch {}
+
+  try {
+    return JSON.parse(raw);
+  } catch {}
+
+  try {
+    const decompressed = LZString.decompressFromUTF16(raw);
+    return decompressed ? JSON.parse(decompressed) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function safeLocalStorageGet(key) {
+  try {
+    if (typeof localStorage === "undefined") return null;
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function resultV3Key(gameId) {
+  return `${RESULT_V3_PREFIX}${gameId}`;
+}
+
+function loadSchedule() {
+  return readScheduleFromStorage();
+}
+
+function loadResultsV3() {
+  const ids = parseMaybeCompressed(safeLocalStorageGet(RESULT_V3_INDEX_KEY), []) || [];
+  const out = {};
+
+  for (const id of ids) {
+    const result = parseMaybeCompressed(safeLocalStorageGet(resultV3Key(id)), null);
+    if (result) out[String(id)] = result;
+  }
+
+  return out;
+}
+
+function getAttachedTradeRecords(leagueData = {}) {
+  const cpuRecords = leagueData?.__cpuTradeRecords;
+  if (cpuRecords && typeof cpuRecords === "object") return cpuRecords;
+
+  const offseasonRecords = leagueData?.__offseasonTradeRecords;
+  return offseasonRecords && typeof offseasonRecords === "object" && Object.keys(offseasonRecords).length
+    ? offseasonRecords
+    : null;
+}
+
+function attachedTradeRecordsSignature(records = null) {
+  if (!records || typeof records !== "object") return "";
+  if (attachedRecordSignatureCache.has(records)) {
+    return attachedRecordSignatureCache.get(records);
+  }
+
+  const signature = Object.entries(records)
+    .map(([name, row]) =>
+      `${normalizeName(name)}:${toNum(row?.w, 0)}:${toNum(row?.l, 0)}:${toNum(row?.gp, 0)}:${toNum(row?.pf, 0)}:${toNum(row?.pa, 0)}`
+    )
+    .sort()
+    .join("|");
+  attachedRecordSignatureCache.set(records, signature);
+  return signature;
+}
+
+function buildRecordMap(leagueData = null) {
+  const attached = getAttachedTradeRecords(leagueData);
+  if (attached) return attached;
+  const schedule = loadSchedule();
+  const results = loadResultsV3();
+  const map = {};
+
+  const ensure = (teamName) => {
+    if (!teamName) return null;
+    if (!map[teamName]) map[teamName] = { w: 0, l: 0, gp: 0, pf: 0, pa: 0 };
+    return map[teamName];
+  };
+
+  for (const games of Object.values(schedule || {})) {
+    for (const game of games || []) {
+      if (!game?.id) continue;
+      const result = results?.[String(game.id)];
+      if (!game.played && !result) continue;
+
+      const homePts = toNum(result?.totals?.home ?? result?.winner?.home, NaN);
+      const awayPts = toNum(result?.totals?.away ?? result?.winner?.away, NaN);
+      if (!Number.isFinite(homePts) || !Number.isFinite(awayPts) || homePts === awayPts) continue;
+
+      const home = ensure(game.home);
+      const away = ensure(game.away);
+      if (!home || !away) continue;
+
+      home.gp += 1;
+      away.gp += 1;
+      home.pf += homePts;
+      home.pa += awayPts;
+      away.pf += awayPts;
+      away.pa += homePts;
+
+      if (homePts > awayPts) {
+        home.w += 1;
+        away.l += 1;
+      } else {
+        away.w += 1;
+        home.l += 1;
+      }
+    }
+  }
+
+  return map;
+}
+
+function playerRatingSignature(player = {}) {
+  return [
+    player?.id ?? player?.playerId ?? player?.player_id ?? player?.uuid ?? "",
+    normalizeName(player?.name || player?.player || ""),
+    player?.pos || "",
+    player?.secondaryPos || "",
+    toNum(player?.age, 0),
+    toNum(player?.overall ?? player?.ovr, 0),
+    toNum(player?.potential ?? player?.pot, 0),
+    toNum(player?.offRating ?? player?.off ?? player?.overall ?? player?.ovr, 0),
+    toNum(player?.defRating ?? player?.def ?? player?.overall ?? player?.ovr, 0),
+    toNum(player?.stamina ?? player?.sta, 0),
+  ].join("|");
+}
+
+function rosterRatingSignature(players = []) {
+  return (players || [])
+    .map(playerRatingSignature)
+    .sort()
+    .join("||");
+}
+
+function parseSavedGameplan(raw) {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function namesSet(players = []) {
+  return new Set((players || []).map((player) => player?.name || player?.player || "").filter(Boolean));
+}
+
+function setMatches(a, b) {
+  if (a.size !== b.size) return false;
+  for (const value of a) if (!b.has(value)) return false;
+  return true;
+}
+
+function getCachedAutoMinutes(teamName, players = []) {
+  const saved = parseSavedGameplan(safeLocalStorageGet(`gameplan_${teamName}`));
+  if (!saved || saved.manualLocked || saved.userEdited || saved.source === "coach_gameplan") return null;
+  if (!saved.minutes || typeof saved.minutes !== "object") return null;
+
+  const liveNames = namesSet(players);
+  const minuteNames = new Set(Object.keys(saved.minutes || {}).filter(Boolean));
+  if (!setMatches(liveNames, minuteNames)) return null;
+
+  for (const name of minuteNames) {
+    if (!Number.isFinite(Number(saved.minutes[name]))) return null;
+  }
+
+  return saved.minutes;
+}
+
+const rankCache = new Map();
+const liveBaseRowsCache = new Map();
+const pickTeamRatingCache = new Map();
+const attachedRecordSignatureCache = new WeakMap();
+
+let activePickBreakdownRow = null;
+let pickBreakdownCallCounter = 0;
+
+function pickNow() {
+  try {
+    if (typeof performance !== "undefined" && typeof performance.now === "function") return performance.now();
+  } catch {}
+  return Date.now();
+}
+
+function isTradePickBreakdownEnabled() {
+  try {
+    if (typeof window !== "undefined" && window.__TF_PICK_BREAKDOWN_ENABLED === true) return true;
+  } catch {}
+  return safeLocalStorageGet(TRADE_PICK_BREAKDOWN_KEY) === "1";
+}
+
+function getPickBreakdownStore() {
+  if (typeof window === "undefined") return null;
+  if (!window.__TF_PICK_BREAKDOWN || !Array.isArray(window.__TF_PICK_BREAKDOWN.rows)) {
+    window.__TF_PICK_BREAKDOWN = {
+      createdAt: new Date().toISOString(),
+      rows: [],
+      totals: {
+        calls: 0,
+        cacheHits: 0,
+        cacheMisses: 0,
+      },
+    };
+  }
+  return window.__TF_PICK_BREAKDOWN;
+}
+
+function addPickMetric(row, key, value) {
+  if (!row || !key) return;
+  const n = Number(value || 0);
+  if (!Number.isFinite(n)) return;
+  row.metrics[key] = round4(Number(row.metrics[key] || 0) + n);
+}
+
+function incPickMetric(row, key, amount = 1) {
+  if (!row || !key) return;
+  row.metrics[key] = Number(row.metrics[key] || 0) + amount;
+}
+
+function measurePick(row, key, fn) {
+  const start = pickNow();
+  try {
+    return fn();
+  } finally {
+    addPickMetric(row, key, pickNow() - start);
+  }
+}
+
+function createPickBreakdownRow({ userItems = [], cpuItems = [], userTeamName = "", cpuTeamName = "" } = {}) {
+  if (!isTradePickBreakdownEnabled()) return null;
+  pickBreakdownCallCounter += 1;
+  return {
+    callIndex: pickBreakdownCallCounter,
+    userTeam: userTeamName,
+    cpuTeam: cpuTeamName,
+    userItems: {
+      assetCount: userItems.length,
+      playerCount: userItems.filter((item) => item?.type === "player").length,
+      pickCount: userItems.filter((item) => item?.type === "pick").length,
+    },
+    cpuItems: {
+      assetCount: cpuItems.length,
+      playerCount: cpuItems.filter((item) => item?.type === "player").length,
+      pickCount: cpuItems.filter((item) => item?.type === "pick").length,
+    },
+    metrics: {},
+  };
+}
+
+function finalizePickBreakdownRow(row) {
+  if (!row) return;
+  const store = getPickBreakdownStore();
+  if (!store) return;
+  store.rows.push(row);
+  while (store.rows.length > 500) store.rows.shift();
+  store.totals.calls = Number(store.totals.calls || 0) + 1;
+  for (const [key, value] of Object.entries(row.metrics || {})) {
+    if (key.toLowerCase().includes("cachehits")) store.totals.cacheHits = Number(store.totals.cacheHits || 0) + Number(value || 0);
+    if (key.toLowerCase().includes("cachemisses")) store.totals.cacheMisses = Number(store.totals.cacheMisses || 0) + Number(value || 0);
+    store.totals[key] = round4(Number(store.totals[key] || 0) + Number(value || 0));
+  }
+}
+
+function touchPickCache(cache, key, value, maxSize = 12) {
+  if (!key) return value;
+  if (cache.has(key)) cache.delete(key);
+  cache.set(key, value);
+  while (cache.size > maxSize) {
+    const oldest = cache.keys().next().value;
+    cache.delete(oldest);
+  }
+  return value;
+}
+
+function getPickCache(cache, key) {
+  if (!key || !cache.has(key)) return null;
+  const value = cache.get(key);
+  cache.delete(key);
+  cache.set(key, value);
+  return value;
+}
+
+function getPickStorageSignature(leagueData = {}) {
+  const attachedRecords = getAttachedTradeRecords(leagueData);
+  const attachedRecordPart = attachedTradeRecordsSignature(attachedRecords);
+  const tradeContext = leagueData?.__offseasonTradeContext || {};
+  const storagePart = attachedRecords
+    ? "attached-records"
+    : [
+        safeLocalStorageGet(RESULT_V3_INDEX_KEY) || "",
+        getScheduleStructureFingerprint(readScheduleFromStorage()),
+      ].join("::");
+
+  return [
+    storagePart,
+    attachedRecordPart,
+    tradeContext?.seasonYear || "",
+    tradeContext?.stage || "",
+    tradeContext?.currentPickIndex || 0,
+  ].join("::");
+}
+
+function getLiveRosterRankSignature(teams = []) {
+  return (teams || [])
+    .map((team) => `${normalizeName(getTeamName(team))}:live:${rosterRatingSignature(team?.players || [])}`)
+    .sort()
+    .join("##");
+}
+
+function getProjectionRosterSignature(projection = null) {
+  const map = projection?.adjustedRostersByTeam;
+  if (!map || typeof map.entries !== "function") return "";
+  const rows = [];
+  for (const [teamKey, players] of map.entries()) {
+    rows.push(`${normalizeName(teamKey)}:projected:${rosterRatingSignature(players || [])}`);
+  }
+  return rows.sort().join("##");
+}
+
+function getProjectedPlayersForTeam(team = {}, projection = null) {
+  const key = normalizeName(getTeamName(team));
+  const adjusted = projection?.adjustedRostersByTeam?.get?.(key);
+  return Array.isArray(adjusted) ? adjusted : null;
+}
+
+function calculatePowerOverall(team = {}) {
+  const players = Array.isArray(team?.players) ? team.players : [];
+  const valid = players.filter((p) => p && (p.name || p.player) && Number.isFinite(Number(p.overall ?? p.ovr)));
+  if (!valid.length) return { exactOverall: 0, exactOff: 0, exactDef: 0 };
+
+  let minutes = getCachedAutoMinutes(getTeamName(team), valid);
+  if (!minutes) {
+    try {
+      const built = buildSmartRotation(valid);
+      minutes = built?.obj && typeof built.obj === "object" ? built.obj : {};
+    } catch {
+      minutes = {};
+    }
+  }
+
+  const ratings = computeTeamRatings({ players: valid }, minutes);
+  return {
+    exactOverall: round4(ratings?.exactOverall ?? ratings?.overall ?? 0),
+    exactOff: round4(ratings?.exactOff ?? ratings?.off ?? 0),
+    exactDef: round4(ratings?.exactDef ?? ratings?.def ?? 0),
+  };
+}
+
+function calculatePot(team = {}) {
+  const players = Array.isArray(team?.players) ? team.players : [];
+  const valid = players.filter((p) => p && (p.name || p.player) && Number.isFinite(Number(p.overall ?? p.ovr)));
+  if (!valid.length) return 0;
+
+  try {
+    const ratings = calculateTeamPotentialRating(valid);
+    return round4(ratings?.exactPot ?? ratings?.pot ?? 0);
+  } catch {
+    return 0;
+  }
+}
+
+function calculatePickTeamRatingSnapshot(team = {}, playersOverride = null) {
+  const diag = activePickBreakdownRow;
+  const totalStart = pickNow();
+  try {
+    const players = Array.isArray(playersOverride)
+      ? playersOverride
+      : Array.isArray(team?.players)
+        ? team.players
+        : [];
+    const valid = players.filter((p) => p && (p.name || p.player) && Number.isFinite(Number(p.overall ?? p.ovr)));
+    if (!valid.length) return { exactOverall: 0, offDef: 0, exactPot: 0 };
+
+    const key = measurePick(diag, "pickTeamSnapshotSignatureMs", () => `${normalizeName(getTeamName(team))}:${rosterRatingSignature(valid)}`);
+    const cached = measurePick(diag, "pickTeamSnapshotCacheLookupMs", () => getPickCache(pickTeamRatingCache, key));
+    if (cached) {
+      incPickMetric(diag, "pickTeamSnapshotCacheHits");
+      return cached;
+    }
+    incPickMetric(diag, "pickTeamSnapshotCacheMisses");
+
+    const ratingTeam = { ...(team || {}), players };
+    const ratings = measurePick(diag, "pickTeamSnapshotPowerOverallMs", () => calculatePowerOverall(ratingTeam));
+    const exactPot = measurePick(diag, "pickTeamSnapshotPotMs", () => calculatePot(ratingTeam));
+    const snapshot = {
+      exactOverall: round4(ratings?.exactOverall ?? 0),
+      offDef: round4(Number(ratings?.exactOff || 0) + Number(ratings?.exactDef || 0)),
+      exactPot,
+    };
+
+    return touchPickCache(pickTeamRatingCache, key, snapshot, 900);
+  } finally {
+    addPickMetric(diag, "pickTeamSnapshotTotalMs", pickNow() - totalStart);
+  }
+}
+
+function buildLivePickBaseRows(leagueData, teams = getAllTeamsFromLeague(leagueData), liveSignature = "", storageSignature = "") {
+  const diag = activePickBreakdownRow;
+  const totalStart = pickNow();
+  try {
+    const rosterSignature = liveSignature || measurePick(diag, "liveBaseRowsRosterSignatureMs", () => getLiveRosterRankSignature(teams));
+    const storage = storageSignature || measurePick(diag, "liveBaseRowsStorageSignatureMs", () => getPickStorageSignature(leagueData));
+    const cacheKey = `${rosterSignature}::${storage}`;
+    const cached = measurePick(diag, "liveBaseRowsCacheLookupMs", () => getPickCache(liveBaseRowsCache, cacheKey));
+    if (cached) {
+      incPickMetric(diag, "liveBaseRowsCacheHits");
+      return cached;
+    }
+    incPickMetric(diag, "liveBaseRowsCacheMisses");
+
+    const records = measurePick(diag, "liveBaseRowsRecordMapMs", () => buildRecordMap(leagueData));
+    const baseRows = measurePick(diag, "liveBaseRowsMapMs", () => teams.map((team) => {
+      const name = getTeamName(team);
+      const ratings = calculatePickTeamRatingSnapshot(team);
+      const record = records?.[name] || { w: 0, l: 0, gp: 0, pf: 0, pa: 0 };
+      const gp = toNum(record.gp, 0);
+      const diff = toNum(record.pf, 0) - toNum(record.pa, 0);
+
+      return {
+        team,
+        name,
+        exactOverall: ratings.exactOverall,
+        offDef: ratings.offDef,
+        exactPot: ratings.exactPot,
+        postTradeProjected: false,
+        w: toNum(record.w, 0),
+        l: toNum(record.l, 0),
+        gp,
+        winPct: gp > 0 ? toNum(record.w, 0) / gp : 0,
+        pointDiff: gp > 0 ? diff / gp : 0,
+      };
+    }));
+
+    return touchPickCache(liveBaseRowsCache, cacheKey, baseRows, 8);
+  } finally {
+    addPickMetric(diag, "liveBaseRowsTotalMs", pickNow() - totalStart);
+  }
+}
+
+function buildPickRankContext(leagueData, projection = null, diagLabel = "") {
+  const diag = activePickBreakdownRow;
+  const prefix = diagLabel ? `${diagLabel}RankContext` : "rankContext";
+  const totalStart = pickNow();
+
+  try {
+    const teams = measurePick(diag, `${prefix}TeamsMs`, () => getAllTeamsFromLeague(leagueData));
+    const liveSignature = measurePick(diag, `${prefix}LiveSignatureMs`, () => getLiveRosterRankSignature(teams));
+    const storageSignature = measurePick(diag, `${prefix}StorageSignatureMs`, () => getPickStorageSignature(leagueData));
+    const projectionSignature = measurePick(diag, `${prefix}ProjectionSignatureMs`, () => getProjectionRosterSignature(projection));
+    const cacheKey = `${liveSignature}::${storageSignature}::${projectionSignature}`;
+    if (rankCache.has(cacheKey)) {
+      incPickMetric(diag, `${prefix}CacheHits`);
+      return rankCache.get(cacheKey);
+    }
+    incPickMetric(diag, `${prefix}CacheMisses`);
+
+    const liveBaseRows = measurePick(diag, `${prefix}LiveBaseRowsMs`, () => buildLivePickBaseRows(leagueData, teams, liveSignature, storageSignature));
+    const adjustedRostersByTeam = projection?.adjustedRostersByTeam;
+    const projectedRatingSnapshotsByTeam = projection?.projectedRatingSnapshotsByTeam;
+    const hasProjection = Boolean(adjustedRostersByTeam && typeof adjustedRostersByTeam.get === "function");
+
+    // Projection only changes the user team and the CPU team involved in this one
+    // proposal. Reuse the cached live rows for the other 28 teams instead of
+    // rebuilding every team's smart rotation and POT for every pick valuation.
+    const baseRows = measurePick(diag, `${prefix}ProjectionOverlayMs`, () => hasProjection
+      ? liveBaseRows.map((row) => {
+          const projectedPlayers = adjustedRostersByTeam.get(normalizeName(row.name));
+          if (!Array.isArray(projectedPlayers)) return row;
+
+          const precomputed = projectedRatingSnapshotsByTeam?.get?.(normalizeName(row.name));
+          const ratings = precomputed && typeof precomputed === "object"
+            ? {
+                exactOverall: precomputed.exactOverall,
+                offDef: precomputed.offDef,
+                // Preserve the pick engine's exact POT path/cache semantics.
+                exactPot: calculatePot({ ...(row.team || {}), players: projectedPlayers }),
+              }
+            : calculatePickTeamRatingSnapshot(row.team, projectedPlayers);
+          if (precomputed) incPickMetric(diag, `${prefix}ProjectedSnapshotReuseHits`);
+          return {
+            ...row,
+            exactOverall: ratings.exactOverall,
+            offDef: ratings.offDef,
+            exactPot: ratings.exactPot,
+            postTradeProjected: true,
+          };
+        })
+      : liveBaseRows);
+
+    const useRecordPowerRankings = baseRows.length > 0 && baseRows.every((row) => row.gp >= 20);
+
+    const powerRows = measurePick(diag, `${prefix}PowerRowsMs`, () => baseRows
+      .map((row) => ({
+        ...row,
+        recordScore: row.winPct * 100,
+        powerScore: useRecordPowerRankings ? row.exactOverall * 0.5 + row.winPct * 100 * 0.5 : row.exactOverall,
+        useRecordPowerRankings,
+      }))
+      .sort(
+        (a, b) =>
+          b.powerScore - a.powerScore ||
+          (useRecordPowerRankings ? b.winPct - a.winPct : 0) ||
+          b.exactOverall - a.exactOverall ||
+          b.offDef - a.offDef ||
+          b.pointDiff - a.pointDiff ||
+          b.w - a.w ||
+          String(a.name || "").localeCompare(String(b.name || ""))
+      )
+      .map((row, idx) => ({ ...row, powerRank: idx + 1 })));
+
+    const potRows = measurePick(diag, `${prefix}PotRowsMs`, () => [...baseRows]
+      .sort(
+        (a, b) =>
+          b.exactPot - a.exactPot ||
+          b.exactOverall - a.exactOverall ||
+          String(a.name || "").localeCompare(String(b.name || ""))
+      )
+      .map((row, idx) => ({ ...row, potRank: idx + 1 })));
+
+    const byTeam = measurePick(diag, `${prefix}ByTeamMs`, () => {
+      const map = new Map();
+      for (const row of powerRows) {
+        map.set(normalizeName(row.name), {
+          teamName: row.name,
+          powerRank: row.powerRank,
+          exactOverall: row.exactOverall,
+          useRecordPowerRankings,
+          postTradeProjected: Boolean(row.postTradeProjected),
+        });
+      }
+      for (const row of potRows) {
+        const key = normalizeName(row.name);
+        map.set(key, {
+          ...(map.get(key) || { teamName: row.name }),
+          potRank: row.potRank,
+          exactPot: row.exactPot,
+          postTradeProjected: Boolean(row.postTradeProjected || map.get(key)?.postTradeProjected),
+        });
+      }
+      return map;
+    });
+
+    const context = { byTeam, powerRows, potRows, useRecordPowerRankings, teamCount: teams.length || 30 };
+    rankCache.set(cacheKey, context);
+    while (rankCache.size > 12) rankCache.delete(rankCache.keys().next().value);
+    return context;
+  } finally {
+    addPickMetric(diag, `${prefix}TotalMs`, pickNow() - totalStart);
+  }
+}
+
+function getCurrentSeasonYear(leagueData = {}) {
+  const candidates = [
+    leagueData?.draftYear,
+    leagueData?.currentDraftYear,
+    leagueData?.seasonYear,
+    leagueData?.currentSeasonYear,
+  ]
+    .map(Number)
+    .filter((year) => Number.isFinite(year) && year >= 2020 && year <= 2100);
+
+  let current = candidates.length ? Math.max(...candidates) : 2026;
+
+  // The game begins in the 2025-26 season with 2026 picks available. Some saves
+  // may store only seasonStartYear = 2025, so use the earliest active draft asset
+  // as the current draft year when needed. After a season rolls, 2033 is added
+  // and the old draft year is removed, so this also follows the rolling window.
+  const activePickYears = (Array.isArray(leagueData?.draftPicks) ? leagueData.draftPicks : [])
+    .filter((row) => !["void", "deleted", "removed", "inactive", "forfeited"].includes(String(row?.status || "active").toLowerCase()))
+    .map((row) => Number(row?.year || row?.seasonYear || 0))
+    .filter((year) => Number.isFinite(year) && year >= 2020 && year <= 2100);
+  const minActivePickYear = activePickYears.length ? Math.min(...activePickYears) : 0;
+
+  if (minActivePickYear && current < minActivePickYear) current = minActivePickYear;
+
+  return current;
+}
+
+function getPickRound(pick = {}) {
+  const round = Number(pick.round || pick.rnd || pick.pickRound || 0);
+  if (round === 1 || round === 2) return round;
+  const pickNumber = Number(pick.pickNumber || pick.overallPick || pick.resolvedPickNumber || pick.pick || 0);
+  return pickNumber && pickNumber <= 30 ? 1 : 2;
+}
+
+function getPickNumber(pick = {}) {
+  const n = Number(pick.pickNumber || pick.overallPick || pick.resolvedPickNumber || pick.pick || 0);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+function getPickOriginalTeam(pick = {}) {
+  return String(
+    pick.originalTeam ||
+      pick.originalTeamName ||
+      pick.originalPickTeamName ||
+      pick.naturalLotteryTeamName ||
+      pick.team ||
+      pick.teamName ||
+      pick.fromTeam ||
+      ""
+  ).trim();
+}
+
+function getPickYear(pick = {}, leagueData = {}) {
+  const current = getCurrentSeasonYear(leagueData);
+  const year = Number(pick.year || pick.seasonYear || pick.season || current);
+  return Number.isFinite(year) && year >= 2020 ? year : current;
+}
+
+function getYearBlend(year, leagueData) {
+  const offset = clamp(Math.round(getPickYear({ year }, leagueData) - getCurrentSeasonYear(leagueData)), 0, YEAR_BLEND_BY_OFFSET.length - 1);
+  return { offset, ...YEAR_BLEND_BY_OFFSET[offset] };
+}
+
+function tableLookup(table, rank) {
+  const n = clamp(Math.round(Number(rank || 15)), 1, 30);
+  return Number(table[n] || table[15] || 0);
+}
+
+function slotValue(round, slot) {
+  const n = Math.round(Number(slot || 0));
+  if (Number(round) === 2) return Number(SECOND_SLOT_VALUE[clamp(n, 31, 60)] || 0.05);
+  return Number(FIRST_SLOT_VALUE[clamp(n, 1, 30)] || 0.35);
+}
+
+function getDraftTradeContext(leagueData = {}) {
+  const context = leagueData?.__offseasonTradeContext;
+  return context && typeof context === "object" ? context : null;
+}
+
+function prospectOverall(prospect = {}) {
+  return toNum(prospect?.overall ?? prospect?.ovr ?? prospect?.revealedOverall ?? prospect?.projectedOverall, 60);
+}
+
+function prospectPotential(prospect = {}) {
+  const overall = prospectOverall(prospect);
+  return Math.max(overall, toNum(prospect?.potential ?? prospect?.pot ?? prospect?.revealedPotential ?? prospect?.projectedPotential, overall));
+}
+
+function prospectDraftValue(prospect = {}) {
+  const overall = prospectOverall(prospect);
+  const potential = prospectPotential(prospect);
+  const age = clamp(toNum(prospect?.age, 20), 18, 24);
+  const readyBonus = Math.max(0, overall - 74) * 0.10;
+  const upsideBonus = Math.max(0, potential - overall) * 0.035;
+  const ageBonus = Math.max(0, 21 - age) * 0.12;
+  return overall * 0.55 + potential * 0.45 + readyBonus + upsideBonus + ageBonus;
+}
+
+function expectedProspectAssetValue(prospect = {}) {
+  const overall = prospectOverall(prospect);
+  const potential = prospectPotential(prospect);
+  const age = clamp(toNum(prospect?.age, 20), 18, 25);
+  const immediate = Math.max(0, overall - 70) * 0.55;
+  const upside = Math.max(0, potential - 80) * 0.45;
+  const gap = Math.max(0, potential - overall) * 0.15;
+  const ageBonus = Math.max(0, 22 - age) * 0.50;
+  const rookieSurplus = Math.max(0, overall - 76) * 0.18 + Math.max(0, potential - 90) * 0.28;
+  return round4(Math.max(0.25, immediate + upside + gap + ageBonus + rookieSurplus));
+}
+
+const EXPECTED_PROSPECT_POT_TAX = [
+  { min: 99, tax: [21.00, 18.00, 14.25, 9.00, 4.50, 0.90] },
+  { min: 97, tax: [16.50, 14.50, 11.50, 7.25, 3.35, 0.60] },
+  { min: 95, tax: [12.50, 11.00, 8.50, 5.25, 2.40, 0.35] },
+  { min: 93, tax: [9.00, 8.00, 6.10, 3.60, 1.55, 0.18] },
+  { min: 91, tax: [6.00, 5.25, 4.00, 2.35, 0.85, 0.05] },
+  { min: 89, tax: [3.90, 3.35, 2.50, 1.30, 0.45, 0.00] },
+  { min: 87, tax: [2.10, 1.75, 1.25, 0.62, 0.20, 0.00] },
+  { min: 85, tax: [0.95, 0.80, 0.58, 0.28, 0.08, 0.00] },
+];
+const EXPECTED_PROSPECT_GAP_TAX = [
+  { min: 21, tax: 5.50 }, { min: 16, tax: 4.25 }, { min: 12, tax: 2.85 },
+  { min: 8, tax: 1.60 }, { min: 4, tax: 0.75 }, { min: 0, tax: 0 },
+];
+const EXPECTED_YOUNG_CORE_OVR_TAX = [
+  { min: 92, tax: [20.00, 18.25, 16.00, 13.25, 8.00, 2.25] },
+  { min: 90, tax: [15.25, 13.85, 12.15, 10.30, 6.25, 1.45] },
+  { min: 88, tax: [11.50, 10.50, 9.25, 7.95, 4.65, 0.95] },
+  { min: 86, tax: [8.25, 7.50, 6.65, 5.55, 3.10, 0.45] },
+  { min: 84, tax: [5.25, 4.75, 4.15, 3.35, 1.75, 0.18] },
+];
+const EXPECTED_POT_KICKERS = [
+  { min: 98, tax: 6.25 }, { min: 96, tax: 4.50 }, { min: 94, tax: 3.10 },
+  { min: 92, tax: 1.85 }, { min: 90, tax: 0.85 }, { min: 0, tax: 0 },
+];
+
+function prospectAgeBucket(age) {
+  if (age <= 19) return 0;
+  if (age <= 20) return 1;
+  if (age <= 22) return 2;
+  if (age <= 24) return 3;
+  if (age <= 26) return 4;
+  return 5;
+}
+function youngCoreAgeBucket(age) {
+  if (age <= 21) return 0;
+  if (age <= 22) return 1;
+  if (age <= 23) return 2;
+  if (age <= 24) return 3;
+  if (age <= 25) return 4;
+  return 5;
+}
+function prospectTeamMultiplier(powerRank = 15) {
+  const rank = clamp(Math.round(toNum(powerRank, 15)), 1, 30);
+  if (rank <= 5) return 0.90;
+  if (rank <= 10) return 1.00;
+  if (rank <= 18) return 1.08;
+  if (rank <= 24) return 1.45;
+  return 1.90;
+}
+function expectedProspectRetentionTax(prospect = {}, powerRank = 15) {
+  const overall = Math.round(prospectOverall(prospect));
+  const potential = Math.round(prospectPotential(prospect));
+  const age = Math.round(clamp(toNum(prospect?.age, 20), 18, 30));
+  const potRow = EXPECTED_PROSPECT_POT_TAX.find((row) => potential >= row.min);
+  const gap = Math.max(0, potential - overall);
+  const gapTax = EXPECTED_PROSPECT_GAP_TAX.find((row) => gap >= row.min)?.tax || 0;
+  const highPotSubtotal = potRow ? Number(potRow.tax[prospectAgeBucket(age)] || 0) + gapTax : 0;
+  const coreRow = EXPECTED_YOUNG_CORE_OVR_TAX.find((row) => overall >= row.min);
+  const potKicker = EXPECTED_POT_KICKERS.find((row) => potential >= row.min)?.tax || 0;
+  const coreSubtotal = coreRow ? Number(coreRow.tax[youngCoreAgeBucket(age)] || 0) + potKicker : 0;
+  return round4(Math.max(highPotSubtotal, coreSubtotal) * prospectTeamMultiplier(powerRank));
+}
+
+function draftChoicePremium(slot = 15) {
+  const n = clamp(Math.round(toNum(slot, 15)), 1, 60);
+  if (n === 1) return 1.06;
+  if (n <= 3) return 1.05;
+  if (n <= 5) return 1.04;
+  if (n <= 10) return 1.025;
+  if (n <= 20) return 1.015;
+  return 1.01;
+}
+
+function getExpectedProspectModel(leagueData = {}, slot = 15, powerRank = 15) {
+  const context = getDraftTradeContext(leagueData);
+  if (!context?.inOffseason || context?.draftComplete) return null;
+  const board = getDraftBoardRows(leagueData);
+  if (!board.length) return null;
+  const absoluteSlot = clamp(Math.round(toNum(slot, 15)), 1, 60);
+  const liveOffset = context?.draftInProgress
+    ? absoluteSlot - (Math.max(0, Number(context?.currentPickIndex || 0)) + 1)
+    : absoluteSlot - 1;
+  const centerIndex = clamp(liveOffset, 0, board.length - 1);
+  const offsets = absoluteSlot === 1 && !context?.draftInProgress ? [0, 1, 2] : [-2, -1, 0, 1, 2];
+  const weights = absoluteSlot === 1 && !context?.draftInProgress ? [0.65, 0.25, 0.10] : [0.10, 0.22, 0.36, 0.22, 0.10];
+  const rows = offsets.map((offset, index) => ({
+    prospect: board[clamp(centerIndex + offset, 0, board.length - 1)],
+    weight: weights[index],
+  }));
+  const totalWeight = rows.reduce((sum, row) => sum + row.weight, 0) || 1;
+  const expected = rows.reduce((acc, row) => {
+    const w = row.weight / totalWeight;
+    acc.overall += prospectOverall(row.prospect) * w;
+    acc.potential += prospectPotential(row.prospect) * w;
+    acc.age += clamp(toNum(row.prospect?.age, 20), 18, 25) * w;
+    acc.assetValue += expectedProspectAssetValue(row.prospect) * w;
+    acc.retentionTax += expectedProspectRetentionTax(row.prospect, powerRank) * w;
+    return acc;
+  }, { overall: 0, potential: 0, age: 0, assetValue: 0, retentionTax: 0 });
+  const best = rows.slice().sort((a, b) => b.weight - a.weight)[0]?.prospect || board[centerIndex];
+  const certainty = context?.draftInProgress ? 1 : context?.lotteryRevealed ? 0.97 : 0.90;
+  return {
+    name: best?.name || best?.player || `prospect near #${absoluteSlot}`,
+    overall: round4(expected.overall),
+    potential: round4(expected.potential),
+    age: round4(expected.age),
+    assetValue: round4(expected.assetValue * draftChoicePremium(absoluteSlot)),
+    retentionTax: round4(expected.retentionTax),
+    certainty,
+    boardIndex: centerIndex,
+  };
+}
+
+function normalProspectValueAtSlot(slot = 15) {
+  const anchors = [
+    [1, 86.5], [3, 84.4], [5, 82.7], [10, 79.6], [15, 77.0],
+    [20, 75.2], [30, 72.5], [40, 70.5], [60, 67.8],
+  ];
+  const target = clamp(Number(slot || 15), 1, 60);
+  for (let index = 1; index < anchors.length; index += 1) {
+    const [rightSlot, rightValue] = anchors[index];
+    const [leftSlot, leftValue] = anchors[index - 1];
+    if (target <= rightSlot) {
+      const ratio = (target - leftSlot) / Math.max(1, rightSlot - leftSlot);
+      return leftValue + (rightValue - leftValue) * ratio;
+    }
+  }
+  return anchors[anchors.length - 1][1];
+}
+
+function getDraftBoardRows(leagueData = {}) {
+  const context = getDraftTradeContext(leagueData);
+  const rows = Array.isArray(context?.draftProspects) ? context.draftProspects : [];
+  return rows
+    .filter((row) => row && typeof row === "object")
+    .slice()
+    .sort((a, b) => {
+      const aProjection = toNum(a?.draftProjection ?? a?.trueRank ?? a?.rank, 999);
+      const bProjection = toNum(b?.draftProjection ?? b?.trueRank ?? b?.rank, 999);
+      if (aProjection !== bProjection) return aProjection - bProjection;
+      return prospectDraftValue(b) - prospectDraftValue(a);
+    });
+}
+
+function getDraftClassMultiplier(leagueData = {}, slot = 15) {
+  const context = getDraftTradeContext(leagueData);
+  if (!context?.inOffseason || context?.draftComplete) return 1;
+  const board = getDraftBoardRows(leagueData);
+  if (!board.length) return 1;
+
+  const absoluteSlot = clamp(Math.round(Number(slot || 15)), 1, 60);
+  const remainingOffset = context?.draftInProgress
+    ? absoluteSlot - (Math.max(0, Number(context?.currentPickIndex || 0)) + 1)
+    : absoluteSlot - 1;
+  const center = clamp(remainingOffset + 1, 1, Math.min(60, board.length));
+  const indices = [center - 2, center - 1, center, center + 1, center + 2]
+    .map((oneBased) => clamp(oneBased - 1, 0, board.length - 1));
+  const weights = [0.10, 0.22, 0.36, 0.22, 0.10];
+  let actual = 0;
+  let normal = 0;
+  indices.forEach((index, idx) => {
+    actual += prospectDraftValue(board[index]) * weights[idx];
+    normal += normalProspectValueAtSlot(index + 1) * weights[idx];
+  });
+  if (normal <= 0) return 1;
+  return round4(clamp(actual / normal, 0.88, 1.16));
+}
+
+function getLotteryExpectedPickModel({ leagueData = {}, originalTeam = "", range = null, powerRank = 15 } = {}) {
+  const context = getDraftTradeContext(leagueData);
+  if (!context?.inOffseason || context?.lotteryRevealed || context?.draftComplete) return null;
+  const row = context?.lotteryOddsByTeam?.[normalizeName(originalTeam)];
+  const odds = row?.oddsByPick;
+  if (!odds || typeof odds !== "object") return null;
+
+  const normalizedRange = normalizeRange(range, 1);
+  let probability = 0;
+  let expectedSlot = 0;
+  let fullValue = 0;
+  let rangedValue = 0;
+  let expectedProspectRetentionTax = 0;
+  let expectedProspectOverall = 0;
+  let expectedProspectPotential = 0;
+  let expectedProspectAge = 0;
+
+  for (const [rawSlot, rawPct] of Object.entries(odds)) {
+    const slot = Number(rawSlot);
+    const chance = Number(rawPct) / 100;
+    if (!Number.isFinite(slot) || slot < 1 || slot > 30 || !Number.isFinite(chance) || chance <= 0) continue;
+    probability += chance;
+    expectedSlot += slot * chance;
+    const classMultiplier = getDraftClassMultiplier(leagueData, slot);
+    const expectedProspect = getExpectedProspectModel(leagueData, slot, powerRank);
+    const value = Math.max(slotValue(1, slot) * classMultiplier, Number(expectedProspect?.assetValue || 0));
+    fullValue += value * chance;
+    expectedProspectRetentionTax += Number(expectedProspect?.retentionTax || 0) * chance;
+    expectedProspectOverall += Number(expectedProspect?.overall || 0) * chance;
+    expectedProspectPotential += Number(expectedProspect?.potential || 0) * chance;
+    expectedProspectAge += Number(expectedProspect?.age || 0) * chance;
+    if (slot >= normalizedRange.start && slot <= normalizedRange.end) rangedValue += value * chance;
+  }
+
+  if (probability <= 0) return null;
+  return {
+    expectedSlot: expectedSlot / probability,
+    fullSlotValue: fullValue / probability,
+    rangedSlotValue: rangedValue / probability,
+    conveyanceChance: clamp(
+      Object.entries(odds).reduce((sum, [rawSlot, rawPct]) => {
+        const slot = Number(rawSlot);
+        const chance = Number(rawPct) / 100;
+        return slot >= normalizedRange.start && slot <= normalizedRange.end ? sum + chance : sum;
+      }, 0) / probability,
+      0,
+      1
+    ),
+    ratio: fullValue > 0 ? clamp(rangedValue / fullValue, 0, 1) : 1,
+    expectedProspectRetentionTax: expectedProspectRetentionTax / probability,
+    expectedProspectOverall: expectedProspectOverall / probability,
+    expectedProspectPotential: expectedProspectPotential / probability,
+    expectedProspectAge: expectedProspectAge / probability,
+    draftAssetCertainty: 0.90,
+  };
+}
+
+function getPreLotteryExpectedSlot(leagueData = {}, originalTeam = "") {
+  const context = getDraftTradeContext(leagueData);
+  if (!context?.inOffseason || context?.lotteryRevealed || context?.draftComplete) return 0;
+  const row = context?.preLotteryExpectedSlotByTeam?.[normalizeName(originalTeam)];
+  const slot = Number(row?.expectedSlot || 0);
+  return Number.isFinite(slot) && slot > 0 ? slot : 0;
+}
+
+function getFullSlotRange(round) {
+  return Number(round) === 2 ? { start: 31, end: 60 } : { start: 1, end: 30 };
+}
+
+function normalizeRange(range = null, round = 1) {
+  if (!range || typeof range !== "object") return getFullSlotRange(round);
+  const full = getFullSlotRange(round);
+  const start = clamp(Math.round(Number(range.start || full.start)), full.start, full.end);
+  const end = clamp(Math.round(Number(range.end || full.end)), full.start, full.end);
+  if (end < start) return full;
+  return { start, end };
+}
+
+function protectionTextToConveyedRange(text = "", round = 1) {
+  const full = getFullSlotRange(round);
+  const raw = String(text || "").trim();
+  const lower = raw.toLowerCase();
+  if (!raw || lower === "none" || lower === "null" || lower.includes("unprotected")) return null;
+
+  const ownsMatch = raw.match(/\bowns\s*#?\s*(\d{1,2})\s*-\s*#?\s*(\d{1,2})\b/i);
+  if (ownsMatch) {
+    return normalizeRange({ start: Number(ownsMatch[1]), end: Number(ownsMatch[2]) }, round);
+  }
+
+  const topMatch = raw.match(/\btop\s*(\d{1,2})\s*protected\b/i);
+  if (topMatch) {
+    const protectedEnd = clamp(Number(topMatch[1]), full.start - 1, full.end);
+    if (protectedEnd >= full.end) return { start: full.end, end: full.end };
+    return normalizeRange({ start: protectedEnd + 1, end: full.end }, round);
+  }
+
+  if (/\blottery\s*protected\b/i.test(raw) || /\btop\s*14\b/i.test(raw)) {
+    const protectedEnd = Number(round) === 1 ? 14 : 44;
+    return normalizeRange({ start: protectedEnd + 1, end: full.end }, round);
+  }
+
+  const rangeProtected = raw.match(/\b(\d{1,2})\s*-\s*(\d{1,2})\s*protected\b/i);
+  if (rangeProtected) {
+    const protectedEnd = clamp(Number(rangeProtected[2]), full.start - 1, full.end);
+    if (protectedEnd >= full.end) return { start: full.end, end: full.end };
+    return normalizeRange({ start: protectedEnd + 1, end: full.end }, round);
+  }
+
+  return null;
+}
+
+function getRangeFromItem(item = {}, round = 1) {
+  const pick = item.pick || item || {};
+  const rule = item.tradeRule || pick.tradeRule || {};
+  const pickNumber = getPickNumber(pick);
+  if (pickNumber > 0) return { start: pickNumber, end: pickNumber };
+
+  const protectionText = [
+    item.protection,
+    pick.displayProtection,
+    pick.protections,
+    pick.protection,
+    pick.conditions,
+    pick.notes,
+  ]
+    .filter(Boolean)
+    .join(" | ");
+
+  const explicitCandidate =
+    rule.conveyedRange ||
+    pick.conveyedRange ||
+    null;
+  if (explicitCandidate) return normalizeRange(explicitCandidate, round);
+
+  const ownedCandidate =
+    rule.ownedRange ||
+    pick.ownedRange ||
+    pick.ownedSlots ||
+    null;
+  if (ownedCandidate) {
+    const owned = normalizeRange(ownedCandidate, round);
+    const full = getFullSlotRange(round);
+    const textRange = protectionTextToConveyedRange(protectionText, round);
+    const ownedIsFull = owned.start === full.start && owned.end === full.end;
+    if (textRange && ownedIsFull) return textRange;
+    return owned;
+  }
+
+  return protectionTextToConveyedRange(protectionText, round) || getFullSlotRange(round);
+}
+
+function expectedSlotFromRank(rank, round, yearOffset = 0) {
+  const r = clamp(Number(rank || 15), 1, 30);
+  if (Number(round) === 2) return clamp(61 - r, 31, 60);
+
+  let slot = 31 - r;
+  if (yearOffset === 0) {
+    // Tiny 1-2-3 lottery realism: bottom-three picks are not guaranteed #1, but the downside remains premium.
+    if (r >= 29.5) slot = 3.15;
+    else if (r >= 28.5) slot = 3.75;
+    else if (r >= 27.5) slot = 4.35;
+  }
+  return clamp(slot, 1, 30);
+}
+
+function gaussianProbability(slot, mean, sd) {
+  const z = (Number(slot) - Number(mean)) / Math.max(0.01, sd);
+  return Math.exp(-0.5 * z * z);
+}
+
+function distributionExpectedSlotValue({ round, expectedSlot, yearOffset, range }) {
+  const full = getFullSlotRange(round);
+  const normalizedRange = normalizeRange(range, round);
+  const sd = Number(round) === 2 ? 3.1 + yearOffset * 1.7 : 2.2 + yearOffset * 1.3;
+  let totalWeight = 0;
+  let fullValue = 0;
+  let rangedValue = 0;
+  let conveyWeight = 0;
+
+  for (let slot = full.start; slot <= full.end; slot += 1) {
+    const weight = gaussianProbability(slot, expectedSlot, sd);
+    const value = slotValue(round, slot);
+    totalWeight += weight;
+    fullValue += weight * value;
+    if (slot >= normalizedRange.start && slot <= normalizedRange.end) {
+      rangedValue += weight * value;
+      conveyWeight += weight;
+    }
+  }
+
+  if (totalWeight <= 0) return { ratio: 1, conveyanceChance: 1, fullSlotValue: 0, rangedSlotValue: 0 };
+
+  return {
+    ratio: fullValue > 0 ? clamp(rangedValue / fullValue, 0, 1) : 1,
+    conveyanceChance: clamp(conveyWeight / totalWeight, 0, 1),
+    fullSlotValue: fullValue / totalWeight,
+    rangedSlotValue: rangedValue / totalWeight,
+  };
+}
+
+function getPickValueTuningMultiplier({ round, expectedSlot, yearOffset = 0, rangeIsFull = true, pickNumber = 0 } = {}) {
+  if (Number(round) === 2) {
+    const slot = clamp(Number(expectedSlot || 45), 31, 60);
+    let bump = 0;
+    if (slot <= 35.5) bump = 0.18;
+    else if (slot <= 40.5) bump = 0.14;
+    else if (slot <= 45.5) bump = 0.10;
+    else if (slot <= 50.5) bump = 0.07;
+    else if (slot <= 55.5) bump = 0.04;
+    else bump = 0.02;
+    if (!rangeIsFull && !pickNumber) bump *= 0.65;
+    return round4(1 + bump);
+  }
+
+  const slot = clamp(Number(expectedSlot || 15), 1, 30);
+  const offset = clamp(Number(yearOffset || 0), 0, 6);
+  let bump = 0;
+
+  // Keep this as a light slot-value tuning layer, not the main star-trade fix.
+  // Current-year bad-team picks get the biggest lift because their range is
+  // easiest to project. Average firsts get a modest bump so 3-5 first packages
+  // can matter in star trades, while late contender firsts stay limited.
+  if (offset === 0) {
+    if (slot <= 4.5) bump = 0.18;
+    else if (slot <= 8.5) bump = 0.15;
+    else if (slot <= 12.5) bump = 0.10;
+    else if (slot <= 24.5) bump = 0.095;
+    else bump = 0.04;
+  } else {
+    if (slot <= 8.5) bump = 0.12;
+    else if (slot <= 24.5) bump = 0.085;
+    else bump = 0.04;
+
+    // Far future firsts carry uncertainty upside, but cap it so distant late
+    // firsts still cannot overwhelm real player value by themselves.
+    bump += Math.min(0.045, offset * 0.0075);
+  }
+
+  // If protections remove part of the pick range, keep the tuning more modest.
+  // A protected pick should not get the full unprotected star-trade treatment,
+  // but it still needs to matter when included in a real star package.
+  if (!rangeIsFull && !pickNumber) bump *= 0.6;
+
+  return round4(1 + bump);
+}
+
+function valueTablesForRound(round) {
+  if (Number(round) === 2) {
+    return {
+      power: CURRENT_POWER_SECOND_VALUE_BY_RANK,
+      pot: FUTURE_POT_SECOND_VALUE_BY_RANK,
+    };
+  }
+  return {
+    power: CURRENT_POWER_FIRST_VALUE_BY_RANK,
+    pot: FUTURE_POT_FIRST_VALUE_BY_RANK,
+  };
+}
+
+function formatRound(round) {
+  return Number(round) === 2 ? "2nd" : "1st";
+}
+
+function formatRange(range, round) {
+  const full = getFullSlotRange(round);
+  const normalized = normalizeRange(range, round);
+  if (normalized.start === full.start && normalized.end === full.end) return "unprotected/full range";
+  if (normalized.start === normalized.end) return `pick #${normalized.start}`;
+  return `slots ${normalized.start}-${normalized.end}`;
+}
+
+function inverseSwapDirection(direction) {
+  return String(direction || "best").toLowerCase() === "worst" ? "best" : "worst";
+}
+
+function swapDirectionLabel(direction) {
+  return String(direction || "best").toLowerCase() === "worst" ? "worst-pick" : "best-pick";
+}
+
+function projectSinglePickValue(item = {}, leagueData = {}, context = buildPickRankContext(leagueData)) {
+  const pick = item.pick || item || {};
+  const round = getPickRound(pick);
+  const pickYear = getPickYear(pick, leagueData);
+  const currentYear = getCurrentSeasonYear(leagueData);
+  const { offset, power, pot, certainty } = getYearBlend(pickYear, leagueData);
+  const originalTeam = getPickOriginalTeam(pick);
+  const teamContext = context.byTeam.get(normalizeName(originalTeam)) || {};
+  const powerRank = clamp(Number(teamContext.powerRank || 15), 1, 30);
+  const potRank = clamp(Number(teamContext.potRank || powerRank || 15), 1, 30);
+  const blendedRank = clamp(powerRank * power + potRank * pot, 1, 30);
+  const pickNumber = getPickNumber(pick);
+  const range = getRangeFromItem(item, round);
+  const lotteryModel = offset === 0 && round === 1 && !pickNumber
+    ? getLotteryExpectedPickModel({ leagueData, originalTeam, range, powerRank })
+    : null;
+  const preLotteryExpectedSlot = offset === 0 && round === 1 && !pickNumber
+    ? getPreLotteryExpectedSlot(leagueData, originalTeam)
+    : 0;
+  const expectedSlot = pickNumber || lotteryModel?.expectedSlot || preLotteryExpectedSlot || expectedSlotFromRank(blendedRank, round, offset);
+  const rangeModel = lotteryModel || distributionExpectedSlotValue({ round, expectedSlot, yearOffset: offset, range });
+  const normalizedRange = normalizeRange(range, round);
+  const fullRange = getFullSlotRange(round);
+  const rangeIsFull = normalizedRange.start === fullRange.start && normalizedRange.end === fullRange.end;
+  const valueTuningMultiplier = getPickValueTuningMultiplier({
+    round,
+    expectedSlot,
+    yearOffset: offset,
+    rangeIsFull,
+    pickNumber,
+  });
+  const draftClassMultiplier = offset === 0 ? getDraftClassMultiplier(leagueData, pickNumber || expectedSlot) : 1;
+  const expectedProspectModel = offset === 0 && round === 1
+    ? getExpectedProspectModel(leagueData, pickNumber || expectedSlot, powerRank)
+    : null;
+  const currentDraftExpectedPlayerValue = Math.max(
+    0,
+    Number(expectedProspectModel?.assetValue || 0),
+    Number(lotteryModel?.fullSlotValue || 0)
+  );
+
+  // Current-draft assets use the best information available at each stage:
+  // exact lottery slot after the reveal, the full lottery odds distribution
+  // before the reveal, and the live remaining prospect board during the draft.
+  // Future picks remain on the existing Power/POT projection model.
+  const traditionalUnprotectedValue = pickNumber
+    ? slotValue(round, pickNumber) * certainty * valueTuningMultiplier * draftClassMultiplier
+    : rangeModel.fullSlotValue * certainty * valueTuningMultiplier;
+  const prospectParityValue = offset === 0 && round === 1
+    ? currentDraftExpectedPlayerValue * Number(expectedProspectModel?.certainty || lotteryModel?.draftAssetCertainty || 0.90)
+    : 0;
+  const rawUnprotectedValue = Math.max(traditionalUnprotectedValue, prospectParityValue);
+  const value = round4(
+    pickNumber
+      ? rawUnprotectedValue
+      : Math.max(
+          rangeModel.rangedSlotValue * certainty * valueTuningMultiplier,
+          rawUnprotectedValue * Number(rangeModel.ratio || 1)
+        )
+  );
+  const effectiveRangeRatio = pickNumber ? 1 : rangeModel.ratio;
+  const effectiveConveyanceChance = pickNumber ? 1 : rangeModel.conveyanceChance;
+  const protectionText = String(item.protection || pick.displayProtection || pick.protections || pick.protection || "Unprotected");
+  const rankPrefix = teamContext.postTradeProjected ? "post-trade projected Power Rank" : "Power Rank";
+  const potPrefix = teamContext.postTradeProjected ? "post-trade projected POT Rank" : "POT Rank";
+  const rankSource = offset === 0 ? `${rankPrefix} #${powerRank}` : `${rankPrefix} #${powerRank} / ${potPrefix} #${potRank}`;
+  const blendLabel = lotteryModel
+    ? "actual pre-lottery odds distribution"
+    : preLotteryExpectedSlot
+      ? "final-season lottery position projection"
+      : offset === 0
+        ? "current-year Power Ranking"
+        : `${Math.round(power * 100)}% Power Ranking / ${Math.round(pot * 100)}% POT`;
+  const originalLabel = displayTeamName(originalTeam);
+  const protectionNote = rangeIsFull
+    ? ""
+    : `, ${(effectiveConveyanceChance * 100).toFixed(0)}% expected conveyance, best conveyable ${formatRange(range, round)}`;
+  const tuningNote = valueTuningMultiplier > 1.0001 ? `, draft-capital tuning x${valueTuningMultiplier.toFixed(3)}` : "";
+  const classNote = Math.abs(draftClassMultiplier - 1) > 0.005
+    ? `, current draft-board quality x${draftClassMultiplier.toFixed(3)}`
+    : "";
+  const prospectNote = expectedProspectModel
+    ? `, expected ${expectedProspectModel.overall.toFixed(1)} OVR / ${expectedProspectModel.potential.toFixed(1)} POT age-${expectedProspectModel.age.toFixed(1)} prospect`
+    : lotteryModel?.expectedProspectOverall
+      ? `, lottery-weighted ${lotteryModel.expectedProspectOverall.toFixed(1)} OVR / ${lotteryModel.expectedProspectPotential.toFixed(1)} POT prospect`
+      : "";
+  const reason = `${pickYear} ${originalLabel} ${formatRound(round)} valued at ${value.toFixed(3)} (${rankSource}, ${blendLabel}, expected pick #${round4(expectedSlot).toFixed(2)}, ${formatRange(range, round)}${protectionNote}${tuningNote}${classNote}${prospectNote}).`;
+
+  return {
+    value,
+    rawUnprotectedValue: round4(rawUnprotectedValue),
+    rangeRatio: round4(effectiveRangeRatio),
+    conveyanceChance: round4(effectiveConveyanceChance),
+    expectedSlot: round4(expectedSlot),
+    powerRank,
+    potRank,
+    blendedRank: round4(blendedRank),
+    yearOffset: offset,
+    round,
+    year: pickYear,
+    currentYear,
+    originalTeam,
+    protectionText,
+    range,
+    draftClassMultiplier,
+    expectedProspectName: expectedProspectModel?.name || "",
+    expectedProspectOverall: round4(expectedProspectModel?.overall || lotteryModel?.expectedProspectOverall || 0),
+    expectedProspectPotential: round4(expectedProspectModel?.potential || lotteryModel?.expectedProspectPotential || 0),
+    expectedProspectAge: round4(expectedProspectModel?.age || lotteryModel?.expectedProspectAge || 0),
+    expectedProspectAssetValue: round4(expectedProspectModel?.assetValue || currentDraftExpectedPlayerValue || 0),
+    expectedProspectRetentionTax: round4(expectedProspectModel?.retentionTax || lotteryModel?.expectedProspectRetentionTax || 0),
+    draftAssetCertainty: round4(expectedProspectModel?.certainty || lotteryModel?.draftAssetCertainty || 0),
+    traditionalUnprotectedValue: round4(traditionalUnprotectedValue),
+    prospectParityValue: round4(prospectParityValue),
+    valuationStage: lotteryModel
+      ? "pre_lottery_odds"
+      : getDraftTradeContext(leagueData)?.draftInProgress && pickNumber
+        ? "live_draft"
+        : pickNumber
+          ? "exact_pick"
+          : preLotteryExpectedSlot
+            ? "pre_lottery_final_record"
+            : "projected_pick",
+    reason,
+  };
+}
+
+function getPrimaryTradePickItems(items = []) {
+  return (items || []).filter((item) => {
+    if (item?.type !== "pick" || !item.pick) return false;
+    if (item.tradeValueExcluded) return false;
+    const rule = item.tradeRule || item.pick?.tradeRule || {};
+    return !rule.mirror;
+  });
+}
+
+function pickAssetType(pick = {}) {
+  return String(pick?.assetType || pick?.type || "pick").toLowerCase();
+}
+
+function getSwapAssetDirection(asset = {}) {
+  const text = String(
+    asset?.protection ||
+      asset?.displayProtection ||
+      asset?.protections ||
+      asset?.protectionType ||
+      asset?.conditions ||
+      ""
+  ).toLowerCase();
+  return text.includes("worst") ? "worst" : "best";
+}
+
+function getSwapParticipantTeams(asset = {}) {
+  const details = asset?.realLifeDetails || {};
+  const participants = Array.isArray(details.swapParticipants)
+    ? details.swapParticipants
+    : Array.isArray(asset?.swapParticipants)
+    ? asset.swapParticipants
+    : [];
+
+  const out = [];
+  const push = (value) => {
+    const clean = String(value || "").trim();
+    if (!clean) return;
+    if (!out.some((row) => sameTeamName(row, clean))) out.push(clean);
+  };
+
+  for (const team of participants) push(team);
+  push(asset.originalTeam || asset.originalTeamName || asset.team || asset.teamName);
+  push(asset.swapWithTeam || asset.swap_with_team || asset.swapTeam || asset.otherTeam || asset.swap?.withTeam);
+
+  return out.slice(0, 2);
+}
+
+function buildSyntheticPick(originalTeam, basePick = {}) {
+  return {
+    ...basePick,
+    assetType: "pick",
+    type: "pick",
+    originalTeam,
+    originalTeamName: originalTeam,
+    teamName: originalTeam,
+    ownerTeam: originalTeam,
+    protection: "Unprotected",
+    protections: "Unprotected",
+    displayProtection: "Unprotected",
+  };
+}
+
+function getExistingSwapValue(item = {}, leagueData = {}, context = buildPickRankContext(leagueData)) {
+  const pick = item.pick || item || {};
+  const participants = getSwapParticipantTeams(pick);
+  const direction = getSwapAssetDirection({ ...pick, protection: item.protection || pick.protection });
+  const year = getPickYear(pick, leagueData);
+  const round = getPickRound(pick);
+
+  if (participants.length < 2) {
+    return {
+      value: 0,
+      year,
+      round,
+      recipientDirection: direction,
+      reason: `${year} ${formatRound(round)} swap could not be valued because the two involved picks were not clear.`,
+    };
+  }
+
+  const [teamA, teamB] = participants;
+  const pickA = projectSinglePickValue({ type: "pick", pick: buildSyntheticPick(teamA, pick), protection: "Unprotected" }, leagueData, context);
+  const pickB = projectSinglePickValue({ type: "pick", pick: buildSyntheticPick(teamB, pick), protection: "Unprotected" }, leagueData, context);
+  const holder = displayTeamName(item.teamName || pick.ownerTeam || pick.owner || pick.currentOwnerTeamName || "right holder");
+
+  // Existing swap assets are already actual draft rights in your save file.
+  // Trading away "Swap Best" means trading away the expected better pick in
+  // that two-pick group, not merely trading away the small upgrade over the
+  // holder's natural pick. Newly-created swap proposals still use upgrade-only
+  // value in getSwapValue(); this full-asset valuation is only for existing
+  // tradable swap assets.
+  const bestValue = Math.max(pickA.value, pickB.value);
+  const worstValue = Math.min(pickA.value, pickB.value);
+  const value = round4(direction === "best" ? bestValue : worstValue);
+
+  return {
+    value,
+    sourceValue: pickA.value,
+    baselineValue: pickB.value,
+    otherValue: pickB.value,
+    recipientDirection: direction,
+    year,
+    round,
+    freeOptionFloorApplied: false,
+    existingSwapAssetFullValue: true,
+    reason: `${holder} owns existing ${swapDirectionLabel(direction)} swap rights in ${year} ${formatRound(round)} between ${displayTeamName(teamA)} (${pickA.value.toFixed(3)}) and ${displayTeamName(teamB)} (${pickB.value.toFixed(3)}), so the asset is valued as the expected ${direction === "best" ? "better" : "worse"} pick at ${value.toFixed(3)}.`,
+  };
+}
+
+function getSwapValue(item = {}, leagueData = {}, context = buildPickRankContext(leagueData)) {
+  const rule = item.tradeRule || item.pick?.tradeRule || {};
+
+  if (String(rule.action || "").toLowerCase() !== "swap") {
+    return getExistingSwapValue(item, leagueData, context);
+  }
+
+  // TradePickSelect creates one primary swap item on the sending side. The rule's
+  // swapDirection is the exact right/obligation the receiving side gets when the
+  // trade is completed, matching buildTradeMachineSwapAssets in draftPicks.js.
+  const recipientDirection = String(rule.swapDirection || "best").toLowerCase() === "worst" ? "worst" : "best";
+  const sourcePick = rule.sourcePick || item.pick || {};
+  const recipientPick = rule.swapPick || {};
+
+  const source = projectSinglePickValue({ type: "pick", pick: sourcePick, protection: "Unprotected" }, leagueData, context);
+  const recipientBaseline = projectSinglePickValue({ type: "pick", pick: recipientPick, protection: "Unprotected" }, leagueData, context);
+  const bestDelta = Math.max(source.value, recipientBaseline.value) - recipientBaseline.value;
+  const worstDelta = Math.min(source.value, recipientBaseline.value) - recipientBaseline.value;
+
+  let value = recipientDirection === "best" ? Math.max(0, bestDelta) : Math.min(0, worstDelta);
+  let freeOptionFloorApplied = false;
+
+  if (recipientDirection === "best" && value < FREE_SWAP_OPTION_VALUE) {
+    value = FREE_SWAP_OPTION_VALUE;
+    freeOptionFloorApplied = true;
+  }
+
+  value = round4(value);
+
+  const sender = displayTeamName(rule.fromTeamName || "sending side");
+  const recipient = displayTeamName(rule.toTeamName || rule.swapRightHolder || "receiving side");
+  const sourceLabel = displayTeamName(getPickOriginalTeam(sourcePick));
+  const recipientLabel = displayTeamName(getPickOriginalTeam(recipientPick));
+  const year = getPickYear(sourcePick, leagueData);
+  const round = getPickRound(sourcePick);
+  const optionalText = freeOptionFloorApplied
+    ? " This is mostly a free optional right, so it receives only a tiny no-downside value."
+    : "";
+
+  return {
+    value,
+    sourceValue: source.value,
+    baselineValue: recipientBaseline.value,
+    recipientDirection,
+    freeOptionFloorApplied,
+    year,
+    round,
+    reason: `${recipient} receives ${swapDirectionLabel(recipientDirection)} swap value in ${year} ${formatRound(round)} worth ${value.toFixed(3)} from ${sender}'s offer (${sourceLabel} ${source.value.toFixed(3)} vs ${recipientLabel} ${recipientBaseline.value.toFixed(3)}).${optionalText}`,
+  };
+}
+
+function evaluatePickItemValue(item = {}, leagueData = {}, context = buildPickRankContext(leagueData)) {
+  const rule = item.tradeRule || item.pick?.tradeRule || {};
+  const pick = item.pick || item || {};
+  const label = String(item.protection || pick.displayProtection || pick.protections || pick.protection || "").toLowerCase();
+  const isSwapItem =
+    String(rule.action || "").toLowerCase() === "swap" ||
+    pickAssetType(pick) === "swap" ||
+    label.includes("swap best") ||
+    label.includes("swap worst");
+
+  if (isSwapItem) return getSwapValue(item, leagueData, context);
+  return projectSinglePickValue(item, leagueData, context);
+}
+
+function getCpuPickDirectionMultiplier(context, cpuTeamName = "") {
+  const row = context?.byTeam?.get?.(normalizeName(cpuTeamName)) || null;
+  const rank = clamp(Number(row?.powerRank || 15), 1, 30);
+  // Rebuilders treat picks as more important. Contenders discount pick assets
+  // because active OVR upgrades matter more to them right now.
+  return round4(clamp(0.86 + ((rank - 1) / 29) * 0.44, 0.86, 1.30));
+}
+
+function applyCpuSkew(value, side, directionMultiplier = 1) {
+  const n = Number(value || 0);
+  const skew = side === "incoming"
+    ? (n >= 0 ? CPU_INCOMING_PICK_VALUE_MULT : CPU_OUTGOING_PICK_VALUE_MULT)
+    : (n >= 0 ? CPU_OUTGOING_PICK_VALUE_MULT : CPU_INCOMING_PICK_VALUE_MULT);
+  return round4(n * skew * Number(directionMultiplier || 1));
+}
+
+function summarizeItem(itemValue, side, directionMultiplier = 1) {
+  const adjusted = applyCpuSkew(itemValue.value, side, directionMultiplier);
+  return {
+    ...itemValue,
+    adjustedValue: adjusted,
+    cpuSkewSide: side,
+    cpuPickDirectionMultiplier: round4(directionMultiplier),
+  };
+}
+
+function getOutgoingDraftAssetExposureWeight(item = {}) {
+  const adjustedValue = Math.abs(Number(item.adjustedValue ?? item.value ?? 0));
+  if (adjustedValue <= TRADE_PICK_EPS) return 0;
+
+  if (Number(item.round) !== 1) {
+    // Seconds can clutter packages, but they should not trigger the same future
+    // mortgage penalty as real first-round control.
+    return round4(clamp(adjustedValue / 5, 0, 0.12));
+  }
+
+  const isSwapLike = Boolean(item.recipientDirection) || Boolean(item.existingSwapAssetFullValue) || Boolean(item.freeOptionFloorApplied);
+  let weight = isSwapLike ? 0.7 : 1.0;
+
+  if (item.freeOptionFloorApplied) weight = 0.15;
+
+  const conveyanceChance = Number(item.conveyanceChance);
+  if (Number.isFinite(conveyanceChance) && conveyanceChance > 0 && conveyanceChance < 1) {
+    weight *= clamp(0.35 + conveyanceChance * 0.65, 0.35, 1);
+  }
+
+  // Tiny protections / near-zero swaps should not count like a real full first.
+  if (adjustedValue < 0.75) weight *= clamp(adjustedValue / 0.75, 0.15, 1);
+
+  return round4(clamp(weight, 0, 1));
+}
+
+function getIncomingFirstBridgeWeight(item = {}) {
+  if (Number(item.round) !== 1) return 0;
+
+  const adjustedValue = Math.max(0, Number(item.adjustedValue || 0));
+  if (adjustedValue <= TRADE_PICK_EPS) return 0;
+
+  const slot = clamp(Number(item.expectedSlot || 16), 1, 30);
+  const conveyance = Number.isFinite(Number(item.conveyanceChance))
+    ? clamp(Number(item.conveyanceChance), 0, 1)
+    : 1;
+  const rangeRatio = Number.isFinite(Number(item.rangeRatio))
+    ? clamp(Number(item.rangeRatio), 0, 1)
+    : conveyance;
+
+  // Bridge credit should follow the actual strength of the first, not just the
+  // word "1st" on the asset card. This prevents packages of nearly impossible
+  // protections (ex: top-29 protected firsts) from exploiting the multi-first
+  // bridge while keeping premium unprotected firsts powerful.
+  const valueWeight = clamp(adjustedValue / 4.8, 0, 1.15);
+  const slotWeight = clamp((31 - slot) / 30, 0.05, 1);
+  const protectionWeight = clamp(conveyance * (0.25 + rangeRatio * 0.75), 0, 1);
+
+  const isSwapLike = Boolean(item.recipientDirection) || Boolean(item.existingSwapAssetFullValue) || Boolean(item.freeOptionFloorApplied);
+  const swapWeight = item.freeOptionFloorApplied ? 0.10 : isSwapLike ? 0.78 : 1;
+  const nearTermWeight = clamp(1 - Number(item.yearOffset || 0) * 0.035, 0.78, 1);
+
+  return round4(clamp(Math.max(valueWeight, slotWeight * 0.72) * protectionWeight * swapWeight * nearTermWeight, 0, 1.15));
+}
+
+function calculateIncomingDraftPackageBridge(incoming = []) {
+  const firsts = (incoming || [])
+    .filter((item) => Number(item.round) === 1 && Math.abs(Number(item.adjustedValue || 0)) > TRADE_PICK_EPS)
+    .map((item) => ({ ...item, bridgeWeight: getIncomingFirstBridgeWeight(item) }));
+  const seconds = (incoming || []).filter(
+    (item) => Number(item.round) === 2 && Math.abs(Number(item.adjustedValue || 0)) > TRADE_PICK_EPS
+  );
+  const firstAssetCount = firsts.length;
+  const firstEquivalentCount = round4(firsts.reduce((sum, item) => sum + Number(item.bridgeWeight || 0), 0));
+  const bridgeableFirstCount = firsts.filter((item) => Number(item.bridgeWeight || 0) >= 0.18).length;
+  const secondAssetCount = seconds.length;
+  const totalSecondValue = seconds.reduce((sum, item) => sum + Math.max(0, Number(item.adjustedValue || 0)), 0);
+
+  let firstBonus = 0;
+  let premiumScore = 0;
+  let averageFirstValue = 0;
+
+  if (firstEquivalentCount > 1.15 && bridgeableFirstCount > 1) {
+    const totalFirstValue = firsts.reduce((sum, item) => sum + Math.max(0, Number(item.adjustedValue || 0)), 0);
+    averageFirstValue = totalFirstValue / Math.max(1, firstAssetCount);
+
+    // Star trades are not just the raw sum of unrelated picks. The bridge now
+    // uses first-round-equivalent weight instead of raw count, so a pile of weak
+    // or heavily protected firsts cannot act like a serious premium package.
+    const packageSizeBonus = Math.pow(Math.max(0, firstEquivalentCount - 1), 1.34) * 1.18;
+    premiumScore = firsts.reduce((sum, item) => {
+      const v = Math.max(0, Number(item.adjustedValue || 0));
+      const slot = Number(item.expectedSlot || 16);
+      const yearOffset = Number(item.yearOffset || 0);
+      const conveyance = Number.isFinite(Number(item.conveyanceChance)) ? Number(item.conveyanceChance) : 1;
+      const rangeRatio = Number.isFinite(Number(item.rangeRatio)) ? Number(item.rangeRatio) : conveyance;
+      const protectionFactor = clamp(conveyance * (0.30 + rangeRatio * 0.70), 0, 1);
+      const premiumByValue = clamp((v - 2.85) / 5.1, 0, 1);
+      const premiumBySlot = clamp((19 - slot) / 18, 0, 1);
+      const nearTermFactor = clamp(1 - yearOffset * 0.045, 0.78, 1);
+      const bridgeWeight = clamp(Number(item.bridgeWeight || 0), 0, 1.15);
+      return sum + Math.max(premiumByValue, premiumBySlot * 0.9) * protectionFactor * nearTermFactor * bridgeWeight;
+    }, 0);
+
+    // Real multi-first packages still get a meaningful bridge. Weak/protected
+    // packages get mostly their base value and little extra bridge pressure.
+    const premiumBonus = premiumScore * 1.32;
+    const rawFirstBonus = packageSizeBonus + premiumBonus;
+    const firstCap = 3.9 + firstEquivalentCount * 1.55;
+    firstBonus = clamp(rawFirstBonus, 0, firstCap);
+  }
+
+  // Seconds should help like sweeteners, not like star-trade currency. A pile of
+  // good seconds can matter slightly, and seconds can support a first-round
+  // package, but the cap is intentionally tiny.
+  const secondQuality = clamp(totalSecondValue / 1.75, 0, 1);
+  const secondOnlyBridge = secondAssetCount >= 3
+    ? clamp((secondAssetCount - 2) * 0.075 + secondQuality * 0.18, 0, 0.45)
+    : 0;
+  const secondWithFirstBridge = firstEquivalentCount > 0.65 && secondAssetCount > 0
+    ? clamp(totalSecondValue * 0.07 + Math.max(0, secondAssetCount - 1) * 0.03, 0, 0.30)
+    : 0;
+  const secondBridge = firstEquivalentCount > 0.65 ? secondWithFirstBridge : secondOnlyBridge;
+  const bonus = round4(firstBonus + secondBridge);
+
+  return {
+    bonus,
+    firstBonus: round4(firstBonus),
+    secondBridge: round4(secondBridge),
+    firstAssetCount,
+    firstEquivalentCount,
+    bridgeableFirstCount,
+    secondAssetCount,
+    premiumScore: round4(premiumScore),
+    averageFirstValue: round4(averageFirstValue),
+  };
+}
+
+function calculateOutgoingDraftCapitalExposurePenalty(outgoing = []) {
+  const exposure = round4((outgoing || []).reduce((sum, item) => sum + getOutgoingDraftAssetExposureWeight(item), 0));
+  const firstAssetCount = (outgoing || []).filter((item) => Number(item.round) === 1 && Math.abs(Number(item.adjustedValue || 0)) > TRADE_PICK_EPS).length;
+  const seconds = (outgoing || []).filter((item) => Number(item.round) === 2 && Math.abs(Number(item.adjustedValue || 0)) > TRADE_PICK_EPS);
+  const secondAssetCount = seconds.length;
+  const secondValue = seconds.reduce((sum, item) => sum + Math.abs(Number(item.adjustedValue || item.value || 0)), 0);
+  const secondPenalty = secondAssetCount >= 4
+    ? round4(clamp((secondAssetCount - 3) * 0.075 + secondValue * 0.055, 0, 0.65))
+    : 0;
+
+  if (exposure <= 1.1 && secondPenalty <= TRADE_PICK_EPS) {
+    return { penalty: 0, exposure, firstAssetCount, secondAssetCount, curvePenalty: 0, stackPenalty: 0, secondPenalty: 0 };
+  }
+
+  // This is intentionally separate from base pick value. It represents the CPU's
+  // reluctance to empty multiple future first-round paths in one deal.
+  //
+  // Important tuning note: this should be a smooth curve, not a hard wall. The
+  // old version jumped too violently around the 5th first-round asset, which made
+  // 5+ first packages almost impossible even when the base player/team score was
+  // already huge. This version still makes the 3rd, 4th, 5th, etc. pick more
+  // expensive, but each added pick increases the cost gradually instead of
+  // creating an artificial cliff. Seconds add only a tiny capped penalty.
+  const exposureOverBase = Math.max(0, exposure - 1.1);
+  const curvePenalty = Math.pow(exposureOverBase, 1.35) * 2.6;
+  const stackPenalty = firstAssetCount >= 3
+    ? (firstAssetCount - 2) * 2.1 + Math.max(0, firstAssetCount - 4) * 1.8
+    : 0;
+  const penalty = round4(curvePenalty + stackPenalty + secondPenalty);
+  return {
+    penalty,
+    exposure,
+    firstAssetCount,
+    secondAssetCount,
+    curvePenalty: round4(curvePenalty),
+    stackPenalty: round4(stackPenalty),
+    secondPenalty,
+  };
+}
+
+export function evaluateTradePickImpact(args = {}) {
+  const {
+    leagueData,
+    userItems = [],
+    cpuItems = [],
+    userTeamName = "",
+    cpuTeamName = "",
+    projectedRatingSnapshotsByTeam = null,
+  } = args || {};
+
+  const diagRow = createPickBreakdownRow({ userItems, cpuItems, userTeamName, cpuTeamName });
+  const previousDiagRow = activePickBreakdownRow;
+  const totalStart = pickNow();
+  activePickBreakdownRow = diagRow;
+
+  try {
+    // Primary pick rows are the only assets that can affect draft-pick score.
+    // Resolve them before building post-trade roster projections so player-only
+    // exact checks do not recalculate two projected team ratings just to return
+    // the same zero pick result. Current team direction is still resolved so the
+    // returned debug payload remains byte-for-byte equivalent.
+    const incomingItems = measurePick(diagRow, "incomingItemsFilterMs", () => getPrimaryTradePickItems(userItems));
+    const outgoingItems = measurePick(diagRow, "outgoingItemsFilterMs", () => getPrimaryTradePickItems(cpuItems));
+    const invalidSwapItems = measurePick(diagRow, "invalidSwapFilterMs", () => [...incomingItems, ...outgoingItems].filter(
+      (item) => isSwapTradeItem(item) && !swapTeamPairMatches(item, userTeamName, cpuTeamName)
+    ));
+    const validIncomingItems = measurePick(diagRow, "validIncomingFilterMs", () => incomingItems.filter((item) => !invalidSwapItems.includes(item)));
+    const validOutgoingItems = measurePick(diagRow, "validOutgoingFilterMs", () => outgoingItems.filter((item) => !invalidSwapItems.includes(item)));
+
+    // Keep two separate rank contexts:
+    // - currentContext controls the CPU's negotiation mindset about draft capital.
+    //   A top team should not suddenly value picks like a rebuilder just because
+    //   the proposed trade would make it worse.
+    // - projectedContext controls what the actual picks are expected to become
+    //   after the trade. Own picks from a team acquiring/losing a star still move
+    //   up/down based on the post-trade roster projection.
+    const currentContext = measurePick(diagRow, "currentContextMs", () => buildPickRankContext(leagueData, null, "current"));
+    const directionRow = measurePick(diagRow, "directionRowMs", () => currentContext?.byTeam?.get?.(normalizeName(cpuTeamName)) || null);
+    const directionRank = clamp(Number(directionRow?.powerRank || 15), 1, 30);
+    const directionMultiplier = measurePick(diagRow, "directionMultiplierMs", () => getCpuPickDirectionMultiplier(currentContext, cpuTeamName));
+
+    if (!incomingItems.length && !outgoingItems.length) {
+      const result = {
+        netPickScore: 0,
+        incomingValue: 0,
+        incomingBaseValue: 0,
+        incomingMultiFirstPackageBridge: 0,
+        incomingSecondRoundBridge: 0,
+        incomingFirstAssetCount: 0,
+        incomingFirstEquivalentCount: 0,
+        incomingBridgeableFirstCount: 0,
+        incomingSecondAssetCount: 0,
+        outgoingValue: 0,
+        outgoingBaseValue: 0,
+        outgoingFuturePickExposurePenalty: 0,
+        outgoingSecondRoundExposurePenalty: 0,
+        outgoingFirstRoundExposure: 0,
+        outgoingSecondAssetCount: 0,
+        incoming: [],
+        outgoing: [],
+        reasons: [],
+        invalidSwaps: [],
+        invalidSwapReasons: [],
+        cpuPickDirectionMultiplier: directionMultiplier,
+        cpuPickDirectionRank: directionRank,
+        cpuPickDirectionBasis: "current_power_rank",
+        hasPicks: false,
+      };
+
+      if (diagRow) {
+        diagRow.netPickScore = 0;
+        diagRow.incomingPickCount = 0;
+        diagRow.outgoingPickCount = 0;
+        diagRow.invalidSwapCount = 0;
+      }
+
+      return result;
+    }
+
+    const projection = measurePick(
+      diagRow,
+      "buildPostTradePickProjectionMs",
+      () => buildPostTradePickProjection(
+        leagueData,
+        userItems,
+        cpuItems,
+        userTeamName,
+        cpuTeamName,
+        projectedRatingSnapshotsByTeam
+      )
+    );
+    const projectedContext = measurePick(diagRow, "projectedContextMs", () => buildPickRankContext(leagueData, projection, "projected"));
+    const incoming = measurePick(diagRow, "incomingPickItemValuesMs", () => validIncomingItems.map((item) => summarizeItem(evaluatePickItemValue(item, leagueData, projectedContext), "incoming", directionMultiplier)));
+    const outgoing = measurePick(diagRow, "outgoingPickItemValuesMs", () => validOutgoingItems.map((item) => summarizeItem(evaluatePickItemValue(item, leagueData, projectedContext), "outgoing", directionMultiplier)));
+    const incomingBaseValue = round4(incoming.reduce((sum, item) => sum + Number(item.adjustedValue || 0), 0));
+    const incomingPackageBridge = measurePick(diagRow, "incomingPackageBridgeMs", () => calculateIncomingDraftPackageBridge(incoming));
+    const incomingValue = round4(incomingBaseValue + Number(incomingPackageBridge.bonus || 0));
+    const outgoingBaseValue = round4(outgoing.reduce((sum, item) => sum + Number(item.adjustedValue || 0), 0));
+    const outgoingExposurePenalty = measurePick(diagRow, "outgoingExposurePenaltyMs", () => calculateOutgoingDraftCapitalExposurePenalty(outgoing));
+    const outgoingValue = round4(outgoingBaseValue + Number(outgoingExposurePenalty.penalty || 0));
+    const netPickScore = round4(incomingValue - outgoingValue);
+
+    const reasons = measurePick(diagRow, "reasonBuildMs", () => {
+      const out = [];
+      if (incoming.length || outgoing.length) {
+        const currentRankLabel = directionRow?.powerRank ? `current Power Rank #${directionRank}` : "current team direction";
+        out.push(`CPU draft-pick direction multiplier: ${directionMultiplier.toFixed(3)} (${displayTeamName(cpuTeamName)} values picks ${directionMultiplier >= 1 ? "more" : "less"} based on ${currentRankLabel}, while individual pick expectations still use post-trade projections).`);
+      }
+      if (incomingPackageBridge.firstBonus > TRADE_PICK_EPS) {
+        const equivalentText = Number(incomingPackageBridge.firstEquivalentCount || 0).toFixed(2);
+        out.push(`CPU multi-first package bridge: +${incomingPackageBridge.firstBonus.toFixed(3)} because ${displayTeamName(cpuTeamName)} is receiving ${incomingPackageBridge.firstAssetCount} first-round assets worth about ${equivalentText} first-round-equivalent assets after protections, swap limits, slot quality, and timing.`);
+      }
+      if (incomingPackageBridge.secondBridge > TRADE_PICK_EPS) {
+        const label = incomingPackageBridge.firstAssetCount > 0 ? "second-round sweetener support" : "multi-second sweetener bridge";
+        out.push(`CPU ${label}: +${incomingPackageBridge.secondBridge.toFixed(3)} because ${displayTeamName(cpuTeamName)} is receiving ${incomingPackageBridge.secondAssetCount} second-round assets.`);
+      }
+      if (outgoingExposurePenalty.penalty > TRADE_PICK_EPS) {
+        const stackText = outgoingExposurePenalty.stackPenalty > TRADE_PICK_EPS
+          ? `, including a ${outgoingExposurePenalty.stackPenalty.toFixed(3)} stacked-firsts penalty`
+          : "";
+        const secondText = outgoingExposurePenalty.secondPenalty > TRADE_PICK_EPS
+          ? ` and a ${outgoingExposurePenalty.secondPenalty.toFixed(3)} second-round clutter penalty`
+          : "";
+        out.push(`CPU future-pick exposure penalty: -${outgoingExposurePenalty.penalty.toFixed(3)} because ${displayTeamName(cpuTeamName)} is sending about ${outgoingExposurePenalty.exposure.toFixed(2)} first-round-equivalent draft assets in one deal${stackText}${secondText}.`);
+      }
+      if (incoming.length) {
+        const top = [...incoming].sort((a, b) => Math.abs(b.adjustedValue) - Math.abs(a.adjustedValue)).slice(0, 3);
+        for (const item of top) out.push(`CPU receives pick asset: ${item.reason} CPU counts it as ${item.adjustedValue.toFixed(3)}.`);
+      }
+      if (outgoing.length) {
+        const top = [...outgoing].sort((a, b) => Math.abs(b.adjustedValue) - Math.abs(a.adjustedValue)).slice(0, 3);
+        for (const item of top) out.push(`CPU gives pick asset: ${item.reason} CPU treats losing it as ${item.adjustedValue.toFixed(3)}.`);
+      }
+      if (Math.abs(netPickScore) > TRADE_PICK_EPS) {
+        out.unshift(`Net draft-pick value for CPU: ${netPickScore >= 0 ? "+" : ""}${netPickScore.toFixed(3)}.`);
+      }
+      return out;
+    });
+
+    const invalidSwapReasons = measurePick(diagRow, "invalidSwapReasonsMs", () => invalidSwapItems.map(
+      (item) => `Stale swap ignored: ${describeSwapTeamPair(item)} is not between ${displayTeamName(userTeamName)} and ${displayTeamName(cpuTeamName)}.`
+    ));
+
+    const result = {
+      netPickScore,
+      incomingValue,
+      incomingBaseValue,
+      incomingMultiFirstPackageBridge: round4(incomingPackageBridge.firstBonus || 0),
+      incomingSecondRoundBridge: round4(incomingPackageBridge.secondBridge || 0),
+      incomingFirstAssetCount: incomingPackageBridge.firstAssetCount || 0,
+      incomingFirstEquivalentCount: round4(incomingPackageBridge.firstEquivalentCount || 0),
+      incomingBridgeableFirstCount: incomingPackageBridge.bridgeableFirstCount || 0,
+      incomingSecondAssetCount: incomingPackageBridge.secondAssetCount || 0,
+      outgoingValue,
+      outgoingBaseValue,
+      outgoingFuturePickExposurePenalty: round4(outgoingExposurePenalty.penalty || 0),
+      outgoingSecondRoundExposurePenalty: round4(outgoingExposurePenalty.secondPenalty || 0),
+      outgoingFirstRoundExposure: round4(outgoingExposurePenalty.exposure || 0),
+      outgoingSecondAssetCount: outgoingExposurePenalty.secondAssetCount || 0,
+      incoming,
+      outgoing,
+      reasons,
+      invalidSwaps: invalidSwapItems,
+      invalidSwapReasons,
+      cpuPickDirectionMultiplier: directionMultiplier,
+      cpuPickDirectionRank: directionRank,
+      cpuPickDirectionBasis: "current_power_rank",
+      hasPicks: incoming.length > 0 || outgoing.length > 0 || invalidSwapItems.length > 0,
+    };
+
+    if (diagRow) {
+      diagRow.netPickScore = netPickScore;
+      diagRow.incomingPickCount = incoming.length;
+      diagRow.outgoingPickCount = outgoing.length;
+      diagRow.invalidSwapCount = invalidSwapItems.length;
+    }
+
+    return result;
+  } finally {
+    if (diagRow) {
+      diagRow.totalMs = round4(pickNow() - totalStart);
+      addPickMetric(diagRow, "evaluateTradePickImpactTotalMs", diagRow.totalMs);
+      finalizePickBreakdownRow(diagRow);
+    }
+    activePickBreakdownRow = previousDiagRow;
+  }
+}
+
+export function getTradePickValueDebug({ leagueData, item } = {}) {
+  return evaluatePickItemValue(item, leagueData, buildPickRankContext(leagueData));
+}

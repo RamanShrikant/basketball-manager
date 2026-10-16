@@ -9,6 +9,8 @@ export const ACTIVE_SAVE_KEY = "bm_active_league_save_id_v1";
 
 const GLOBAL_EXACT_KEYS = new Set([
   ACTIVE_SAVE_KEY,
+  "bm_account_vault_owner_v1",
+  "bm_account_vault_pending_v1",
   "bm_sfx_enabled_v1",
   "bm_sfx_master_volume_v1",
   "bm_tf_worker_pool_size",
@@ -29,6 +31,8 @@ const GLOBAL_EXACT_KEYS = new Set([
 ]);
 
 const GLOBAL_PREFIXES = [
+  "sb-", // Supabase auth session keys must NEVER enter franchise snapshots.
+  "supabase.auth.",
   "bm_face_dna_lab_",
   "bm_face_library_",
   "bm_face_player_dna_",

@@ -1,0 +1,196 @@
+import React, { useMemo } from "react";
+import { createPortal } from "react-dom";
+import { useGame } from "../context/GameContext";
+import RuntimePlayerPortrait from "../components/RuntimePlayerPortrait.jsx";
+
+function buildRosterLookupFromLeague(leagueData) {
+  const byKey = {};
+  const byName = {};
+
+  const allTeams = Array.isArray(leagueData?.teams)
+    ? leagueData.teams
+    : Object.values(leagueData?.conferences || {}).flat();
+
+  for (const team of allTeams) {
+    const teamName = team?.name || team?.team;
+    const teamLogo =
+      team?.logo ||
+      team?.teamLogo ||
+      team?.newTeamLogo ||
+      team?.logoUrl ||
+      team?.image ||
+      team?.img ||
+      "";
+
+    for (const p of team?.players || []) {
+      const playerName = p?.name || p?.player;
+      if (!playerName || !teamName) continue;
+
+      const info = {
+        headshot:
+          p?.headshot ||
+          p?.portrait ||
+          p?.image ||
+          p?.photo ||
+          p?.img ||
+          "",
+        overall:
+          p?.overall ??
+          p?.ovr ??
+          p?.rating ??
+          p?.overall_rating ??
+          null,
+        pos: p?.pos || p?.position || "",
+        secondaryPos: p?.secondaryPos || p?.secondary_pos || "",
+        teamLogo,
+        portraitId: p?.portraitId || p?.portraitFamilyId || "",
+        portraitFamilyId: p?.portraitFamilyId || p?.portraitId || "",
+        portraitVariant: p?.portraitVariant || p?.portraitStage || "",
+      };
+
+      byKey[`${playerName}__${teamName}`] = info;
+      if (!byName[playerName]) byName[playerName] = info;
+    }
+  }
+
+  return { byKey, byName };
+}
+
+function getRosterInfo(player, lookup) {
+  if (!player) return {};
+  return (
+    lookup.byKey?.[`${player.player}__${player.team}`] ||
+    lookup.byName?.[player.player] ||
+    {}
+  );
+}
+
+function PlayerRow({ player, index, lookup }) {
+  const info = getRosterInfo(player, lookup);
+
+  return (
+    <div className="flex items-center justify-between rounded-xl border border-neutral-700 bg-neutral-800/90 px-3 py-3">
+      <div className="flex min-w-0 items-center gap-3">
+        <span className="w-5 shrink-0 text-xs text-neutral-400">{index + 1}</span>
+
+        <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-full bg-neutral-950 ring-1 ring-white/10">
+          <RuntimePlayerPortrait
+            player={info}
+            teamName={player.team || ""}
+            src={info.headshot}
+            alt={player.player}
+            className="h-full w-full"
+            fallback={<div className="flex h-full w-full items-center justify-center text-xs text-neutral-500">N/A</div>}
+          />
+        </div>
+
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            {info.teamLogo ? (
+              <img src={info.teamLogo} alt={player.team} className="h-5 w-5 shrink-0 object-contain" />
+            ) : null}
+            <span className="truncate text-lg font-semibold text-white">{player.player}</span>
+          </div>
+
+          <div className="mt-1 text-xs text-neutral-400">
+            {player.team} • {player.team_wins} wins
+          </div>
+        </div>
+      </div>
+
+      <div className="ml-4 flex shrink-0 items-center gap-4">
+        <div className="rounded-full border border-orange-500/40 bg-orange-500/10 px-3 py-2 text-center">
+          <div className="text-[10px] font-semibold tracking-wide text-neutral-400">OVR</div>
+          <div className="text-lg font-extrabold leading-none text-orange-400">{info.overall ?? "--"}</div>
+        </div>
+
+        <div className="text-right text-xs text-neutral-300">
+          <div>{player.ppg} PPG</div>
+          <div>{player.rpg} RPG • {player.apg} APG</div>
+          <div>{player.spg} SPG • {player.bpg} BPG</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Section({ title, players, lookup }) {
+  return (
+    <div className="space-y-2">
+      <h4 className="text-sm font-bold uppercase tracking-wide text-orange-400">{title}</h4>
+      {players.length === 0 ? (
+        <div className="rounded-lg border border-neutral-800 bg-neutral-900/60 px-3 py-3 text-sm text-neutral-400">No players</div>
+      ) : (
+        players.map((player, index) => (
+          <PlayerRow key={`${title}_${player.player}_${player.team}`} player={player} index={index} lookup={lookup} />
+        ))
+      )}
+    </div>
+  );
+}
+
+function ConferenceColumn({ title, data, lookup }) {
+  return (
+    <div className="rounded-2xl border border-white/15 bg-neutral-950/80 p-4">
+      <h3 className="mb-4 text-xl font-bold text-white">{title}</h3>
+      <div className="space-y-5">
+        <Section title="Starters" players={data?.starters || []} lookup={lookup} />
+        <Section title="Reserves" players={data?.reserves || []} lookup={lookup} />
+      </div>
+    </div>
+  );
+}
+
+export function AllStarsContent({ data, leagueData }) {
+  const lookup = useMemo(() => buildRosterLookupFromLeague(leagueData), [leagueData]);
+
+  if (!data) return null;
+
+  return (
+    <>
+      <div className="mb-6">
+        <h2 className="text-3xl font-bold text-orange-400">All-Star Teams</h2>
+        <p className="mt-1 text-sm text-neutral-300">{data.season} • Cutoff: {data.cutoff_date || "Midseason"}</p>
+        <p className="mt-1 text-sm text-neutral-400">Eastern and Western Conference starters and reserves.</p>
+      </div>
+
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+        <ConferenceColumn title="Eastern Conference" data={data.east} lookup={lookup} />
+        <ConferenceColumn title="Western Conference" data={data.west} lookup={lookup} />
+      </div>
+    </>
+  );
+}
+
+export default function AllStars({ open, data, onClose, closeLabel = "Close" }) {
+  const { leagueData } = useGame();
+
+  if (!open || !data) return null;
+
+  return createPortal(
+    <>
+      <style>{`
+        @keyframes bmModalBackdropIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes bmModalLiftIn {
+          from { opacity: 0; transform: translateY(10px) scale(0.985); }
+          to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        .bmModalFade { animation: bmModalBackdropIn 220ms ease-out both; }
+        .bmModalLift { animation: bmModalLiftIn 260ms cubic-bezier(0.22, 1, 0.36, 1) both; will-change: opacity, transform; }
+        @media (prefers-reduced-motion: reduce) { .bmModalFade, .bmModalLift { animation: none; } }
+      `}</style>
+
+      <div className="bmModalFade fixed inset-0 z-[240] flex items-center justify-center bg-black/80 p-4 backdrop-blur-md" onClick={onClose}>
+        <div className="bmModalLift max-h-[92vh] w-full max-w-7xl overflow-auto rounded-2xl border border-white/20 bg-neutral-900 p-6 text-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
+          <div className="mb-4 flex justify-end">
+            <button className="rounded-lg bg-neutral-700 px-4 py-2 font-semibold text-white hover:bg-neutral-600" onClick={onClose}>
+              {closeLabel}
+            </button>
+          </div>
+          <AllStarsContent data={data} leagueData={leagueData} />
+        </div>
+      </div>
+    </>,
+    document.body
+  );
+}

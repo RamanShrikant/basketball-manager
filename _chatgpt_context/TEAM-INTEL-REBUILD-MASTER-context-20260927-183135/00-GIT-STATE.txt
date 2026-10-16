@@ -1,0 +1,39 @@
+============================================================
+BASKETBALL MANAGER - TEAM INTEL CONTEXT
+============================================================
+
+Captured: 2026-09-27 18:31:38
+Repository: C:\Users\raman\Downloads\basketball-manager
+
+---------------- BRANCH ----------------
+main
+
+---------------- COMMIT ----------------
+f0a6068035b5ff0bc7fd535be4a6850b6db304ce
+
+---------------- STATUS ----------------
+On branch main
+Your branch is up to date with 'origin/main'.
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	_chatgpt_context/
+
+nothing added to commit but untracked files present (use "git add" to track)
+
+---------------- LAST 15 COMMITS ----------------
+f0a6068 (HEAD -> main, origin/main, origin/HEAD) rasta
+48ac765 contract extension
+e85b878 contract extension touchups almost done
+10b5690 trade deadline faster
+3aae2b0 Standardize postseason injuries and add dev tools toggle
+2997bad Fix postseason layout and expand save slots
+59034d3 Add true multi-save V2 system
+f1f09a3 Apply fresh league trade and readability improvements
+a414626 Polish basketball manager UI and contract extension flow
+9647ecd Checkpoint V14.9 UI polish
+5deea9e Add local save slots and UI polish
+5753aa0 rasra
+eb68ca7 sound effects
+b1e5e20 Add UI navigation and transaction sound effects
+31ee246 Harden controlled team navigation and trade builder

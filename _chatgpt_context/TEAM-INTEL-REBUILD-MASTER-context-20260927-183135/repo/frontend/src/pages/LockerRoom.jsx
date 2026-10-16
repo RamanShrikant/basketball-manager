@@ -1,0 +1,1901 @@
+import React, { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { useGame } from "../context/GameContext";
+import { getLockerRoomMoods } from "../api/simEnginePy.js";
+import PageFade from "../components/PageFade";
+import RuntimePlayerPortrait from "../components/RuntimePlayerPortrait.jsx";
+import useKeyboardListNavigation from "../utils/useKeyboardListNavigation";
+import useKeyboardTeamNavigation from "../utils/useKeyboardTeamNavigation.js";
+import { readTradeDeskFeed, readPlayerMoodEventBus } from "../utils/tradeDeskFeed.js";
+import "../styles/BMAnimations.css";
+import "../styles/BMPageBackground.css";
+
+const LOCKER_ROOM_SCROLLBAR_STYLE = `
+  .locker-room-player-scroll,
+  .locker-room-detail-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: #f97316 rgba(10, 10, 10, 0.75);
+  }
+
+  .locker-room-player-scroll::-webkit-scrollbar,
+  .locker-room-detail-scroll::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  .locker-room-player-scroll::-webkit-scrollbar-track,
+  .locker-room-detail-scroll::-webkit-scrollbar-track {
+    background: rgba(8, 8, 8, 0.78);
+    border-radius: 999px;
+  }
+
+  .locker-room-player-scroll::-webkit-scrollbar-thumb,
+  .locker-room-detail-scroll::-webkit-scrollbar-thumb {
+    background: linear-gradient(180deg, #fdba74 0%, #f97316 45%, #9a3412 100%);
+    border-radius: 999px;
+    border: 1px solid rgba(0, 0, 0, 0.85);
+    box-shadow: 0 0 10px rgba(249, 115, 22, 0.38);
+  }
+
+  .locker-room-player-scroll::-webkit-scrollbar-thumb:hover,
+  .locker-room-detail-scroll::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(180deg, #fed7aa 0%, #fb923c 45%, #c2410c 100%);
+  }
+
+  .locker-room-player-scroll::-webkit-scrollbar-button,
+  .locker-room-detail-scroll::-webkit-scrollbar-button {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+`;
+
+const CALENDAR_MOOD_CONTEXT_KEY = "bm_calendar_mood_context_v1";
+
+function getAllTeamsFromLeague(leagueData) {
+  if (!leagueData) return [];
+  if (Array.isArray(leagueData.teams)) return leagueData.teams;
+  if (leagueData.conferences) return Object.values(leagueData.conferences).flat();
+  return [];
+}
+
+function teamLogoOf(team) {
+  return (
+    team?.logo ||
+    team?.teamLogo ||
+    team?.newTeamLogo ||
+    team?.logoUrl ||
+    team?.image ||
+    ""
+  );
+}
+
+function safeJsonParse(value, fallback = null) {
+  try {
+    if (!value) return fallback;
+    const parsed = JSON.parse(value);
+    return parsed ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function readCalendarMoodContextForLockerRoom() {
+  if (typeof localStorage === "undefined") return null;
+
+  const direct = safeJsonParse(localStorage.getItem(CALENDAR_MOOD_CONTEXT_KEY), null);
+  if (direct?.date || direct?.currentDate) return direct;
+
+  // Backward-compatible fallback: older calendar code only wrote season cursor keys.
+  try {
+    const cursorKeys = [];
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith("bm_calendar_cursor_v1_")) cursorKeys.push(key);
+    }
+
+    cursorKeys.sort().reverse();
+    for (const key of cursorKeys) {
+      const row = safeJsonParse(localStorage.getItem(key), null);
+      if (row?.date) {
+        return {
+          date: row.date,
+          currentDate: row.date,
+          month: row.month || "",
+          source: key,
+        };
+      }
+    }
+  } catch {}
+
+  return null;
+}
+
+function readTradeDeskFeedForLockerRoom() {
+  return readTradeDeskFeed();
+}
+
+
+function normalizeMoodEventNameKey(value = "") {
+  return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+function readPlayerMoodEventBusForLockerRoom() {
+  return readPlayerMoodEventBus().filter((row) => row && typeof row === "object");
+}
+
+function moodStateKeysForEvent(event = {}) {
+  const playerName = String(event.playerName || event.player || event.name || "").trim();
+
+  return Array.from(
+    new Set(
+      [
+        event.playerKey,
+        playerName,
+        playerName ? `name:${playerName}` : "",
+        normalizeMoodEventNameKey(playerName),
+      ].filter(Boolean)
+    )
+  );
+}
+
+function mergePlayerMoodEventBusIntoLeagueData(leagueData, eventBus = []) {
+  if (!leagueData || !Array.isArray(eventBus) || !eventBus.length) return leagueData;
+
+  const moodState = leagueData.playerMoodState && typeof leagueData.playerMoodState === "object"
+    ? leagueData.playerMoodState
+    : {};
+  const playersState = moodState.players && typeof moodState.players === "object"
+    ? { ...moodState.players }
+    : {};
+
+  for (const event of eventBus) {
+    const eventId = String(event?.id || "").trim();
+    if (!eventId) continue;
+
+    for (const key of moodStateKeysForEvent(event)) {
+      const existing = playersState[key] && typeof playersState[key] === "object"
+        ? playersState[key]
+        : {};
+      const existingEvents = Array.isArray(existing.events)
+        ? existing.events
+        : Array.isArray(existing.eventLog)
+          ? existing.eventLog
+          : [];
+
+      const byId = new Map();
+      for (const row of existingEvents) {
+        const rowId = String(row?.id || row?.sourceId || "").trim();
+        if (rowId) byId.set(rowId, row);
+      }
+
+      byId.set(eventId, {
+        ...event,
+        id: eventId,
+      });
+
+      playersState[key] = {
+        ...existing,
+        events: [...byId.values()].slice(-80),
+      };
+    }
+  }
+
+  return {
+    ...leagueData,
+    playerMoodState: {
+      ...moodState,
+      players: playersState,
+    },
+  };
+}
+
+
+function readStoredGameplanForMood(teamName) {
+  if (!teamName || typeof localStorage === "undefined") return null;
+
+  try {
+    const raw = localStorage.getItem(`gameplan_${teamName}`);
+    if (!raw) return null;
+
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || !parsed.minutes || typeof parsed.minutes !== "object") {
+      return null;
+    }
+
+    return {
+      teamName: parsed.teamName || teamName,
+      version: parsed.version ?? null,
+      source: parsed.source || "stored_gameplan",
+      updatedAt: parsed.updatedAt ?? null,
+      order: Array.isArray(parsed.order) ? parsed.order : [],
+      minutes: parsed.minutes,
+    };
+  } catch (err) {
+    console.warn("[LockerRoom] Could not read stored gameplan for mood:", err);
+    return null;
+  }
+}
+
+function buildLeagueDataWithMoodGameplan(leagueData, teamName) {
+  if (!leagueData) return leagueData;
+
+  const gameplan = readStoredGameplanForMood(teamName);
+  const calendarContext = readCalendarMoodContextForLockerRoom();
+  const tradeDeskFeed = readTradeDeskFeedForLockerRoom();
+  const playerMoodEventBus = readPlayerMoodEventBusForLockerRoom();
+
+  let nextLeagueData = {
+    ...leagueData,
+  };
+
+  if (gameplan) {
+    nextLeagueData.moodGameplansByTeam = {
+      ...(leagueData.moodGameplansByTeam || {}),
+      [teamName]: gameplan,
+    };
+  }
+
+  const currentDate = calendarContext?.date || calendarContext?.currentDate || "";
+  if (currentDate) {
+    nextLeagueData.currentDate = currentDate;
+    nextLeagueData.calendarDate = currentDate;
+    nextLeagueData.moodCalendarContext = calendarContext;
+    nextLeagueData.calendar = {
+      ...(leagueData.calendar || {}),
+      currentDate,
+      cursorDate: currentDate,
+      month: calendarContext?.month || leagueData.calendar?.month,
+    };
+  }
+
+  if (tradeDeskFeed.length) {
+    nextLeagueData.tradeDeskFeed = tradeDeskFeed;
+  }
+
+  if (playerMoodEventBus.length) {
+    nextLeagueData = mergePlayerMoodEventBusIntoLeagueData(nextLeagueData, playerMoodEventBus);
+  }
+
+  return nextLeagueData;
+}
+
+function formatMoney(value) {
+  const n = Number(value || 0);
+  if (!Number.isFinite(n) || n <= 0) return "$0";
+  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+  return `$${Math.round(n / 1000)}K`;
+}
+
+function moodToneClasses(tone) {
+  if (tone === "elite") return "border-emerald-300/45 bg-emerald-500/15 text-emerald-100";
+  if (tone === "positive") return "border-lime-300/35 bg-lime-500/10 text-lime-100";
+  if (tone === "neutral") return "border-orange-300/30 bg-orange-500/10 text-orange-100";
+  if (tone === "warning") return "border-amber-300/35 bg-amber-500/12 text-amber-100";
+  if (tone === "negative") return "border-red-300/35 bg-red-500/12 text-red-100";
+  if (tone === "critical") return "border-red-400/50 bg-red-600/18 text-red-100";
+  return "border-white/10 bg-white/[0.04] text-white";
+}
+
+function lockerMoodImpactCardClass(value) {
+  const impact = Number(value || 0);
+  if (impact > 0.05) {
+    return "border-emerald-400/30 bg-emerald-500/10 shadow-[inset_0_0_24px_rgba(16,185,129,0.035)]";
+  }
+  if (impact < -0.05) {
+    return "border-rose-400/30 bg-rose-500/10 shadow-[inset_0_0_24px_rgba(244,63,94,0.035)]";
+  }
+  return "border-white/8 bg-white/[0.035]";
+}
+
+function factorTone(value) {
+  const n = Number(value || 0);
+  if (n > 0) return "text-emerald-300";
+  if (n < 0) return "text-red-300";
+  return "text-neutral-300";
+}
+function moodSemanticCardClasses(value) {
+  const impact = Number(value || 0);
+  if (impact > 0) return "border-emerald-300/30 bg-emerald-500/12 text-emerald-50";
+  if (impact < 0) return "border-red-300/30 bg-red-500/12 text-red-50";
+  return "border-white/8 bg-white/[0.035] text-white";
+}
+
+
+function moodCardTone(value) {
+  const n = Number(value || 0);
+  if (n > 0) return "border-emerald-400/30 bg-emerald-500/[0.09]";
+  if (n < 0) return "border-red-400/30 bg-red-500/[0.09]";
+  return "border-white/8 bg-white/[0.035]";
+}
+
+function moodImpactCardClasses(value) {
+  const n = Number(value || 0);
+  if (n > 0) {
+    return "border-emerald-400/35 bg-emerald-500/[0.09] shadow-[inset_0_0_26px_rgba(16,185,129,0.045)]";
+  }
+  if (n < 0) {
+    return "border-rose-400/35 bg-rose-500/[0.09] shadow-[inset_0_0_26px_rgba(244,63,94,0.045)]";
+  }
+  return "border-white/10 bg-white/[0.035]";
+}
+
+function trendText(trend) {
+  if (trend === "rising") return "Rising";
+  if (trend === "falling") return "Falling";
+  return "Stable";
+}
+
+function humanizeMoodLabel(label) {
+  const source = String(label || "Mood");
+  const normalized = source
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+
+  // Header callout labels need to stay compact so they do not truncate.
+  // Keep all existing sizing/position settings untouched; only shorten this label.
+  if (normalized.toLowerCase() === "playing time") return "Minutes";
+
+  return normalized;
+}
+
+function buildMoodBreakdownCallouts(player, maxItems = 3) {
+  const reasonItems = Array.isArray(player?.reasons)
+    ? player.reasons
+        .filter((reason) => Number(reason?.impact || 0) !== 0)
+        .map((reason) => ({
+          label: humanizeMoodLabel(reason?.category || "Mood"),
+          value: Number(reason?.impact || 0),
+          detail: reason?.detail || reason?.text || "",
+        }))
+    : [];
+
+  if (reasonItems.length) {
+    return reasonItems
+      .sort((a, b) => Math.abs(b.value) - Math.abs(a.value))
+      .slice(0, maxItems);
+  }
+
+  const factorItems = Object.entries(player?.factors || {})
+    .filter(([, value]) => Number(value || 0) !== 0)
+    .map(([key, value]) => ({
+      label: humanizeMoodLabel(key),
+      value: Number(value || 0),
+      detail: "",
+    }));
+
+  return factorItems
+    .sort((a, b) => Math.abs(b.value) - Math.abs(a.value))
+    .slice(0, maxItems);
+}
+
+function sortMoodRowsByOverall(rows = []) {
+  return [...(Array.isArray(rows) ? rows : [])].sort((a, b) => {
+    const overallDiff = Number(b?.overall || 0) - Number(a?.overall || 0);
+    if (overallDiff !== 0) return overallDiff;
+
+    const potentialDiff = Number(b?.potential || 0) - Number(a?.potential || 0);
+    if (potentialDiff !== 0) return potentialDiff;
+
+    return String(a?.playerName || "").localeCompare(String(b?.playerName || ""));
+  });
+}
+
+function MoodRing({ score = 0, size = 116 }) {
+  const safeScore = Math.max(0, Math.min(100, Number(score || 0)));
+  const radius = 47;
+  const circumference = 2 * Math.PI * radius;
+  const strokeOffset = circumference * (1 - safeScore / 100);
+
+  return (
+    <div className="relative flex shrink-0 items-center justify-center" style={{ width: size, height: size }}>
+      <svg width={size} height={size} viewBox="0 0 116 116">
+        <defs>
+          <linearGradient id="lockerMoodGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stopColor="#fb923c" />
+            <stop offset="50%" stopColor="#facc15" />
+            <stop offset="100%" stopColor="#22c55e" />
+          </linearGradient>
+        </defs>
+        <circle cx="58" cy="58" r={radius} stroke="rgba(255,255,255,0.10)" strokeWidth="9" fill="rgba(0,0,0,0.35)" />
+        <circle
+          cx="58"
+          cy="58"
+          r={radius}
+          stroke="url(#lockerMoodGradient)"
+          strokeWidth="9"
+          strokeLinecap="round"
+          fill="none"
+          strokeDasharray={circumference}
+          strokeDashoffset={strokeOffset}
+          transform="rotate(-90 58 58)"
+        />
+      </svg>
+      <div className="absolute inset-0 flex flex-col items-center justify-center text-center leading-none">
+        <div className="text-[10px] font-black uppercase tracking-[0.18em] text-neutral-400">Mood</div>
+        <div className="mt-1 text-[34px] font-black text-orange-300">{Math.round(safeScore)}</div>
+      </div>
+    </div>
+  );
+}
+
+function OvrPill({ label, value }) {
+  return (
+    <div className="rounded-2xl border border-white/10 bg-black/55 px-4 py-2 text-center">
+      <div className="text-[10px] font-black uppercase tracking-[0.16em] text-neutral-500">{label}</div>
+      <div className="text-xl font-black text-white">{value ?? "-"}</div>
+    </div>
+  );
+}
+
+
+const LOCKER_ROOM_PLAYER_PILL_TUNING = {
+  rowMinHeight: 84,
+  rowPaddingX: 16,
+  rowPaddingY: 14,
+  rowRadius: 16,
+
+  headshotBoxWidth: 98,
+  headshotSize: 76,
+  headshotX: 2,
+  headshotY: 0,
+  leftPad: 108,
+
+  ringSize: 54,
+  ringX: 0,
+  ringY: 0,
+  ringGap: 10,
+
+  nameSize: 16,
+  infoSize: 12,
+  detailSize: 11,
+
+  scorePadX: 14,
+  scorePadY: 8,
+  scoreRadius: 12,
+};
+
+
+// ============================================================
+// RIGHT-SIDE LOCKER ROOM REPORT HEADER MANUAL CONTROLS
+// ============================================================
+// These controls affect ONLY the big player report banner on the
+// right side of the Locker Room page. They do not affect the left
+// player list, mood logic, Python, or any gameplay data.
+//
+// IMPORTANT DESIGN FIX:
+// Everything inside this header is now ABSOLUTELY POSITIONED.
+// That means the headshot, the title text, the player name, and
+// the grey divider bar do NOT push each other around anymore.
+//
+// How to use this:
+// - Positive x = move right. Negative x = move left.
+// - Positive y = move down. Negative y = move up.
+// - Increase imageSize to make the player headshot bigger.
+// - Increase reportLabel.fontSize to make "LOCKER ROOM REPORT" bigger.
+// - Increase playerName.fontSize to make the player name bigger.
+// - The text is forced to stay on ONE LINE with whiteSpace: "nowrap".
+// - No text truncation is applied here, so letters like y/g/p should not get cut off.
+const LOCKER_ROOM_REPORT_HEADER_TUNING = {
+  // Outer report banner shell. This is the bordered area above Role / Contract / Stats.
+  headerBox: {
+    height: 200,          // Compact V10 hero keeps the full report visible without right-side scrolling.
+    paddingX: 28,         // Left/right breathing room inside the banner.
+    paddingTop: 24,       // Top breathing room inside the banner.
+    borderRadius: 24,     // Roundness of the banner's top corners.
+    overflow: "visible", // Keep visible so large text/headshots/rings do not get clipped.
+  },
+
+  // Thin grey line under the player/headshot area, similar to the RosterView card bar.
+  // This now has a high zIndex so it draws OVER the headshot/rings/card layer.
+  greyDividerBar: {
+    x: 0,                 // Move the grey bar left/right.
+    y: 0,                 // Move the grey bar up/down from the bottom edge.
+    width: "100%",        // Bar width. Examples: "95%", "100%", "calc(100% - 24px)".
+    height: 3,            // Bar thickness.
+    opacity: 0.55,        // Bar visibility.
+    color: "#ffffff",     // Bar color.
+    zIndex: 30,           // Higher number = bar sits above headshot/rings/text if they overlap.
+  },
+
+  // Player face/headshot in the right report banner.
+  // This is fully independent from the grey divider bar.
+  faceCard: {
+    boxWidth: 180,        // Compact headshot lane for the single-screen report.
+    boxHeight: 190,       // Compact lane height.
+    boxX: 48,             // V10 compact hero position.
+    boxY: 5,              // V10 compact hero position.
+
+    imageSize: 165,       // Compact headshot size.
+    imageX: -30,          // Compact headshot alignment.
+    imageY: 0,            // Compact headshot alignment.
+    imageBottom: 0,       // Anchors the image from the bottom of the fixed lane.
+
+    zIndex: 4,            // Layer order for the headshot.
+    shadow: true,         // Turn headshot drop shadow on/off.
+  },
+
+  // Entire text group containing the report label + player name.
+  // Move this first when you want to place the whole text block.
+  textBlock: {
+    x: 285,               // Compact report text position.
+    y: 58,                // Compact report text position.
+    width: "max-content", // Keeps text free-flowing instead of resizing itself.
+    zIndex: 6,            // Higher number = sits above background logo.
+  },
+
+  // The orange "LOCKER ROOM REPORT" text above the player name.
+  reportLabel: {
+    fontSize: 24,         // Compact report-label size.
+    x: -160,              // Move only this label right/left.
+    y: -50,               // Move only this label down/up.
+    lineHeight: 1.15,     // Prevents tall letters from being clipped.
+    letterSpacing: "0.24em",
+    whiteSpace: "nowrap", // Forces the label to stay on one line.
+  },
+
+  // Big player name in the right report banner.
+  playerName: {
+    fontSize: 42,         // Compact player-name size.
+    x: -110,              // Move only the name right/left.
+    y: -56,               // Move only the name down/up.
+    lineHeight: 1.12,     // Prevents descenders like y/g/p from getting cut off.
+    marginTop: 8,         // Space between report label and player name.
+    whiteSpace: "nowrap", // Keeps the name from wrapping/resizing.
+  },
+
+  // NOTE: The old right-side OVR/POT ring has been removed from this header.
+  // The mood ring below now uses that same visual spot so the right header focuses on mood.
+
+  // Mood ring on the right-side report header.
+  // This replaces the old mood square with a clean green/yellow/orange ring.
+  // It is fully free-positioned, so it does not affect the headshot, OVR ring, text, or grey bar.
+  moodRing: {
+    enabled: true,        // Set false to hide the right-side mood ring.
+
+    // Position/size of the whole ring.
+    // These start centered around the old mood-square spot, so it should land in the same area.
+    x: 300,               // Compact hero mood-ring position.
+    y: 76,                // Compact hero mood-ring position.
+    size: 112,            // Compact hero mood-ring size.
+    zIndex: 8,            // Layer order for the mood ring.
+
+    // Ring shape/visuals.
+    strokeWidth: 9,       // Thickness of the mood ring.
+    trackOpacity: 0.10,   // Faint empty-ring opacity.
+    fillOpacity: 1,       // Filled-ring opacity.
+    backgroundFill: "rgba(0,0,0,0.35)",
+
+    // Gradient colors. Low mood starts orange, middle mood is yellow, high mood turns green.
+    gradientStart: "#fb923c",
+    gradientMid: "#facc15",
+    gradientEnd: "#22c55e",
+
+    // Text controls inside the ring.
+    textScale: 1.1,         // Quick global text multiplier for all mood-ring text.
+    labelText: "Mood",   // Label above the mood score.
+    labelSize: 10,        // Label font size.
+    labelX: 0,            // Move only label text right/left.
+    labelY: -1,           // Move only label text down/up.
+    scoreSize: 44,        // Mood score font size.
+    scoreX: 0,            // Move only score text right/left.
+    scoreY: 1,            // Move only score text down/up.
+    showTrend: true,      // Set false if you only want the score in the ring.
+    trendSize: 8,         // Trend label font size.
+    trendX: 0,            // Move only trend text right/left.
+    trendY: 4,            // Move only trend text down/up.
+    letterSpacing: "0.16em",
+
+    labelColor: "#d4d4d8",
+    scoreColor: "#fed7aa",
+    trendColor: "#d4d4d8",
+  },
+
+  // ============================================================
+  // MOOD BREAKDOWN CALLOUTS (RIGHT OF THE MOOD RING)
+  // ============================================================
+  // Calm explanatory diagram that uses thin leader lines + soft bubbles.
+  // It reads the strongest mood reasons/factors and places them to the
+  // right of the mood ring so the user can quickly see how the final
+  // mood score was built.
+  moodBreakdown: {
+    enabled: false,
+    zIndex: 10,
+    maxItems: 3,
+
+    // Connection behavior.
+    // true = each line automatically starts on the visible edge of the mood ring.
+    // This means you can move moodRing.x / moodRing.y / moodRing.size and the
+    // diagram lines will stay attached to the ring without hand-fixing anchors.
+    attachLinesToMoodRing: true,
+    startRadiusOffset: -4, // Negative pulls line start slightly inside the ring. Positive pushes outside.
+    showAnchorDots: true,  // Small dots make it visually clear the lines belong to the ring.
+    anchorDotRadius: 3,
+
+    // Shared defaults for the three callout rectangles.
+    // These are used unless an individual item below overrides them.
+    bubbleWidth: 178,     // Default rectangle width.
+    bubbleHeight: 42,     // Default rectangle height.
+    bubbleRadius: 14,     // Default rectangle corner roundness.
+    bubblePaddingX: 14,   // Default inside left/right padding.
+    bubbleGap: 12,        // Default gap between label text and value text.
+
+    elbowGap: 14,
+    lineWidth: 1.5,
+    positiveColor: "rgba(74, 222, 128, 0.95)",
+    negativeColor: "rgba(251, 146, 60, 0.95)",
+    neutralColor: "rgba(255,255,255,0.42)",
+
+    bubbleBackground: "rgba(8,8,8,0.82)",
+    bubbleBorder: "rgba(255,255,255,0.10)",
+    labelColor: "#f5f5f5",
+    valuePositiveColor: "#86efac",
+    valueNegativeColor: "#fdba74",
+    valueNeutralColor: "#d4d4d8",
+    labelFontSize: 12,    // Default category text size.
+    valueFontSize: 15,    // Default +/- number text size.
+    detailFontSize: 9,
+
+    // ============================================================
+    // INDIVIDUAL RECTANGLE CONTROLS
+    // ============================================================
+    // Each object below controls ONE of the 3 callout rectangles.
+    //
+    // Per rectangle:
+    // - bubbleX / bubbleY move that rectangle.
+    // - bubbleWidth / bubbleHeight change the real box size.
+    // - bubbleRadius changes corner roundness.
+    // - labelFontSize changes the category text size.
+    // - valueFontSize changes the +/- number text size.
+    // - bubblePaddingX changes inside spacing.
+    // - bubbleGap changes space between the label and number.
+    // - boxScale scales width, height, padding, and text together.
+    //
+    // Per line / connector:
+    // - lineX moves ONLY that colored line left/right. It does NOT move the rectangle.
+    // - lineY moves ONLY that colored line up/down. It does NOT move the rectangle.
+    // - lineStartOffsetX / lineStartOffsetY move only the small dot/start point near the ring.
+    // - lineEndOffsetX / lineEndOffsetY move only where the line touches the rectangle side.
+    // - lineElbowGap controls how far left the line turns before the rectangle.
+    //
+    // Easy examples:
+    // - Want the TOP green line higher? Set the first item's lineY to -10.
+    // - Want the MIDDLE orange line lower? Set the second item's lineY to 10.
+    // - Want the BOTTOM green line lower? Set the third item's lineY to 10.
+    //
+    // To move the actual rectangles, use bubbleX / bubbleY.
+    // To move only the colored connector lines, use lineX / lineY.
+    // To make all 3 smaller/larger quickly, set boxScale on each item.
+    // anchorDx / anchorDy are only used if attachLinesToMoodRing is false.
+    items: [
+      {
+        anchorDx: 38,
+        anchorDy: -24,
+        bubbleX: 480,
+        bubbleY: 116,
+        bubbleWidth: 158,
+        bubbleHeight: 22,
+        bubbleRadius: 14,
+        labelFontSize: 12,
+        valueFontSize: 15,
+        bubblePaddingX: 14,
+        bubbleGap: 12,
+        boxScale: 1,
+
+        // Line/connector controls for this rectangle.
+        // lineX / lineY move this whole colored line without moving the box.
+        lineX: -11,
+        lineY: 0,
+        lineStartOffsetX: 0,
+        lineStartOffsetY: -18,
+        lineEndOffsetX: 11, // Tiny attach fix: top line now meets the Role box edge.
+        lineEndOffsetY: 0,
+        lineElbowGap: null,
+      },
+      {
+        anchorDx: 48,
+        anchorDy: 0,
+        bubbleX: 470,
+        bubbleY: 148,
+        bubbleWidth: 158,
+        bubbleHeight: 22,
+        bubbleRadius: 14,
+        labelFontSize: 12,
+        valueFontSize: 15,
+        bubblePaddingX: 14,
+        bubbleGap: 12,
+        boxScale: 1,
+
+        // Line/connector controls for this rectangle.
+        // lineX / lineY move this whole colored line without moving the box.
+        lineX: 0,
+        lineY: 0,
+        lineStartOffsetX: 0,
+        lineStartOffsetY: 0,
+        lineEndOffsetX: 0,
+        lineEndOffsetY: 0,
+        lineElbowGap: null,
+      },
+      {
+        anchorDx: 38,
+        anchorDy: 24,
+        bubbleX: 450,
+        bubbleY: 190,
+        bubbleWidth: 158,
+        bubbleHeight: 22,
+        bubbleRadius: 14,
+        labelFontSize: 12,
+        valueFontSize: 15,
+        bubblePaddingX: 14,
+        bubbleGap: 12,
+        boxScale: 1,
+
+        // Line/connector controls for this rectangle.
+        // lineX / lineY move this whole colored line without moving the box.
+        lineX: -25,
+        lineY: 15,
+        lineStartOffsetX: 0,
+        lineStartOffsetY: 18,
+        lineEndOffsetX: 25, // Tiny attach fix: bottom line now meets the Security box edge.
+        lineEndOffsetY: 0,
+        lineElbowGap: null,
+      },
+    ],
+  },
+};
+
+function LockerRoomPlayerHeadshot({ row, team = null }) {
+  const t = LOCKER_ROOM_PLAYER_PILL_TUNING;
+
+  if (!row?.headshot) return null;
+
+  return (
+    <div
+      className="pointer-events-none absolute bottom-0 left-0 top-0 z-[2] flex items-end justify-start overflow-visible"
+      style={{ width: t.headshotBoxWidth }}
+      aria-hidden="true"
+    >
+      <RuntimePlayerPortrait
+        player={row}
+        team={team}
+        teamName={team?.name || team?.teamName || ""}
+        src={row.headshot}
+        alt=""
+        ariaHidden
+        layoutPage="locker-room-list"
+        className="h-full w-full select-none"
+        contentStyle={{
+          transform: `translate(${t.headshotX}px, ${t.headshotY}px)`,
+        }}
+      />
+    </div>
+  );
+}
+
+function LockerRoomMiniRatingRing({ row }) {
+  const t = LOCKER_ROOM_PLAYER_PILL_TUNING;
+  const overall = Number(row?.overall || 0);
+  const potential = Number(row?.potential || overall || 0);
+  const size = t.ringSize;
+  const radius = 47;
+  const circumference = 2 * Math.PI * radius;
+  const fillPercent = Math.min(Math.max(overall, 0) / 99, 1);
+  const strokeOffset = circumference * (1 - fillPercent);
+
+  return (
+    <div
+      className="relative flex shrink-0 items-center justify-center"
+      style={{
+        width: size,
+        height: size,
+        transform: `translate(${t.ringX}px, ${t.ringY}px)`,
+      }}
+    >
+      <svg width={size} height={size} viewBox="0 0 120 120">
+        <defs>
+          <linearGradient id="lockerRoomRowOvrGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stopColor="#FFA500" />
+            <stop offset="100%" stopColor="#FFD54F" />
+          </linearGradient>
+        </defs>
+        <circle cx="60" cy="60" r={radius} stroke="rgba(255,255,255,0.08)" strokeWidth="7" fill="rgba(0,0,0,0.30)" />
+        <circle
+          cx="60"
+          cy="60"
+          r={radius}
+          stroke="url(#lockerRoomRowOvrGradient)"
+          strokeWidth="7"
+          strokeLinecap="round"
+          fill="none"
+          strokeDasharray={circumference}
+          strokeDashoffset={strokeOffset}
+          transform="rotate(-90 60 60)"
+        />
+      </svg>
+      <div className="absolute inset-0 flex -translate-y-[1px] flex-col items-center justify-center text-center leading-none">
+        <div className="text-[7px] font-black uppercase tracking-[0.08em] text-neutral-300">OVR</div>
+        <div className="mt-[1px] text-[21px] font-black leading-[0.82] text-orange-400">{row?.overall ?? "-"}</div>
+        <div className="mt-[2px] text-[6.5px] font-black uppercase leading-none tracking-[0.02em] text-neutral-400">
+          POT <span className="text-orange-400">{potential || "-"}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+function LockerRoomReportMoodRing({ player, tuning }) {
+  if (!tuning?.enabled) return null;
+
+  const safeScore = Math.max(0, Math.min(100, Number(player?.moodScore || 0)));
+  const size = Number(tuning.size || 114);
+  const strokeWidth = Number(tuning.strokeWidth || 9);
+  const radius = Math.max(10, 50 - strokeWidth / 2);
+  const circumference = 2 * Math.PI * radius;
+  const strokeOffset = circumference * (1 - safeScore / 100);
+  const textScale = Number(tuning.textScale || 1);
+
+  return (
+    <div
+      className="pointer-events-none absolute flex items-center justify-center"
+      style={{
+        left: tuning.x,
+        top: tuning.y,
+        width: size,
+        height: size,
+        zIndex: tuning.zIndex,
+      }}
+      aria-hidden="true"
+    >
+      <svg width={size} height={size} viewBox="0 0 120 120">
+        <defs>
+          <linearGradient id="lockerRoomReportMoodGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stopColor={tuning.gradientStart || "#fb923c"} />
+            <stop offset="50%" stopColor={tuning.gradientMid || "#facc15"} />
+            <stop offset="100%" stopColor={tuning.gradientEnd || "#22c55e"} />
+          </linearGradient>
+        </defs>
+        <circle
+          cx="60"
+          cy="60"
+          r={radius}
+          stroke={`rgba(255,255,255,${Number(tuning.trackOpacity ?? 0.10)})`}
+          strokeWidth={strokeWidth}
+          fill={tuning.backgroundFill || "rgba(0,0,0,0.35)"}
+        />
+        <circle
+          cx="60"
+          cy="60"
+          r={radius}
+          stroke="url(#lockerRoomReportMoodGradient)"
+          strokeWidth={strokeWidth}
+          strokeLinecap="round"
+          fill="none"
+          opacity={Number(tuning.fillOpacity ?? 1)}
+          strokeDasharray={circumference}
+          strokeDashoffset={strokeOffset}
+          transform="rotate(-90 60 60)"
+        />
+      </svg>
+
+      <div className="absolute inset-0 flex flex-col items-center justify-center text-center leading-none">
+        <div
+          className="font-black uppercase"
+          style={{
+            color: tuning.labelColor || "#d4d4d8",
+            fontSize: Number(tuning.labelSize || 10) * textScale,
+            letterSpacing: tuning.letterSpacing || "0.16em",
+            transform: `translate(${tuning.labelX || 0}px, ${tuning.labelY || 0}px)`,
+          }}
+        >
+          {tuning.labelText || "Mood"}
+        </div>
+
+        <div
+          className="mt-1 font-black leading-none"
+          style={{
+            color: tuning.scoreColor || "#fed7aa",
+            fontSize: Number(tuning.scoreSize || 34) * textScale,
+            transform: `translate(${tuning.scoreX || 0}px, ${tuning.scoreY || 0}px)`,
+          }}
+        >
+          {Math.round(safeScore)}
+        </div>
+
+        {tuning.showTrend && (
+          <div
+            className="mt-1 font-black uppercase"
+            style={{
+              color: tuning.trendColor || "#d4d4d8",
+              fontSize: Number(tuning.trendSize || 8) * textScale,
+              letterSpacing: tuning.letterSpacing || "0.16em",
+              transform: `translate(${tuning.trendX || 0}px, ${tuning.trendY || 0}px)`,
+            }}
+          >
+            {trendText(player?.trend)}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function LockerRoomMoodBreakdownDiagram({ player, moodRingTuning, tuning }) {
+  if (!tuning?.enabled) return null;
+
+  const items = buildMoodBreakdownCallouts(player, Number(tuning.maxItems || 3));
+  if (!items.length) return null;
+
+  const ringCenterX = Number(moodRingTuning?.x || 0) + Number(moodRingTuning?.size || 0) / 2;
+  const ringCenterY = Number(moodRingTuning?.y || 0) + Number(moodRingTuning?.size || 0) / 2;
+  const defaultBubbleWidth = Number(tuning.bubbleWidth || 178);
+  const defaultBubbleHeight = Number(tuning.bubbleHeight || 42);
+  const defaultBubbleRadius = Number(tuning.bubbleRadius || 14);
+  const defaultBubblePaddingX = Number(tuning.bubblePaddingX || 14);
+  const defaultBubbleGap = Number(tuning.bubbleGap || 12);
+  const defaultLabelFontSize = Number(tuning.labelFontSize || 12);
+  const defaultValueFontSize = Number(tuning.valueFontSize || 15);
+  const moodRingSize = Number(moodRingTuning?.size || 0);
+  const moodRingStrokeWidth = Number(moodRingTuning?.strokeWidth || 0);
+  const visibleRingRadius = Math.max(
+    0,
+    moodRingSize / 2 - moodRingStrokeWidth / 2 + Number(tuning.startRadiusOffset || 0)
+  );
+
+  return (
+    <div className="pointer-events-none absolute inset-0" style={{ zIndex: tuning.zIndex }} aria-hidden="true">
+      <svg className="absolute inset-0 h-full w-full overflow-visible">
+        {items.map((item, index) => {
+          const placement = tuning.items?.[index] || tuning.items?.[tuning.items.length - 1] || {};
+          const bubbleX = Number(placement.bubbleX || 0);
+          const bubbleY = Number(placement.bubbleY || 0);
+          const boxScale = Number(placement.boxScale ?? 1);
+          const bubbleHeight = Number(placement.bubbleHeight ?? defaultBubbleHeight) * boxScale;
+          const lineX = Number(placement.lineX || 0);
+          const lineY = Number(placement.lineY || 0);
+          const endX = bubbleX + Number(placement.lineEndOffsetX || 0) + lineX;
+          const endY = bubbleY + bubbleHeight / 2 + Number(placement.lineEndOffsetY || 0) + lineY;
+          const lineElbowGap = Number(placement.lineElbowGap ?? tuning.elbowGap ?? 14);
+          const elbowX = endX - lineElbowGap;
+          const lineColor = item.value > 0 ? tuning.positiveColor : item.value < 0 ? tuning.negativeColor : tuning.neutralColor;
+
+          let startX = ringCenterX + Number(placement.anchorDx || 0);
+          let startY = ringCenterY + Number(placement.anchorDy || 0);
+
+          if (tuning.attachLinesToMoodRing !== false) {
+            const dx = endX - ringCenterX;
+            const dy = endY - ringCenterY;
+            const len = Math.hypot(dx, dy) || 1;
+            startX = ringCenterX + (dx / len) * visibleRingRadius;
+            startY = ringCenterY + (dy / len) * visibleRingRadius;
+          }
+
+          startX += Number(placement.lineStartOffsetX || 0) + lineX;
+          startY += Number(placement.lineStartOffsetY || 0) + lineY;
+
+          const pathD = `M ${startX} ${startY} L ${elbowX} ${startY} L ${elbowX} ${endY} L ${endX} ${endY}`;
+
+          return (
+            <g key={`line-${item.label}-${index}`}>
+              <path
+                d={pathD}
+                fill="none"
+                stroke={lineColor}
+                strokeWidth={tuning.lineWidth || 1.5}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                opacity="0.92"
+              />
+              {tuning.showAnchorDots && (
+                <circle
+                  cx={startX}
+                  cy={startY}
+                  r={tuning.anchorDotRadius || 3}
+                  fill={lineColor}
+                  opacity="0.95"
+                />
+              )}
+            </g>
+          );
+        })}
+      </svg>
+
+      {items.map((item, index) => {
+        const placement = tuning.items?.[index] || tuning.items?.[tuning.items.length - 1] || {};
+        const bubbleX = Number(placement.bubbleX || 0);
+        const bubbleY = Number(placement.bubbleY || 0);
+        const boxScale = Number(placement.boxScale ?? 1);
+        const bubbleWidth = Number(placement.bubbleWidth ?? defaultBubbleWidth) * boxScale;
+        const bubbleHeight = Number(placement.bubbleHeight ?? defaultBubbleHeight) * boxScale;
+        const bubbleRadius = Number(placement.bubbleRadius ?? defaultBubbleRadius) * boxScale;
+        const bubblePaddingX = Number(placement.bubblePaddingX ?? defaultBubblePaddingX) * boxScale;
+        const bubbleGap = Number(placement.bubbleGap ?? defaultBubbleGap) * boxScale;
+        const labelFontSize = Number(placement.labelFontSize ?? defaultLabelFontSize) * boxScale;
+        const valueFontSize = Number(placement.valueFontSize ?? defaultValueFontSize) * boxScale;
+        const valueColor = item.value > 0
+          ? tuning.valuePositiveColor
+          : item.value < 0
+          ? tuning.valueNegativeColor
+          : tuning.valueNeutralColor;
+
+        return (
+          <div
+            key={`bubble-${item.label}-${index}`}
+            className="absolute flex items-center justify-between"
+            style={{
+              left: bubbleX,
+              top: bubbleY,
+              width: bubbleWidth,
+              height: bubbleHeight,
+              borderRadius: bubbleRadius,
+              paddingLeft: bubblePaddingX,
+              paddingRight: bubblePaddingX,
+              gap: bubbleGap,
+              background: tuning.bubbleBackground,
+              border: `1px solid ${tuning.bubbleBorder}`,
+              boxShadow: "0 10px 24px rgba(0,0,0,0.26)",
+            }}
+          >
+            <div className="min-w-0">
+              <div
+                className="truncate font-black uppercase tracking-[0.14em]"
+                style={{
+                  color: tuning.labelColor,
+                  fontSize: labelFontSize,
+                }}
+              >
+                {item.label}
+              </div>
+              {/* Header callout intentionally shows only category + value.
+                  The full reasoning text still appears lower on the page. */}
+            </div>
+
+            <div
+              className="shrink-0 text-right font-black"
+              style={{
+                color: valueColor,
+                fontSize: valueFontSize,
+              }}
+            >
+              {item.value > 0 ? "+" : ""}
+              {item.value}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function PlayerMoodRow({ row, active, onClick, team }) {
+  const t = LOCKER_ROOM_PLAYER_PILL_TUNING;
+  const hasHeadshot = Boolean(row?.headshot);
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`group relative isolate w-full overflow-hidden border text-left transition hover:border-orange-400/35 ${
+        active ? "border-orange-400/60 bg-gradient-to-r from-orange-500/20 via-orange-500/10 to-black/40" : "border-white/10 bg-neutral-900/80"
+      }`}
+      style={{
+        minHeight: t.rowMinHeight,
+        padding: `${t.rowPaddingY}px ${t.rowPaddingX}px`,
+        borderRadius: t.rowRadius,
+      }}
+    >
+      <LockerRoomPlayerHeadshot row={row} team={team} />
+
+      <div
+        className="relative z-10 grid grid-cols-[62px_minmax(0,1fr)_72px] items-center gap-3"
+        style={{ paddingLeft: hasHeadshot ? t.leftPad : 0, alignItems: "center" }}
+      >
+        <div className="grid h-[62px] w-[62px] place-items-center rounded-xl border border-white/10 bg-black/75 shadow-inner shadow-black/40">
+          <LockerRoomMiniRatingRing row={row} />
+        </div>
+
+        <div className="min-w-0 text-left">
+          <div className="line-clamp-2 font-black leading-[1.08] text-white" style={{ fontSize: t.nameSize }}>
+            {row.playerName}
+          </div>
+          <div
+            className="mt-1.5 flex min-w-0 items-center gap-2 font-black uppercase tracking-[0.07em] text-neutral-300"
+            style={{ fontSize: t.infoSize }}
+          >
+            <span className="shrink-0">{row.position || "-"}</span>
+            <span className="shrink-0 text-neutral-600">•</span>
+            <span className="shrink-0">Age {row.age ?? "-"}</span>
+          </div>
+        </div>
+
+        <div
+          className={`w-[68px] shrink-0 justify-self-end text-center font-black transition ${
+            active ? "bg-orange-600 text-white" : "bg-black/85 text-orange-300 group-hover:bg-white/10"
+          }`}
+          style={{
+            borderRadius: t.scoreRadius,
+            padding: `${t.scorePadY}px 8px`,
+          }}
+        >
+          <div className="text-[23px] leading-none">{row.moodScore}</div>
+          <div className="mt-1 text-[9px] uppercase tracking-[0.13em] text-neutral-300">{trendText(row.trend)}</div>
+        </div>
+      </div>
+    </button>
+  );
+}
+
+function DetailRow({ label, value }) {
+  return (
+    <div className="grid grid-cols-[1fr_auto] gap-4 border-b border-white/10 py-2 last:border-b-0">
+      <div className="text-xs font-black uppercase tracking-[0.14em] text-neutral-500">{label}</div>
+      <div className="text-right text-sm font-black text-white">{value}</div>
+    </div>
+  );
+}
+
+function ReasonCard({ reason }) {
+  const impact = Number(reason?.impact || 0);
+  return (
+    <div className="rounded-2xl border border-white/10 bg-black/65 p-4">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <div className="text-xs font-black uppercase tracking-[0.18em] text-orange-300">{reason?.category || "Mood"}</div>
+          <div className="mt-1 text-sm font-bold leading-5 text-white">{reason?.text}</div>
+          {reason?.detail && <div className="mt-2 text-xs font-semibold text-neutral-500">{reason.detail}</div>}
+        </div>
+        <div className={`shrink-0 text-lg font-black ${factorTone(impact)}`}>{impact > 0 ? "+" : ""}{impact}</div>
+      </div>
+    </div>
+  );
+}
+
+
+function readEventImpact(event) {
+  const raw =
+    event?.impact ??
+    event?.moodImpact ??
+    event?.moodDelta ??
+    event?.scoreDelta ??
+    event?.value ??
+    0;
+  const n = Number(raw || 0);
+  return Number.isFinite(n) ? Math.round(n * 10) / 10 : 0;
+}
+
+function readOriginalEventImpact(event, activeImpact) {
+  const raw =
+    event?.baseImpact ??
+    event?.originalImpact ??
+    event?.startingImpact ??
+    event?.initialImpact ??
+    activeImpact;
+  const n = Number(raw || 0);
+  return Number.isFinite(n) ? Math.round(n * 10) / 10 : activeImpact;
+}
+
+function formatSigned(value) {
+  const n = Number(value || 0);
+  const rounded = Number.isFinite(n) ? Math.round(n * 10) / 10 : 0;
+  return `${rounded > 0 ? "+" : ""}${rounded}`;
+}
+
+function formatMoodEventDate(value) {
+  const raw = String(value || "").trim();
+  if (!raw || raw.toLowerCase() === "current" || raw.toLowerCase() === "current season") {
+    const context = readCalendarMoodContextForLockerRoom();
+    const fallbackDate = context?.date || context?.currentDate || "2025-10-19";
+    return formatMoodEventDate(fallbackDate);
+  }
+
+  const parsed = Date.parse(raw);
+  if (Number.isFinite(parsed)) {
+    try {
+      return new Date(parsed).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+    } catch {}
+  }
+
+  return raw;
+}
+
+function readDecayPerWeek(event) {
+  const raw = event?.decayPerWeek ?? event?.weeklyDecay ?? event?.decay ?? 0;
+  const n = Number(raw || 0);
+  return Number.isFinite(n) ? Math.max(0, Math.round(n * 10) / 10) : 0;
+}
+
+function readDecayPctPerWeek(event) {
+  const raw =
+    event?.decayPctPerWeek ??
+    event?.decayPercentPerWeek ??
+    event?.weeklyDecayPct ??
+    event?.decayRatePct ??
+    0;
+  const n = Number(raw || 0);
+  return Number.isFinite(n) ? Math.max(0, Math.round(n * 10) / 10) : 0;
+}
+
+function readModifierType(event, decayPerWeek = 0, decayPctPerWeek = 0) {
+  const explicit = String(event?.modifierType || event?.moodModifierType || event?.persistence || "").toLowerCase();
+  if (explicit.includes("temp")) return "temporary";
+  if (explicit.includes("perm")) return "permanent";
+
+  const duration = String(event?.duration || event?.type || "").toLowerCase();
+  if (decayPerWeek > 0 || decayPctPerWeek > 0 || duration.includes("temporary")) return "temporary";
+  return "permanent";
+}
+
+function formatDecayLabel(event, decayPerWeek = 0, decayPctPerWeek = 0) {
+  if (decayPctPerWeek > 0) return `${decayPctPerWeek}%/week`;
+  if (decayPerWeek > 0) return `${decayPerWeek}/week`;
+  return "";
+}
+
+function buildMoodEventPills(player) {
+  const baseMood = Number(player?.baseMood ?? 65);
+  const targetMood = Math.round(Number(player?.moodScore ?? baseMood));
+  const rawEvents = Array.isArray(player?.eventLog) && player.eventLog.length
+    ? player.eventLog
+    : Array.isArray(player?.reasons)
+      ? player.reasons
+      : [];
+
+  const events = rawEvents
+    .map((event) => {
+      const impact = readEventImpact(event);
+      const originalImpact = readOriginalEventImpact(event, impact);
+      const decayPerWeek = readDecayPerWeek(event);
+      const decayPctPerWeek = readDecayPctPerWeek(event);
+      const modifierType = readModifierType(event, decayPerWeek, decayPctPerWeek);
+      const text =
+        event?.label ||
+        event?.text ||
+        event?.headline ||
+        event?.category ||
+        "Mood event";
+      const detail =
+        event?.detail ||
+        event?.description ||
+        event?.reason ||
+        event?.duration ||
+        "";
+      const date = formatMoodEventDate(
+        event?.dateLabel ||
+        event?.displayDate ||
+        event?.date ||
+        event?.currentDate ||
+        event?.dayLabel ||
+        event?.season
+      );
+      const removalDate = decayPerWeek > 0
+        ? formatMoodEventDate(event?.expiresOnLabel || event?.expiresOn || event?.expiryDate || event?.removedOn)
+        : "";
+      const remainingWeeks = Number(event?.remainingWeeks ?? event?.weeksRemaining ?? 0);
+      const rawProgress = Number(event?.decayProgress);
+      const progress = Number.isFinite(rawProgress)
+        ? Math.max(0, Math.min(1, rawProgress))
+        : Math.abs(originalImpact) > 0
+          ? Math.max(0, Math.min(1, Math.abs(impact) / Math.abs(originalImpact)))
+          : 1;
+
+      return {
+        impact,
+        originalImpact,
+        decayPerWeek,
+        decayPctPerWeek,
+        modifierType,
+        decayLabel: formatDecayLabel(event, decayPerWeek, decayPctPerWeek),
+        removalDate,
+        remainingWeeks: Number.isFinite(remainingWeeks) ? remainingWeeks : 0,
+        progress,
+        category: event?.category || event?.label || "Mood Context",
+        text,
+        detail,
+        date,
+      };
+    })
+    // Hide zero-impact baseline/context cards from the visible event log.
+    // Base mood is already explained in the header, so 0-value bubbles just add clutter.
+    .filter((event) => event.text && Math.abs(Number(event.impact || 0)) >= 0.1)
+    .sort((a, b) => {
+      const typeA = a.modifierType === "temporary" ? 1 : 0;
+      const typeB = b.modifierType === "temporary" ? 1 : 0;
+      if (typeA !== typeB) return typeA - typeB; // permanent modifiers first
+
+      const dateA = Date.parse(a.date || "") || 0;
+      const dateB = Date.parse(b.date || "") || 0;
+      if (dateA !== dateB) return dateB - dateA;
+
+      return Math.abs(Number(b.impact || 0)) - Math.abs(Number(a.impact || 0));
+    });
+
+  return {
+    baseMood,
+    targetMood,
+    events: events.slice(0, 12),
+  };
+}
+
+function MoodEventPill({ event }) {
+  const impact = Number(event?.impact || 0);
+  const originalImpact = Number(event?.originalImpact ?? impact);
+  const decayPerWeek = Number(event?.decayPerWeek || 0);
+  const decayPctPerWeek = Number(event?.decayPctPerWeek || 0);
+  const modifierType = event?.modifierType === "temporary" ? "temporary" : "permanent";
+  const isTemporary = modifierType === "temporary";
+  const progress = Math.max(0, Math.min(1, Number(event?.progress ?? 1)));
+  const toneClass = impact > 0
+    ? "border-emerald-300/25 bg-emerald-500/10 text-emerald-100"
+    : impact < 0
+      ? "border-red-300/25 bg-red-500/10 text-red-100"
+      : "border-white/10 bg-white/[0.04] text-neutral-200";
+  const barClass = impact > 0 ? "bg-emerald-300/70" : impact < 0 ? "bg-red-300/70" : "bg-neutral-300/45";
+
+  return (
+    <div className={`rounded-2xl border px-4 py-3 ${toneClass}`}>
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2 text-[10px] font-black uppercase tracking-[0.16em] text-orange-300">
+            <span
+              className={`rounded-full border px-2 py-0.5 tracking-[0.14em] ${
+                isTemporary
+                  ? "border-orange-300/30 bg-orange-500/10 text-orange-200"
+                  : "border-emerald-300/25 bg-emerald-500/10 text-emerald-200"
+              }`}
+            >
+              {isTemporary ? "Temporary" : "Permanent"}
+            </span>
+            <span>{event?.date || (isTemporary ? "Current event" : "Season modifier")}</span>
+          </div>
+          <div className="mt-1 text-sm font-black leading-5 text-white">
+            {event?.text || "Mood event"}
+          </div>
+          {event?.detail && (
+            <div className="mt-1 text-xs font-semibold leading-5 text-neutral-400">
+              {event.detail}
+            </div>
+          )}
+
+          {isTemporary && (decayPerWeek > 0 || decayPctPerWeek > 0) && (
+            <div className="mt-3 rounded-xl border border-white/10 bg-black/25 p-2">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] font-black uppercase tracking-[0.12em] text-neutral-400">
+                <span>Original <span className={factorTone(originalImpact)}>{formatSigned(originalImpact)}</span></span>
+                <span>Now <span className={factorTone(impact)}>{formatSigned(impact)}</span></span>
+                <span>Decay {event?.decayLabel || (decayPctPerWeek > 0 ? `${decayPctPerWeek}%/week` : `${decayPerWeek}/week`)}</span>
+                <span>Removed {event?.removalDate || "at 0"}</span>
+              </div>
+
+              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/10">
+                <div
+                  className={`h-full rounded-full transition-all ${barClass}`}
+                  style={{ width: `${Math.round(progress * 100)}%` }}
+                />
+              </div>
+            </div>
+          )}
+        </div>
+        <div className={`shrink-0 rounded-xl border border-white/10 bg-black/35 px-3 py-2 text-lg font-black ${factorTone(impact)}`}>
+          {formatSigned(impact)}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+function ExtensionInterestPanel({ player }) {
+  const interest = player?.extensionInterest;
+  if (!interest || typeof interest !== "object") return null;
+  const score = Math.max(0, Math.min(100, Number(interest.score || 0)));
+  const reasons = Array.isArray(interest.reasons) ? interest.reasons.slice(0, 4) : [];
+  const willing = Boolean(interest.willing);
+
+  return (
+    <div className="h-full rounded-2xl border border-orange-400/20 bg-orange-500/[0.07] p-3">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <div className="text-xs font-black uppercase tracking-[0.2em] text-orange-300">Contract Outlook</div>
+          <div className="mt-1 text-lg font-black text-white">{interest.label || "Extension Outlook"}</div>
+          <div className="mt-1 text-xs font-bold text-neutral-400">
+            {interest.personalityType || "Flexible"} · willingness threshold {interest.threshold ?? 70}
+          </div>
+        </div>
+        <div className={`rounded-2xl border px-4 py-3 text-center ${willing ? "border-emerald-400/25 bg-emerald-500/10" : "border-amber-400/25 bg-amber-500/10"}`}>
+          <div className="text-[9px] font-black uppercase tracking-[0.14em] text-neutral-400">Extension Interest</div>
+          <div className={`mt-1 text-2xl font-black ${willing ? "text-emerald-300" : "text-amber-300"}`}>{Math.round(score)}</div>
+        </div>
+      </div>
+
+      {reasons.length > 0 && (
+        <div className="mt-2 grid gap-2 md:grid-cols-2">
+          {reasons.map((reason, index) => {
+            const impact = Number(reason?.impact || 0);
+            return (
+              <div key={`${reason?.label || "reason"}-${index}`} className="rounded-xl border border-white/8 bg-black/25 px-3 py-2">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-xs font-black text-white">{reason?.label || "Context"}</div>
+                  <div className={`text-sm font-black ${factorTone(impact)}`}>{impact > 0 ? "+" : ""}{impact}</div>
+                </div>
+                {reason?.detail && <div className="mt-1 text-[11px] leading-4 text-neutral-500">{reason.detail}</div>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+function CompactMoodContextPanel({ player }) {
+  const factors = Object.entries(player?.factors || {})
+    .filter(([, value]) => Math.abs(Number(value || 0)) >= 0.1)
+    .map(([key, value]) => ({ label: humanizeMoodLabel(key), value: Number(value || 0) }))
+    .sort((a, b) => Math.abs(b.value) - Math.abs(a.value))
+    .slice(0, 6);
+
+  return (
+    <div className="h-full rounded-2xl border border-white/10 bg-black/55 p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-xs font-black uppercase tracking-[0.2em] text-orange-300">Current Situation</div>
+          <div className="mt-1 text-sm font-semibold text-neutral-500">The strongest active drivers of his Locker Room mood.</div>
+        </div>
+        <div className="rounded-xl border border-orange-400/25 bg-orange-500/10 px-3 py-2 text-center">
+          <div className="text-[9px] font-black uppercase tracking-[0.14em] text-neutral-500">Mood</div>
+          <div className="text-xl font-black text-orange-300">{Math.round(Number(player?.moodScore || 0))}</div>
+        </div>
+      </div>
+      <div className="mt-2 grid grid-cols-2 gap-2">
+        {factors.length ? factors.map((factor) => (
+          <div key={factor.label} className={`rounded-xl border px-2.5 py-1.5 ${lockerMoodImpactCardClass(factor.value)}`} data-bm-mood-tone={factor.value > 0 ? "positive" : factor.value < 0 ? "negative" : "neutral"}>
+            <div className="flex items-center justify-between gap-2">
+              <span className="min-w-0 truncate text-[11px] font-black uppercase tracking-[0.08em] text-neutral-300">{factor.label}</span>
+              <span className={`shrink-0 text-sm font-black ${factorTone(factor.value)}`}>
+                {factor.value > 0 ? "+" : ""}{Math.round(factor.value * 10) / 10}
+              </span>
+            </div>
+          </div>
+        )) : (
+          <div className="col-span-full rounded-xl border border-white/8 bg-white/[0.035] px-3 py-3 text-sm font-bold text-neutral-500">
+            No major active mood modifiers.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
+function MoodDriversPanel({ player }) {
+  const reasonByKey = new Map(
+    (Array.isArray(player?.reasons) ? player.reasons : []).map((reason) => [
+      String(reason?.category || "").toLowerCase().replace(/[^a-z0-9]/g, ""),
+      reason,
+    ])
+  );
+  const factors = Object.entries(player?.factors || {})
+    .filter(([, value]) => Math.abs(Number(value || 0)) >= 0.1)
+    .map(([key, value]) => {
+      const label = humanizeMoodLabel(key);
+      const normalized = String(label).toLowerCase().replace(/[^a-z0-9]/g, "");
+      const reason = reasonByKey.get(normalized);
+      return {
+        key,
+        label,
+        value: Number(value || 0),
+        detail: reason?.detail || reason?.text || "",
+      };
+    })
+    .sort((a, b) => Math.abs(b.value) - Math.abs(a.value))
+    .slice(0, 6);
+
+  return (
+    <section className="rounded-2xl border border-white/10 bg-black/55 p-4">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <div className="text-[11px] font-black uppercase tracking-[0.2em] text-orange-300">Mood Overview</div>
+          <div className="mt-0.5 text-lg font-black text-white">What is driving his current situation</div>
+          <div className="mt-0.5 text-[11px] font-semibold text-neutral-500">
+            Role, team context, career fit, security, health, and franchise relationship all feed the mood score.
+          </div>
+        </div>
+        <div className="shrink-0 rounded-xl border border-orange-400/25 bg-orange-500/10 px-3 py-1.5 text-center">
+          <div className="text-[9px] font-black uppercase tracking-[0.14em] text-neutral-500">Current Mood</div>
+          <div className="text-xl font-black text-orange-300">{Math.round(Number(player?.moodScore || 0))}</div>
+          <div className="text-[9px] font-black uppercase tracking-[0.12em] text-neutral-400">{player?.moodLabel || "Mood"}</div>
+        </div>
+      </div>
+
+      <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+        {factors.length ? factors.map((factor) => (
+          <div key={factor.key} className={`flex flex-col justify-center rounded-xl border px-3 py-2.5 ${moodImpactCardClasses(factor.value)}`}>
+            <div className="flex items-center justify-between gap-3">
+              <span className="min-w-0 text-[11px] font-black uppercase tracking-[0.08em] text-neutral-300">{factor.label}</span>
+              <span className={`shrink-0 text-sm font-black ${factorTone(factor.value)}`}>
+                {factor.value > 0 ? "+" : ""}{Math.round(factor.value * 10) / 10}
+              </span>
+            </div>
+            {factor.detail ? <div className="mt-1 break-words text-[8.5px] font-semibold leading-[12px] text-neutral-500">{factor.detail}</div> : null}
+          </div>
+        )) : (
+          <div className="col-span-full rounded-xl border border-white/8 bg-white/[0.035] px-3 py-3 text-sm font-bold text-neutral-500">
+            No major active mood modifiers.
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function ContractOutlookMini({ player }) {
+  const interest = player?.extensionInterest;
+  if (!interest || typeof interest !== "object") {
+    return (
+      <section className="rounded-2xl border border-white/10 bg-black/45 p-4">
+        <div className="text-[11px] font-black uppercase tracking-[0.2em] text-orange-300">Contract Outlook</div>
+        <div className="mt-2 text-sm font-bold text-neutral-500">No extension-interest profile is available.</div>
+      </section>
+    );
+  }
+
+  const score = Math.max(0, Math.min(100, Number(interest.score || 0)));
+  const willing = Boolean(interest.willing);
+  const reasons = Array.isArray(interest.reasons) ? interest.reasons.slice(0, 3) : [];
+
+  return (
+    <section className="rounded-2xl border border-orange-400/18 bg-orange-500/[0.055] p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-[11px] font-black uppercase tracking-[0.2em] text-orange-300">Contract Outlook</div>
+          <div className={`mt-0.5 text-base font-black ${willing ? "text-emerald-300" : "text-amber-300"}`}>
+            {interest.label || (willing ? "Open to Extension" : "Prefers to Wait")}
+          </div>
+          <div className="mt-1 text-[10px] font-bold text-neutral-500">
+            {interest.personalityType || "Flexible"} · threshold {interest.threshold ?? 70}
+          </div>
+        </div>
+        <div className="shrink-0 rounded-xl border border-white/10 bg-black/35 px-3 py-2 text-center">
+          <div className="text-[9px] font-black uppercase tracking-[0.12em] text-neutral-500">Interest</div>
+          <div className={`text-2xl font-black ${willing ? "text-emerald-300" : "text-amber-300"}`}>{Math.round(score)}</div>
+        </div>
+      </div>
+
+      <div className="mt-3 space-y-2">
+        {reasons.map((reason, index) => {
+          const impact = Number(reason?.impact || 0);
+          return (
+            <div key={`${reason?.label || "reason"}-${index}`} className="flex items-center justify-between gap-3 border-t border-white/8 pt-2 first:border-t-0 first:pt-0">
+              <span className="min-w-0 truncate text-[11px] font-bold text-neutral-300">{reason?.label || "Context"}</span>
+              <span className={`shrink-0 text-xs font-black ${factorTone(impact)}`}>{impact > 0 ? "+" : ""}{impact}</span>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function MoodLedgerStrip({ player }) {
+  const { baseMood, targetMood, events } = buildMoodEventPills(player);
+  const shown = events.slice(0, 4);
+
+  return (
+    <section className="rounded-2xl border border-white/10 bg-black/45 p-4">
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <div className="text-[11px] font-black uppercase tracking-[0.2em] text-orange-300">Active Mood Context</div>
+          <div className="mt-0.5 text-[10px] font-semibold text-neutral-500">Strongest current modifiers layered on the {baseMood} baseline.</div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2 text-[10px] font-black uppercase tracking-[0.12em] text-neutral-500">
+          <span>Base <b className="text-white">{baseMood}</b></span>
+          <span>→</span>
+          <span>Mood <b className="text-orange-300">{targetMood}</b></span>
+        </div>
+      </div>
+      <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+        {shown.length ? shown.map((event, index) => (
+          <div key={`${event.text}-${index}`} className={`flex flex-col justify-center rounded-xl border px-3 py-2.5 ${moodSemanticCardClasses(event.impact)}`}>
+            <div className="flex items-start justify-between gap-2">
+              <span className="min-w-0 break-words text-[9.5px] font-black uppercase leading-[12px] tracking-[0.04em] text-white">
+                {humanizeMoodLabel(event.category || "Mood Context")}
+              </span>
+              <span className={`shrink-0 text-xs font-black ${factorTone(event.impact)}`}>{formatSigned(event.impact)}</span>
+            </div>
+            {event.detail ? <div className="mt-1 break-words text-[8.5px] font-semibold leading-[12px] text-neutral-500">{event.detail}</div> : null}
+          </div>
+        )) : (
+          <div className="col-span-full rounded-xl border border-white/8 bg-white/[0.035] px-3 py-3 text-xs font-bold text-neutral-500">
+            No active mood modifiers beyond the baseline.
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function SimpleMoodEventLog({ player }) {
+  const { baseMood, targetMood, events } = buildMoodEventPills(player);
+  const eventTotal = Math.round(events.reduce((sum, event) => sum + Number(event.impact || 0), 0) * 10) / 10;
+
+  return (
+    <div className="rounded-3xl border border-white/10 bg-black/70 p-4">
+      <div className="mb-4 flex items-center justify-between gap-4">
+        <div>
+          <div className="text-xs font-black uppercase tracking-[0.2em] text-orange-300">Event Log</div>
+          <div className="mt-1 text-sm font-semibold text-neutral-500">Base mood starts at 65. Context explains the current situation.</div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <div className="rounded-2xl border border-white/10 bg-white/[0.035] px-3 py-2 text-center">
+            <div className="text-[9px] font-black uppercase tracking-[0.14em] text-neutral-500">Base</div>
+            <div className="text-lg font-black text-white">{baseMood}</div>
+          </div>
+          <div className="rounded-2xl border border-white/10 bg-white/[0.035] px-3 py-2 text-center">
+            <div className="text-[9px] font-black uppercase tracking-[0.14em] text-neutral-500">Events</div>
+            <div className={`text-lg font-black ${factorTone(eventTotal)}`}>{eventTotal > 0 ? "+" : ""}{eventTotal}</div>
+          </div>
+          <div className="rounded-2xl border border-orange-400/30 bg-orange-500/15 px-3 py-2 text-center">
+            <div className="text-[9px] font-black uppercase tracking-[0.14em] text-orange-200">Mood</div>
+            <div className="text-lg font-black text-orange-300">{targetMood}</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-2">
+        {events.length ? (
+          events.map((event, index) => (
+            <MoodEventPill key={`${event.date}-${event.text}-${index}`} event={event} />
+          ))
+        ) : (
+          <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4 text-sm font-bold text-neutral-400">
+            No mood events logged yet.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export default function LockerRoom() {
+  const { leagueData, selectedTeam } = useGame();
+  const navigate = useNavigate();
+  const [viewIndex, setViewIndex] = useState(0);
+  const [moodData, setMoodData] = useState(null);
+  const [selectedKey, setSelectedKey] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const teams = useMemo(() => {
+    return getAllTeamsFromLeague(leagueData).sort((a, b) => (a?.name || "").localeCompare(b?.name || ""));
+  }, [leagueData]);
+
+  useEffect(() => {
+    if (!teams.length || !selectedTeam?.name) return;
+    const idx = teams.findIndex((team) => team?.name === selectedTeam.name);
+    setViewIndex(idx >= 0 ? idx : 0);
+  }, [teams, selectedTeam?.name]);
+
+  const activeTeam = teams[viewIndex] || selectedTeam || null;
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadMoods() {
+      if (!leagueData || !activeTeam?.name) return;
+      setLoading(true);
+      setError("");
+
+      try {
+        const moodLeagueData = buildLeagueDataWithMoodGameplan(leagueData, activeTeam.name);
+        const result = await getLockerRoomMoods(moodLeagueData, activeTeam.name);
+        if (cancelled) return;
+
+        if (!result?.ok) {
+          setMoodData(null);
+          setError(result?.reason || "Could not load locker room moods.");
+          return;
+        }
+
+        setMoodData(result);
+        const sortedMoodRows = sortMoodRowsByOverall(result.players || []);
+        const first = sortedMoodRows?.[0]?.playerKey || null;
+        setSelectedKey((prev) => {
+          if (prev && result.players?.some((row) => row.playerKey === prev)) return prev;
+          return first;
+        });
+      } catch (err) {
+        if (cancelled) return;
+        setMoodData(null);
+        setError(err?.message || String(err || "Could not load locker room moods."));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    loadMoods();
+    return () => {
+      cancelled = true;
+    };
+  }, [leagueData, activeTeam?.name]);
+
+  const handleTeamSwitch = (dir) => {
+    if (!teams.length) return;
+    setViewIndex((prev) => {
+      const next = dir === "next" ? (prev + 1) % teams.length : (prev - 1 + teams.length) % teams.length;
+      setSelectedKey(null);
+      return next;
+    });
+  };
+
+  useKeyboardTeamNavigation({
+    enabled: teams.length > 1,
+    onPrevious: () => handleTeamSwitch("prev"),
+    onNext: () => handleTeamSwitch("next"),
+  });
+
+  const players = moodData?.players || [];
+  const sortedPlayers = useMemo(() => sortMoodRowsByOverall(players), [players]);
+  const selectedPlayer = sortedPlayers.find((row) => row.playerKey === selectedKey) || sortedPlayers[0] || null;
+
+  useKeyboardListNavigation({
+    items: sortedPlayers,
+    selectedItem: selectedPlayer,
+    onSelect: (row) => setSelectedKey(row.playerKey),
+    getKey: (row) => row?.playerKey,
+    rowSelector: "[data-bm-locker-row-index]",
+  });
+  const logo = moodData?.teamLogo || teamLogoOf(activeTeam);
+  const reportHeaderT = LOCKER_ROOM_REPORT_HEADER_TUNING;
+
+  if (!leagueData || !selectedTeam) {
+    return (
+      <PageFade>
+        <div className="bmCourtPage flex min-h-screen flex-col items-center justify-center px-4 text-white">
+          <p className="mb-4 text-lg font-semibold">No league/team loaded.</p>
+          <button onClick={() => navigate("/team-selector")} className="rounded-xl bg-orange-600 px-6 py-3 font-bold">
+            Team Select
+          </button>
+        </div>
+      </PageFade>
+    );
+  }
+
+  return (
+    <PageFade>
+      <style>{LOCKER_ROOM_SCROLLBAR_STYLE}</style>
+      <div className="bmCourtPage h-full min-h-0 overflow-hidden px-3 pt-3 pb-4 text-white">
+        <div className="mx-auto flex h-full min-h-0 w-full max-w-[1680px] flex-col">
+          <div className="mb-2 flex h-[54px] shrink-0 items-center justify-between gap-4 select-none">
+            <button
+              onClick={() => handleTeamSwitch("prev")}
+              className="w-20 text-left text-4xl font-black text-white transition hover:text-orange-400 active:scale-95"
+              title="Previous Team"
+            >
+              ◄
+            </button>
+
+            <div className="min-w-0 text-center">
+              <div className="text-xs font-black uppercase tracking-[0.24em] text-orange-300">Locker Room</div>
+              <div className="mt-2 flex items-center justify-center gap-4">
+                {logo ? <img src={logo} alt={activeTeam?.name || "Team"} className="h-10 w-10 object-contain" /> : null}
+                <h1 className="truncate text-[28px] font-black text-orange-500">{activeTeam?.name || "Team"}</h1>
+              </div>
+            </div>
+
+            <button
+              onClick={() => handleTeamSwitch("next")}
+              className="w-20 text-right text-4xl font-black text-white transition hover:text-orange-400 active:scale-95"
+              title="Next Team"
+            >
+              ►
+            </button>
+          </div>
+
+          {error && (
+            <div className="mb-5 rounded-2xl border border-red-400/30 bg-red-500/10 px-5 py-4 text-sm font-black text-red-100">
+              {error}
+            </div>
+          )}
+
+          {loading && !moodData ? (
+            <div className="rounded-[28px] border border-white/10 bg-black/75 p-10 text-center text-lg font-black text-neutral-300">
+              Checking the locker room...
+            </div>
+          ) : (
+            <div className="grid min-h-0 flex-1 gap-3 xl:grid-cols-[450px_minmax(0,1fr)] min-[1500px]:grid-cols-[480px_minmax(0,1fr)]">
+              <div className="flex h-full min-h-0 flex-col rounded-2xl border border-white/10 bg-neutral-950/90 p-3 shadow-2xl">
+                <div className="mb-3 flex items-center justify-between gap-3 px-1">
+                  <div>
+                    <div className="text-xs font-black uppercase tracking-[0.2em] text-orange-300">Players</div>
+                    <div className="text-sm font-semibold text-neutral-500">Select a player to inspect his current situation.</div>
+                  </div>
+                  <div className="rounded-xl border border-white/10 bg-black px-3 py-2 text-sm font-black text-white">
+                    {players.length}
+                  </div>
+                </div>
+
+                <div className="locker-room-player-scroll min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
+                  {sortedPlayers.map((row, rowIndex) => (
+                    <div key={row.playerKey || row.playerName} data-bm-locker-row-index={rowIndex}>
+                    <PlayerMoodRow
+                      row={row}
+                      team={activeTeam}
+                      active={selectedPlayer?.playerKey === row.playerKey}
+                      onClick={() => setSelectedKey(row.playerKey)}
+                    />
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="relative isolate h-full min-h-0 overflow-hidden rounded-2xl border border-white/10 bg-neutral-950/95 shadow-2xl">
+
+                {selectedPlayer ? (
+                  <div className="locker-room-detail-scroll relative z-10 h-full min-h-0 overflow-y-auto p-3 pr-2">
+                    <div className="relative h-[156px] overflow-hidden rounded-2xl border border-white/10 bg-[linear-gradient(100deg,rgba(20,20,20,0.96),rgba(10,10,10,0.90))] shadow-[0_18px_45px_rgba(0,0,0,0.32)]">
+                      <div className="relative z-10 grid h-full grid-cols-[160px_minmax(0,1fr)_112px] items-center gap-4 px-5">
+                        <div className="relative h-full overflow-hidden">
+                          <RuntimePlayerPortrait
+                            player={selectedPlayer}
+                            team={activeTeam}
+                            teamName={activeTeam?.name || ""}
+                            src={selectedPlayer?.headshot}
+                            alt={selectedPlayer?.playerName || "Player"}
+                            layoutPage="locker-room-selected"
+                            className="absolute inset-0 h-full w-full"
+                            fallback={<div className="flex h-full items-center justify-center text-sm font-bold text-neutral-500">No Image</div>}
+                          />
+                        </div>
+
+                        <div className="min-w-0 self-center">
+                          <div className="text-[12px] font-black uppercase tracking-[0.28em] text-orange-300">Locker Room Report</div>
+                          <h2 className="mt-1 truncate text-[32px] font-black leading-[1.02] text-white">{selectedPlayer.playerName}</h2>
+                          <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] font-black uppercase tracking-[0.10em] text-neutral-400">
+                            <span>{selectedPlayer.position || "-"}</span>
+                            <span className="text-neutral-700">•</span>
+                            <span>Age {selectedPlayer.age ?? "-"}</span>
+                            <span className="text-neutral-700">•</span>
+                            <span className="text-orange-200">{selectedPlayer.moodLabel || "Mood"}</span>
+                            <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-1 text-[9px] text-neutral-300">{trendText(selectedPlayer.trend)}</span>
+                          </div>
+                        </div>
+
+                        <div className="flex justify-center">
+                          <MoodRing score={selectedPlayer.moodScore} size={106} />
+                        </div>
+                      </div>
+                      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-[2px] bg-white/45" />
+                    </div>
+
+                    <div className="mt-3 grid items-start gap-3 min-[1380px]:grid-cols-[minmax(0,1fr)_280px]">
+                      <div className="grid content-start gap-3">
+                        <MoodDriversPanel player={selectedPlayer} />
+                        <MoodLedgerStrip player={selectedPlayer} />
+                      </div>
+                      <ContractOutlookMini player={selectedPlayer} />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="relative z-10 p-10 text-center text-lg font-black text-neutral-400">
+                    No player mood rows found for this team.
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          <div className="mt-1.5 flex shrink-0 justify-center">
+            <button
+              onClick={() => navigate("/team-hub")}
+              className="rounded-lg bg-orange-600 px-7 py-2.5 font-semibold text-white transition hover:bg-orange-500 active:scale-95"
+            >
+              Back to Team Hub
+            </button>
+          </div>
+        </div>
+      </div>
+    </PageFade>
+  );
+}
