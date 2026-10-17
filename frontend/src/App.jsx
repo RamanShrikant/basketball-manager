@@ -2,6 +2,8 @@ import React, { useLayoutEffect } from "react";
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import Layout from "./components/Layout.jsx";
 import StudioLanding from "./pages/StudioLanding.jsx";
+import GameModeLanding from "./pages/GameModeLanding.jsx";
+import SaveLocationSelect from "./pages/SaveLocationSelect.jsx";
 import Home from "./pages/Home.jsx";
 import PlayerEditor from "./pages/PlayerEditor.jsx";
 import TradeSimulator from "./pages/TradeSimulator.jsx";
@@ -84,7 +86,7 @@ function RoutePageFade({ children }) {
   return <PageFade key={pathname}>{children}</PageFade>;
 }
 
-function App() {
+function App({ user }) {
   return (
     <BrowserRouter>
       <RouteDensitySync />
@@ -93,7 +95,10 @@ function App() {
       <PersistentGameShell>
         <RoutePageFade>
         <Routes>
-          <Route path="/" element={<StudioLanding />} />
+          <Route path="/" element={<Navigate to="/game-modes" replace />} />
+          <Route path="/studio" element={<StudioLanding />} />
+          <Route path="/game-modes" element={<GameModeLanding user={user} />} />
+          <Route path="/singleplayer" element={<SaveLocationSelect user={user} />} />
 
           {/* ✅ Routes that use your shared Layout */}
           <Route element={<Layout />}>

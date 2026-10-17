@@ -6,6 +6,9 @@ import styles from "./PersistentGameShell.module.css";
 
 const NO_SIDEBAR_ROUTES = new Set([
   "/",
+  "/studio",
+  "/game-modes",
+  "/singleplayer",
   "/play",
   "/team-selector",
   "/league-editor",

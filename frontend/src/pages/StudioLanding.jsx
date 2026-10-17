@@ -33,7 +33,7 @@ export default function StudioLanding() {
           </div>
 
           <div className={styles.games} aria-label="Select game">
-            <Link to="/play" className={`${styles.gameCard} ${styles.availableGame}`}>
+            <Link to="/game-modes" className={`${styles.gameCard} ${styles.availableGame}`}>
               <GameCardArtwork
                 src={basketballCardIcon}
                 className={styles.basketballArtwork}

@@ -1,11 +1,13 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { supabase, isAuthConfigured } from "./supabaseClient.js";
 import {
-  activateAccount, activeBrowserAccountId, checkpointAccount,
+  activateAccount, activeBrowserAccountId,
   inspectInitialOwnership, recoverInterruptedSwitch, BM_ACCOUNT_OWNER_KEY,
 } from "./accountLocalVault.js";
 import { acquireAccountGameLock } from "./accountTabLock.js";
 import "./AccountRoot.css";
+import { restoreCloudSave, readCloudMarker } from "./cloudSaveClient.js";
+import { getAccountSaveMode, readRequestedSaveMode, clearRequestedSaveMode, getStoredModeSnapshot, switchAccountSaveMode, captureAccountCloudSnapshot } from "./accountLocalVault.js";
 
 const SIGNIN = "signin";
 const REGISTER = "register";
@@ -35,10 +37,49 @@ export default function AccountRoot({ children, onInitialize }) {
       if (needsDecision && legacyChoice == null) { setPhase("adopt"); return; }
       const priorOwner = activeBrowserAccountId();
       const result = await activateAccount(userId, { adoptLegacy: legacyChoice === "keep" });
-      if ((priorOwner !== userId || result.switched) && window.location.pathname !== "/play") {
-        window.history.replaceState(null, "", "/play");
+      if (priorOwner !== userId || result.switched || window.location.pathname === "/") {
+        const pendingMode = readRequestedSaveMode(userId);
+        window.history.replaceState(null, "", pendingMode ? "/play" : "/game-modes");
+      }
+      // A mode switch runs on a HARD RELOAD, before gameplay code is imported.
+      // Local mode never contacts or downloads cloud storage.
+      const requestedMode = readRequestedSaveMode(userId);
+      if (requestedMode) {
+        if (requestedMode === "cloud") {
+          // Check cloud reachability FIRST; failed Supabase setup must not erase Local.
+          // Perform this read without mutating Local or Cloud save data.
+          const { data: remote, error: cloudError } = await supabase.from("bm_cloud_slot_heads")
+            .select("revision,snapshot_id,storage_path,content_sha256,size_bytes,updated_at")
+            .eq("user_id", userId).maybeSingle();
+          if (cloudError) throw new Error(`Cloud slot unavailable: ${cloudError.message}. Run the new save-mode SQL first.`);
+          const alreadyCloud = getAccountSaveMode(userId) === "cloud";
+          const cached = alreadyCloud
+            ? await captureAccountCloudSnapshot(userId)
+            : await getStoredModeSnapshot(userId, "cloud");
+          const cachedSlots = cached?.dbs?.basketball_manager_local_save_slots_v1?.stores?.leagueSaves || [];
+          const cachedHasLeague = cachedSlots.length > 0 || Boolean(cached?.activeSaveId);
+          const marker = readCloudMarker(userId);
+          const markerMatches = Number(marker?.revision) === Number(remote?.revision) && marker?.snapshotId === remote?.snapshot_id;
+          if (remote && cachedHasLeague && !markerMatches) {
+            throw new Error("Cloud save changed on another device. Your cached franchise remains intact. Resolve the conflict before opening Cloud mode.");
+          }
+          const modeSwitch = await switchAccountSaveMode(userId, "cloud");
+          if (remote && !cachedHasLeague && !markerMatches) {
+            // Cloud has a league, but this device has no cloud franchise yet.
+            // A failed download must leave the saved Local world available.
+            try { await restoreCloudSave(userId, remote); }
+            catch (restoreError) {
+              if (modeSwitch.switched) await switchAccountSaveMode(userId, "local");
+              throw restoreError;
+            }
+          }
+        } else {
+          await switchAccountSaveMode(userId, "local");
+        }
+        clearRequestedSaveMode(userId);
       }
       await onInitialize();
+      setPassword("");
       setPhase("game");
     } catch (err) { setError(err?.message || "Couldn't safely open this account."); setPhase("blocked"); }
   }, [onInitialize]);
@@ -78,11 +119,12 @@ export default function AccountRoot({ children, onInitialize }) {
       if (mode === REGISTER) {
         const { data, error: authError } = await supabase.auth.signUp({ email: cleanEmail, password });
         if (authError) throw authError;
-        if (data?.session?.user) await continueAs(data.session.user);
+        if (data?.session?.user) { window.history.replaceState(null, "", "/game-modes"); await continueAs(data.session.user); }
         else setMessage("Account created. If email confirmation is enabled, check your inbox, then sign in.");
       } else {
         const { data, error: authError } = await supabase.auth.signInWithPassword({ email: cleanEmail, password });
         if (authError) throw authError;
+        window.history.replaceState(null, "", "/game-modes");
         await continueAs(data.user);
       }
     } catch (err) { setError(err?.message || "Authentication failed."); }
@@ -111,6 +153,10 @@ export default function AccountRoot({ children, onInitialize }) {
             <h1>Account setup needs attention</h1>
             <p className="bmAuthError" role="alert">{error}</p>
             <button type="button" className="bmAuthPrimary" onClick={() => window.location.reload()}>Try again</button>
+            {user && readRequestedSaveMode(user.id) && <button type="button" className="bmAuthSwitch" onClick={() => {
+              clearRequestedSaveMode(user.id);
+              window.location.assign("/game-modes");
+            }}>Cancel save-location change (keep your existing saves)</button>}
           </> : <>
             <h1>{mode === REGISTER ? "Create your account" : "Welcome back"}</h1>
             <p className="bmAuthSubtext">{mode === REGISTER ? "Build your NBA legacy." : "Sign in to manage your franchise."}</p>
@@ -126,7 +172,7 @@ export default function AccountRoot({ children, onInitialize }) {
             <button type="button" className="bmAuthSwitch" onClick={() => { setMode(mode === REGISTER ? SIGNIN : REGISTER); setError(""); setMessage(""); }}>
               {mode === REGISTER ? "Already have an account? Sign in" : "New player? Create an account"}
             </button>
-            <p className="bmAuthNote">Franchises are saved on this browser, not in the cloud. Different devices do not share saves.</p>
+            <p className="bmAuthNote">Choose Local or Cloud in Singleplayer. Local franchises are never uploaded automatically.</p>
           </>}
       </section>
     </main>

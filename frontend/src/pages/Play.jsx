@@ -1,4 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { activeBrowserAccountId, getAccountSaveMode } from "../auth/accountLocalVault.js";
+import CloudSaveStatus from "../components/CloudSaveStatus.jsx";
 import { useNavigate } from "react-router-dom";
 import { useGame } from "../context/GameContext";
 import { saveLeagueData } from "../utils/leagueStorage.js";
@@ -174,6 +176,8 @@ function clearDraftStateForYearIfNotStarted(seasonYear) {
 export default function Play() {
   const { leagueData, setLeagueData, selectedTeam, setSelectedTeam } = useGame();
   const navigate = useNavigate();
+  const cloudMode = getAccountSaveMode(activeBrowserAccountId()) === "cloud";
+  const modeSlotLimit = cloudMode ? 1 : MAX_LEAGUE_SAVE_SLOTS;
 
   const [screen, setScreen] = useState("menu");
   const [newLeagueSlotIndex, setNewLeagueSlotIndex] = useState(null);
@@ -230,7 +234,11 @@ export default function Play() {
     setLoadingSaves(true);
     setSavesError("");
     try {
-      setSaveSlots(await listLeagueSaves());
+      const saves = await listLeagueSaves();
+      if (cloudMode && saves.some(save => Number(save.slotIndex) !== 0)) {
+        setSavesError("Unexpected extra cloud slot detected. Cloud saves have not been changed. Contact the developer for safe migration.");
+      }
+      setSaveSlots(saves);
     } catch (err) {
       setSavesError(err?.message || "Could not load local saves.");
     } finally {
@@ -450,7 +458,7 @@ export default function Play() {
     try {
       const existingSaves = await listLeagueSaves();
       const requestedSlotIndex = Number(slotIndex);
-      if (!Number.isInteger(requestedSlotIndex) || requestedSlotIndex < 0 || requestedSlotIndex >= MAX_LEAGUE_SAVE_SLOTS) {
+      if (!Number.isInteger(requestedSlotIndex) || requestedSlotIndex < 0 || requestedSlotIndex >= modeSlotLimit) {
         throw new Error("Choose an empty save slot first.");
       }
       if (existingSaves.some((save) => Number(save?.slotIndex) === requestedSlotIndex)) {
@@ -592,6 +600,7 @@ export default function Play() {
       }
       await renameLeagueSave(save.saveId, trimmed);
       await refreshSaveSlots();
+      if (cloudMode) window.dispatchEvent(new Event("bm:cloud-save-request"));
     } catch (err) {
       setSavesError(err?.message || "Could not rename this save.");
     } finally {
@@ -612,6 +621,7 @@ export default function Play() {
         await clearActiveLeagueRuntime({ resetCaches: true });
       }
       await refreshSaveSlots();
+      if (cloudMode) window.dispatchEvent(new Event("bm:cloud-save-request"));
     } catch (err) {
       setSavesError(err?.message || "Could not delete this save.");
     } finally {
@@ -639,8 +649,8 @@ export default function Play() {
   };
 
   const visibleSaveSlots = useMemo(
-    () => buildVisibleLeagueSaveSlots(saveSlots, MAX_LEAGUE_SAVE_SLOTS),
-    [saveSlots]
+    () => buildVisibleLeagueSaveSlots(saveSlots, modeSlotLimit),
+    [saveSlots, modeSlotLimit]
   );
 
   const formatLastPlayed = (value) => {
@@ -673,14 +683,16 @@ export default function Play() {
             <div className="min-w-0">
               <p className="mb-1 text-[10px] font-black uppercase tracking-[0.22em] text-orange-300">Basketball Manager</p>
               <div className="flex flex-wrap items-end gap-x-4 gap-y-1">
-                <h1 className="text-4xl font-black tracking-[-0.07em] md:text-5xl">League Saves</h1>
+                <h1 className="text-4xl font-black tracking-[-0.07em] md:text-5xl">{cloudMode ? "Cloud Saves" : "Local Saves"}</h1>
                 <span className="mb-1 rounded-full border border-orange-500/25 bg-orange-500/10 px-3 py-1 text-[11px] font-black uppercase tracking-[0.12em] text-orange-200">
-                  {saveSlots.length} / {MAX_LEAGUE_SAVE_SLOTS} slots used
+                  {saveSlots.length} / {modeSlotLimit} slots used
                 </span>
               </div>
-              <p className="mt-1 text-xs font-semibold text-white/48">Choose an occupied slot to continue, or an empty slot to start a new rebuild.</p>
+              <p className="mt-1 text-xs font-semibold text-white/48">{cloudMode ? "One account-linked franchise. Autosaves to this device and syncs to Supabase." : "Ten browser-only franchises. Autosave stays on this device, never in Supabase."}</p>
             </div>
-            <div className="flex shrink-0 gap-2">
+            <div className="flex shrink-0 items-center gap-2">
+              {cloudMode && saveSlots.length > 0 && <CloudSaveStatus />}
+              <button type="button" className={`${quietButton} px-3 py-2 text-[11px]`} onClick={() => navigate("/singleplayer")}>← Save Location</button>
               <div className="flex items-center gap-1.5">
                 <button
                   type="button"
@@ -705,7 +717,7 @@ export default function Play() {
                     className="pointer-events-none invisible absolute right-0 top-full z-50 mt-2 w-64 rounded-lg border border-orange-500/25 bg-[#14100e] px-3 py-2.5 text-left text-[11px] font-medium leading-relaxed text-slate-300 opacity-0 shadow-[0_12px_30px_rgba(0,0,0,.6)] transition-opacity group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100"
                   >
                     <strong className="mb-1 block text-xs font-black text-orange-200">What is League Editor?</strong>
-                    Optional customization before starting a franchise. Import a roster, edit teams and players, or adjust free agents and draft classes. You can skip it and start a league from any empty save slot.
+                    By default, Basketball Manager uses the current NBA season rosters. League Editor is optional: create your own teams and players, edit existing teams and rosters, customize free agents and draft classes, or import a roster. To play with the default NBA rosters, simply choose an empty save slot.
                   </span>
                 </span>
               </div>
@@ -717,7 +729,7 @@ export default function Play() {
             <p className="shrink-0 rounded-lg border border-red-500/25 bg-red-500/10 px-3 py-2 text-xs font-bold text-red-200">{savesError}</p>
           )}
 
-          <main className="grid min-h-0 flex-1 grid-cols-5 grid-rows-2 gap-3">
+          <main className={cloudMode ? "grid min-h-0 flex-1 grid-cols-1 gap-3 sm:max-w-[340px]" : "grid min-h-0 flex-1 grid-cols-5 grid-rows-2 gap-3"}>
             {visibleSaveSlots.map(({ slotIndex, save }) => {
               const busy = save ? saveBusyId === save.saveId || loadingSaveId === save.saveId : startingGame;
 
@@ -784,13 +796,13 @@ export default function Play() {
   return (
     <div className="min-h-screen overflow-hidden bg-[#050505] px-4 py-3 text-white">
       <div className="mx-auto flex min-h-[calc(100vh-1.5rem)] w-full max-w-7xl flex-col justify-center gap-2">
-        <button type="button" onClick={() => { setScreen("menu"); setError(""); refreshSaveSlots(); }} className="self-start rounded-lg border border-[#303030] bg-[#111111] px-4 py-2 text-sm font-black text-white/70 hover:border-orange-500/40 hover:text-orange-200">← Back to Save Slots</button>
+        <button type="button" onClick={() => { setScreen("menu"); setError(""); refreshSaveSlots(); }} className="self-start rounded-lg border border-[#303030] bg-[#111111] px-4 py-2 text-sm font-black text-white/70 hover:border-orange-500/40 hover:text-orange-200">← Back to {cloudMode ? "Cloud" : "Local"} Slots</button>
 
         <div className={`${chromePanel} overflow-hidden p-3 md:p-3`}>
           <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
             <div>
               <p className="mb-2 text-[11px] font-black uppercase tracking-[0.18em] text-orange-300">Basketball Manager</p>
-              <h1 className="text-3xl font-black tracking-[-0.06em] md:text-4xl">Start New League <span className="text-orange-300/80">· Slot {Number(newLeagueSlotIndex) + 1}</span></h1>
+              <h1 className="text-3xl font-black tracking-[-0.06em] md:text-4xl">{cloudMode ? "Start Cloud League" : "Start New League"} <span className="text-orange-300/80">· Slot {Number(newLeagueSlotIndex) + 1}</span></h1>
             </div>
 
             <div className="flex w-full flex-col gap-2 sm:flex-row md:w-auto md:items-end">

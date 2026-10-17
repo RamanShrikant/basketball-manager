@@ -7,6 +7,7 @@
  * Failure policy: keep prior data recoverable; never proceed to game if a
  * snapshot or restore operation fails. Switching accounts requires a reload.
  */
+import { prepareCloudRestoreDatabases } from "./cloudSaveSchemas.js";
 import {
   captureLeagueLocalStorage, captureLeagueSessionStorage,
   clearLeagueLocalStorage, clearLeagueSessionStorage,
@@ -20,6 +21,32 @@ const VAULT_STORE = "profiles";
 const LEGACY_ID = "__legacy_unclaimed__";
 const GAME_DB_PREFIX = "basketball_manager_";
 const ACCOUNT_ACTIVE_SAVE_KEY = "bm_active_league_save_id_v1";
+const SAVE_MODE_KEY = "bm_save_mode_active_v1_";
+const SAVE_MODE_INTENT_KEY = "bm_save_mode_requested_v1_";
+const VALID_MODES = new Set(["local", "cloud"]);
+
+export function getAccountSaveMode(userId) {
+  const id = validateAccountId(userId);
+  const saved = localStorage.getItem(`${SAVE_MODE_KEY}${id}`);
+  return VALID_MODES.has(saved) ? saved : "local";
+}
+
+export function requestAccountSaveMode(userId, mode) {
+  const id = validateAccountId(userId);
+  if (!VALID_MODES.has(mode)) throw new Error("Unrecognized single-player save mode.");
+  localStorage.setItem(`${SAVE_MODE_INTENT_KEY}${id}`, mode);
+}
+
+export function readRequestedSaveMode(userId) {
+  const value = localStorage.getItem(`${SAVE_MODE_INTENT_KEY}${validateAccountId(userId)}`);
+  return VALID_MODES.has(value) ? value : null;
+}
+
+export function clearRequestedSaveMode(userId) {
+  localStorage.removeItem(`${SAVE_MODE_INTENT_KEY}${validateAccountId(userId)}`);
+}
+
+const modeVaultId = (id, mode) => `__bm_singleplayer_mode_${mode}_${id}`;
 const ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f-]{27,40}$/i;
 
 export function validateAccountId(id) {
@@ -182,7 +209,47 @@ export async function recoverInterruptedSwitch() {
   await restoreLive(prior);
   if (pending.from === LEGACY_ID) localStorage.removeItem(BM_ACCOUNT_OWNER_KEY);
   else localStorage.setItem(BM_ACCOUNT_OWNER_KEY, pending.from);
+  if (pending.modeFrom && VALID_MODES.has(pending.modeFrom) && pending.from !== LEGACY_ID) {
+    localStorage.setItem(`${SAVE_MODE_KEY}${pending.from}`, pending.modeFrom);
+  }
   localStorage.removeItem(BM_ACCOUNT_SWITCH_KEY);
+}
+
+export async function getStoredModeSnapshot(userId, mode) {
+  const id = validateAccountId(userId);
+  if (!VALID_MODES.has(mode)) throw new Error("Invalid save mode.");
+  return readVault(modeVaultId(id, mode));
+}
+
+export async function switchAccountSaveMode(userId, targetMode) {
+  const id = validateAccountId(userId);
+  if (activeBrowserAccountId() !== id) throw new Error("Wrong account for save-mode switch.");
+  if (!VALID_MODES.has(targetMode)) throw new Error("Invalid save mode.");
+  await recoverInterruptedSwitch();
+  const priorMode = getAccountSaveMode(id);
+  if (priorMode === targetMode) return { switched: false, cached: true };
+
+  // Work exclusively before importing GameContext/worker modules on a reload.
+  // Retain both worlds in the account vault; never write Local into the cloud slot.
+  const prior = await captureLive();
+  await putVault(id, prior); // crash recovery snapshot
+  await putVault(modeVaultId(id, priorMode), prior);
+  localStorage.setItem(BM_ACCOUNT_SWITCH_KEY, JSON.stringify({ from: id, to: id, modeFrom: priorMode }));
+  try {
+    const next = await readVault(modeVaultId(id, targetMode));
+    if (next) await prepareCloudRestoreDatabases(next);
+    await restoreLive(next);
+    await putVault(id, await captureLive());
+    localStorage.setItem(`${SAVE_MODE_KEY}${id}`, targetMode);
+    localStorage.removeItem(BM_ACCOUNT_SWITCH_KEY);
+    return { switched: true, cached: Boolean(next) };
+  } catch (error) {
+    try { await recoverInterruptedSwitch(); }
+    catch (recoveryError) {
+      throw new Error(`Save-mode switch needs manual recovery: ${recoveryError.message}`);
+    }
+    throw error;
+  }
 }
 
 export async function activateAccount(userId, { adoptLegacy = false } = {}) {
@@ -213,6 +280,38 @@ export async function activateAccount(userId, { adoptLegacy = false } = {}) {
   } catch (error) {
     try { await recoverInterruptedSwitch(); } catch (recoveryError) {
       throw new Error(`Account switch failed and needs manual recovery: ${recoveryError.message}`);
+    }
+    throw error;
+  }
+}
+
+export async function captureAccountCloudSnapshot(userId) {
+  if (activeBrowserAccountId() !== validateAccountId(userId)) {
+    throw new Error("Wrong account for cloud snapshot.");
+  }
+  return captureLive();
+}
+
+export async function restoreAccountCloudSnapshot(userId, snapshot) {
+  const id = validateAccountId(userId);
+  if (activeBrowserAccountId() !== id) throw new Error("Wrong account for cloud restore.");
+  if (snapshot?.version !== 1 || !snapshot.dbs || !snapshot.local || !snapshot.session) {
+    throw new Error("Invalid cloud save format.");
+  }
+  // New browsers do not have game DB schemas yet; prepare only known empty DBs.
+  await prepareCloudRestoreDatabases(snapshot);
+  const before = await captureLive();
+  await putVault(`__cloud_restore_backup_${id}_${Date.now()}`, before);
+  await putVault(id, before);
+  localStorage.setItem(BM_ACCOUNT_SWITCH_KEY, JSON.stringify({ from: id, to: id }));
+  try {
+    await restoreLive(snapshot);
+    await putVault(id, snapshot);
+    localStorage.removeItem(BM_ACCOUNT_SWITCH_KEY);
+  } catch (error) {
+    try { await recoverInterruptedSwitch(); }
+    catch (recoveryError) {
+      throw new Error(`Cloud restore failed; manual recovery required: ${recoveryError.message}`);
     }
     throw error;
   }

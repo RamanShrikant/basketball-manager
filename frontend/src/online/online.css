@@ -1,0 +1,61 @@
+/* Online Beta is its own styling and runtime island; no single-player CSS touched. */
+.on-root {min-height:100vh;background:#060606;color:#f6f3ef;font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;}
+.on-root *, .on-center *{box-sizing:border-box}
+.on-root button,.on-root input,.on-center button,.on-center input{font:inherit}
+.on-root button,.on-center button{cursor:pointer}
+.on-root button:disabled,.on-center button:disabled{opacity:.48;cursor:not-allowed}
+.on-root a,.on-center a{text-decoration:none;color:inherit}
+.on-header{height:74px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #272322;padding:0 clamp(18px,4vw,66px);background:#090908}
+.on-logo{font-size:22px;font-weight:950;letter-spacing:-.08em;color:#f47627!important}.on-logo span{display:inline-block;margin-left:9px;vertical-align:middle;color:#d9d4cc;font-size:10px;letter-spacing:.2em}
+.on-player-id{font-size:13px;font-weight:750}.on-player-id b{color:#fba668;margin-left:0}
+.on-page{max-width:1390px;margin:0 auto;padding:clamp(20px,4vw,48px) clamp(16px,3vw,38px) 70px}
+.on-hero{padding:32px 0 22px}.on-hero h1,.on-lobby-title h1{font-size:clamp(32px,4vw,52px);line-height:1.04;letter-spacing:-.06em;font-weight:950;margin:10px 0 12px}
+.on-kicker{color:#ffa365;font-size:10px;letter-spacing:.19em;font-weight:900;text-transform:uppercase;margin:0}
+.on-sub{max-width:680px;color:#99928f;font-size:14px;line-height:1.7;margin:12px 0 22px}
+.on-between{display:flex;align-items:center;justify-content:space-between;gap:18px}
+.on-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}
+.on-panel{border:1px solid #37302d;background:#10100f;border-radius:18px;padding:clamp(22px,3vw,34px);box-shadow:0 18px 55px rgba(0,0,0,.2)}
+.on-panel h1,.on-panel h2,.on-drawer h2{font-size:26px;line-height:1.16;letter-spacing:-.04em;font-weight:950;margin:11px 0}
+.on-panel h3,.on-drawer h3{font-size:14px;font-weight:900;margin:28px 0 12px;color:#eae5dd}.on-panel h3 small,.on-drawer h3 small{font-size:10px;color:#999;margin-left:8px}
+.on-root label,.on-center label{display:grid;gap:8px;font-size:12px;font-weight:800;margin:14px 0;color:#e7dfd8}
+.on-root input,.on-center input{width:100%;min-width:0;padding:13px 14px;border-radius:10px;background:#090909;color:white;border:1px solid #44372f;outline:none;font-size:14px}
+.on-root input:focus,.on-center input:focus{border-color:#e77a36;box-shadow:0 0 0 2px #e77a3624}
+.on-primary,.on-secondary,.on-small,.on-social-trigger{border-radius:10px;font-size:13px;font-weight:900;border:1px solid #40312a;padding:12px 16px;transition:background .15s,border-color .15s,transform .15s}
+.on-primary{background:#e75f18;color:#fff;border-color:#ed8137}.on-primary:not(:disabled):hover{background:#fc7529;transform:translateY(-1px)}
+.on-secondary{background:#181514;color:#eee;border-color:#52423b}.on-secondary:hover,.on-small:hover{background:#30231b}
+.on-small{padding:8px 10px;background:#191817;border-color:#37312c;color:#ebdfd6;font-size:11px;white-space:nowrap}
+.on-accent{color:#ffc08c;border-color:#815032}
+.on-text-btn{background:none;border:0;color:#ffb178;font-size:12px;padding:12px;cursor:pointer}
+.on-link{display:inline-flex;color:#ada29d!important;font-size:12px;font-weight:750;margin-bottom:22px}
+.on-muted{font-size:12px;line-height:1.65;color:#89827c;margin:8px 0}
+.on-options{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin:20px 0}
+.on-option{background:#171615;color:#eee;border:1px solid #39302b;border-radius:10px;padding:14px;text-align:left;font-weight:900;font-size:13px}
+.on-option small{display:block;margin-top:7px;font-size:11px;font-weight:500;line-height:1.45;color:#aaa09a}
+.on-option.active{border-color:#e8732f;background:#21140c}
+.on-file{border:1px dashed #554133;border-radius:12px;padding:16px}.on-file input{padding:9px 0;border:none;box-shadow:none}.on-file small{color:#938780;font-size:12px}
+.on-info{margin-top:22px;background:#100f0e;border:1px solid #29231f;border-radius:12px;padding:20px 24px}.on-info b{color:#d7cfc7;font-size:12px}.on-info p{color:#918983;font-size:12px;line-height:1.65;max-width:850px;margin:8px 0 0}
+.on-social-trigger{background:#151211;color:#e4c4aa;border-color:#66442d;white-space:nowrap}.on-social-trigger span{margin-left:10px;color:#ff9546}
+.on-invite-list{margin-top:26px;border-top:1px solid #2d2926;padding-top:5px}.on-invite,.on-social-row{display:flex;align-items:center;justify-content:space-between;gap:10px;border-bottom:1px solid #292623;padding:12px 0;font-size:12px}
+.on-invite b,.on-social-row b{display:block;font-weight:800}.on-invite small,.on-social-row small{display:block;color:#938984;margin-top:5px}
+.on-inline{display:flex;align-items:center;gap:8px}.on-inline input{min-width:0;flex:1}
+.on-center{min-height:100vh;display:grid;place-items:center;padding:24px;background:#060606;color:#ede8e2}
+.on-auth{width:min(440px,100%)}.on-auth h1{font-size:31px;letter-spacing:-.05em}.on-auth .on-primary{width:100%;margin-top:14px}
+.on-error,.on-success{border-radius:9px;padding:12px 15px;font-size:12px;line-height:1.5}
+.on-error{border:1px solid #924c4c;background:#311817;color:#ffbbbb}.on-success{background:#10271c;color:#89efb4;border:1px solid #245e39}
+.on-drawer-backdrop{position:fixed;inset:0;z-index:100;background:#000a;display:flex;justify-content:flex-end}
+.on-drawer{width:min(460px,100vw);height:100vh;background:#10100f;border-left:1px solid #49372b;overflow-y:auto;padding:30px 25px;box-shadow:-20px 0 65px #0008}
+.on-drawer h2{font-size:26px}.on-profile-box{background:#191513;border:1px solid #4d3829;border-radius:12px;padding:16px;margin:22px 0 30px}
+.on-profile-box b{font-size:16px;color:#ffb07f}.on-profile-box p{font-size:12px;color:#9a8b7e;line-height:1.5}
+.on-lobby-title{align-items:center;margin:10px 0 28px}.on-code-box{background:#1a1410;border:1px solid #6b492f;border-radius:12px;padding:16px;text-align:center;min-width:170px}.on-code-box small{font-size:9px;letter-spacing:.13em;font-weight:900;color:#bb8e6c;display:block}.on-code-box b{display:block;font-size:21px;letter-spacing:.16em;margin:8px 0;color:#ffe0cb}
+.on-lobby-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(290px,345px);gap:18px;align-items:start}
+.on-team-select{min-height:640px}.on-teams-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin-top:22px;max-height:55vh;overflow-y:auto;padding-right:4px}
+.on-team-choice{display:flex;align-items:center;gap:8px;text-align:left;min-height:65px;background:#161514;border:1px solid #39302c;border-radius:11px;padding:11px;color:#eee;font-size:11px;font-weight:800}
+.on-team-choice:hover:not(:disabled){border-color:#9b6545}.on-team-choice.picked{border-color:#eb7835;background:#26170f}.on-team-choice span:not(.on-team-badge){flex:1}.on-team-choice small{font-size:9px;color:#ffb477}
+.on-team-badge{width:38px;height:38px;display:inline-flex;justify-content:center;align-items:center;flex-shrink:0;border:1px solid #463a32;background:#201c19;border-radius:50%;font-weight:950;color:#a99d93;font-size:11px;overflow:hidden}
+.on-team-badge img{object-fit:contain;width:34px;height:34px}
+.on-ready-bar{display:flex;align-items:center;justify-content:space-between;gap:15px;border-top:1px solid #322b26;margin-top:22px;padding-top:23px}
+.on-ready-bar b{font-size:15px}.on-player-slot{display:flex;gap:11px;align-items:center;padding:12px 0;border-bottom:1px solid #302a27}.on-player-slot>div{min-width:0;flex:1}.on-player-slot b{font-size:12px;overflow-wrap:anywhere}.on-player-slot small{display:block;font-size:10px;color:#998d87;margin-top:5px}.on-ready{color:#fb8b8b;font-size:20px;font-weight:900}.on-ready.on-is-ready{color:#5ad093}
+.on-count{font-size:12px;color:#fbb37b}.on-invite-area{margin-top:23px}.on-invite-area .on-secondary{width:100%;margin-top:9px}
+.on-lobby-footer{border-top:1px solid #302a26;margin-top:24px;padding-top:16px;display:grid;gap:8px}.on-empty{max-width:650px}.on-empty h1{font-size:32px}
+@media(max-width:930px){.on-lobby-layout{grid-template-columns:1fr}.on-lobby-side{order:-1}.on-team-select{min-height:unset}.on-teams-grid{max-height:unset}}
+@media(max-width:700px){.on-grid{grid-template-columns:1fr}.on-hero .on-between,.on-lobby-title{flex-direction:column;align-items:stretch}.on-options{grid-template-columns:1fr}.on-teams-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.on-ready-bar{flex-direction:column;align-items:stretch}.on-header{padding:0 16px}.on-logo span{font-size:8px}}

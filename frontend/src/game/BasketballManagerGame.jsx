@@ -14,7 +14,8 @@ import { initializeSeasonStatsArchiveStorage } from "../utils/seasonStatsArchive
 import { initializeCustomDraftClassStorage } from "../utils/customDraftClassStorage.js";
 import { initializeOffseasonMoodBaselineStorage } from "../utils/offseasonMoodBaselineStorage.js";
 import { installUiSoundBindings } from "../audio/uiSoundBindings.js";
-import { AccountControls } from "../auth/AccountControls.jsx";
+import { CloudAutosaveBridge } from "./CloudAutosaveBridge.jsx";
+import { getAccountSaveMode } from "../auth/accountLocalVault.js";
 
 function devBootResetIfNeeded() {
   // Local save slots need to survive normal npm-run-dev restarts. The old dev
@@ -71,8 +72,8 @@ export default function BasketballManagerGame({ user }) {
     <React.StrictMode>
       <GameProvider>
         <DiagnosticsBridge />
-        <App />
-        <AccountControls user={user} />
+        {getAccountSaveMode(user.id) === "cloud" && <CloudAutosaveBridge user={user} />}
+        <App user={user} />
       </GameProvider>
     </React.StrictMode>
   );

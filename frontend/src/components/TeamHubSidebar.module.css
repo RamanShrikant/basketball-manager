@@ -151,7 +151,7 @@
 
 .navItem:hover:not(:disabled) {
   color: #ffffff;
-  background: rgba(249, 115, 22, 0.08);
+  background: transparent;
 }
 
 .navItem:active:not(:disabled) {
@@ -160,16 +160,15 @@
 
 .navItemActive,
 .navItemActive:hover {
-  color: #ffffff !important;
-  background: #d65316 !important;
-  box-shadow:
-    inset 0 0 0 1px rgba(251, 146, 60, 0.13),
-    0 7px 18px rgba(67, 20, 7, 0.25);
-  font-weight: 700;
+  /* All sidebar entries retain the same black background when selected. */
+  color: #c8bfb7 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  font-weight: 560;
 }
 
 .navItemActive .icon {
-  color: #fff7ed;
+  color: inherit;
 }
 
 .navItemDisabled {
@@ -367,3 +366,47 @@
   font-weight: 800;
   line-height: 1.35;
 }
+
+/* BM_SIDEBAR_SOLID_BLACK_V2_START */
+/* Consistent pure dark sidebar on every gameplay route, regardless of selection. */
+.sidebar,
+.sidebar:hover,
+.sidebar:focus-within {
+  background: #080808 !important;
+  background-image: none !important;
+  border-right-color: rgba(255, 255, 255, 0.08) !important;
+}
+.brand,
+.navViewport,
+.group,
+.groupItems {
+  background: transparent !important;
+  background-image: none !important;
+}
+.brand {
+  border-bottom-color: rgba(255, 255, 255, 0.08) !important;
+}
+.navItem,
+.navItem:hover:not(:disabled),
+.navItem:active:not(:disabled),
+.navItemActive,
+.navItemActive:hover,
+.navItemActive:active,
+.navItem[aria-current="page"] {
+  background: transparent !important;
+  background-image: none !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+/* The scrollbar itself used to be bright orange. Keep the whole surface neutral. */
+.navViewport {
+  scrollbar-color: #494949 transparent !important;
+}
+.navViewport::-webkit-scrollbar-thumb,
+.navViewport::-webkit-scrollbar-thumb:hover {
+  background: #494949 !important;
+  background-image: none !important;
+  border-color: #080808 !important;
+  box-shadow: none !important;
+}
+/* BM_SIDEBAR_SOLID_BLACK_V2_END */

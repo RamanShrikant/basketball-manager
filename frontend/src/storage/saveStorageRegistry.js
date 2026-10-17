@@ -31,6 +31,10 @@ const GLOBAL_EXACT_KEYS = new Set([
 ]);
 
 const GLOBAL_PREFIXES = [
+  "bm_cloud_sync_v1_",
+  "bm_cloud_slot_sync_v2_",
+  "bm_save_mode_active_v1_",
+  "bm_save_mode_requested_v1_",
   "sb-", // Supabase auth session keys must NEVER enter franchise snapshots.
   "supabase.auth.",
   "bm_face_dna_lab_",

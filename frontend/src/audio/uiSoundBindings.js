@@ -115,6 +115,10 @@ function shouldPlayUiNavigation(event, control) {
   if (isPlayerCardOpenControl(control)) return true;
 
   const pathname = currentPathname();
+  // Samsara Studios and League Saves use the same semantic click sounds as
+  // existing game menus. Back/close, disabled and selected-control rules above
+  // still take precedence; no extra page-level onClick sounds are added.
+  if (pathname === "/" || pathname === "/play") return true;
   if (isTradeSurface(pathname) && !isDedicatedTradeFinderControl(control, pathname)) return true;
 
   return false;

@@ -1,0 +1,28 @@
+// UI-only account control regression: verifies display rules and preserves save logic.
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+const read = p => readFileSync(new URL(`../${p}`, import.meta.url), "utf8");
+const modes=read("src/pages/GameModeLanding.jsx");
+const app=read("src/App.jsx");
+const controls=read("src/auth/AccountControls.jsx");
+const play=read("src/pages/Play.jsx");
+const indicator=read("src/components/CloudSaveStatus.jsx");
+const shell=read("src/components/PersistentGameShell.jsx");
+assert(modes.includes("<AccountControls user={user} />"));
+assert(app.includes('<GameModeLanding user={user} />'));
+assert(!app.includes("AccountOnPlayOnly"));
+assert(!controls.includes("bmAccountChip"));
+assert(controls.includes('await checkpointActiveLeagueSave('));
+assert(controls.includes('await flushAllLeagueRuntimeWrites()'));
+assert(controls.includes('await checkpointAccount(user.id)'));
+assert(controls.includes('getAccountSaveMode(user.id) === "cloud"'));
+assert(controls.includes('await uploadCloudSave(user.id, { force: true })'));
+assert(controls.includes('await supabase.auth.signOut()'));
+assert(controls.includes('supabase.rpc("bm_online_profile"'));
+assert(controls.includes("onlineProfile.player_tag"));
+assert(play.includes('cloudMode && saveSlots.length > 0 && <CloudSaveStatus />'));
+assert(indicator.includes('bm:cloud-save-status'));
+assert(indicator.includes('bm:cloud-save-request'));
+assert(!indicator.includes('position:fixed'));
+for(const route of ['/game-modes','/singleplayer','/studio']) assert(shell.includes(`"${route}"`));
+console.log("PASS: no floating account bar, safe sign-out, editable online identity, cloud-only status, pregame sidebar hidden");

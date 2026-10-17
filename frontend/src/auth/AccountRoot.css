@@ -18,9 +18,3 @@
 .bmAuthNote{color:#888;font-size:11px;line-height:1.5;text-align:center;margin:27px 0 0}
 .bmAuthError,.bmAuthInfo{border-radius:8px;padding:11px 13px;font-size:13px;line-height:1.5;margin:12px 0;background:#3b1717;color:#ffc2ba;border:1px solid #7e3636;overflow-wrap:anywhere}
 .bmAuthInfo{background:#143022;border-color:#306347;color:#9bedbc}
-.bmAccountChip{position:fixed;right:16px;bottom:16px;z-index:2147483000;display:flex;max-width:min(440px,calc(100vw - 32px));align-items:center;gap:10px;border:1px solid #4b3323;border-radius:9px;background:#121212f2;box-shadow:0 8px 28px #0008;padding:7px 9px;color:#dedede;font-size:11px}
-.bmAccountChipLabel{max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.bmAccountChip button{background:#402213;border:1px solid #9e4917;color:#ffa772;border-radius:6px;font-size:11px;font-weight:800;padding:6px 9px;cursor:pointer}
-.bmAccountChip button:disabled{opacity:.5;cursor:wait}
-.bmAccountChipError{color:#ffb4a4;overflow-wrap:anywhere;max-width:200px}
-@media(max-width:560px){.bmAccountChipLabel{display:none}.bmAccountChip{right:8px;bottom:8px}}
