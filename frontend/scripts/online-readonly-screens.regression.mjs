@@ -1,0 +1,34 @@
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+const read=(path)=>readFileSync(new URL('../'+path,import.meta.url),'utf8');
+const app=read('src/online/OnlineFranchise.jsx');
+const css=read('src/online/online.css');
+const storage=read('src/online/onlineInertStorage.js');
+assert(app.includes('ONLINE_READ_ONLY_SCREENS'), 'Online route map present');
+assert(app.includes('"/roster-view"'), 'roster route present');
+assert(app.includes('"/standings"'), 'standings route present');
+assert(app.includes('"/draft-picks"'), 'draft route present');
+assert(app.includes('"/salary-table"'), 'salary route present');
+assert(app.includes('data-online-read-only="true"'), 'Online shell read-only scope');
+assert(css.includes('Phase 2B2: original read-only basketball pages'), 'Online-only styling present');
+assert(storage.includes('const values = new Map()'), 'in-memory preferences, not browser saves');
+for(const page of ['RosterView','Standings','DraftPicks','SalaryTable']) {
+  const src=read(`src/online/Online${page}.jsx`);
+  assert(src.includes('onlineReadOnlyContext.jsx'),page+' uses Online provider');
+  assert(src.includes('useOnlineRouteNav()'),page+' uses Online navigation');
+  assert(src.includes('onlineInertStorage.js'),page+' uses inert store');
+  assert(!/\b(localStorage|sessionStorage|indexedDB)\b/.test(src),page+' never refers to browser save storage');
+  assert(!src.includes('from "../context/GameContext"'),page+' does not import single-player GameContext');
+}
+const roster=read('src/online/OnlineRosterView.jsx');
+assert(roster.includes('canManageCurrentRoster = false && Boolean('), 'roster transactions locked');
+assert(!roster.includes('from "../api/simEnginePy.js"'), 'no release worker import');
+assert(!roster.includes('from "../utils/leagueStorage.js"'), 'no save writer import');
+assert(!roster.includes('PlayerCardModal'), 'storage-bound player modal avoided');
+const standings=read('src/online/OnlineStandings.jsx');
+assert(!standings.includes('readScheduleFromStorage'), 'standings uses online calendar only');
+assert(standings.includes('leagueData?.onlineResults || {}'), 'standings uses online results');
+const salary=read('src/online/OnlineSalaryTable.jsx');
+assert(!salary.includes('BM_CONTRACT_DEBUG'), 'no global contract debug exposure');
+assert(salary.includes('from "../config/headshotLayout.js"'), 'original salary layout configuration preserved');
+console.log('PASS: original roster/standings/draft/salary views wired to Online snapshot, mutators locked, no SP save access');

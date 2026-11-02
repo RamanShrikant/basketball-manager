@@ -1,0 +1,21 @@
+// Run with: node scripts/online-lobby-recovery.regression.mjs
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+const get = p => readFileSync(new URL('../'+p, import.meta.url),'utf8');
+const home=get('src/online/OnlineHome.jsx');
+const api=get('src/online/onlineApi.js');
+const css=get('src/online/online.css');
+const sql=get('../supabase/bm_online_social_lobbies_v1.sql');
+assert(home.includes('hostedLobby(user.id)'),'Home discovers account-wide host lobby');
+assert(home.includes('Resume Lobby →'),'Home offers resume');
+assert(home.includes('Close Lobby'),'Home offers close');
+assert(home.includes('bm_leave_online_lobby'),'Close uses existing authorized RPC');
+assert(home.includes('Boolean(activeLobby)'),'Cannot silently create another room');
+assert(api.includes('.eq("host_id", userId).eq("status", "waiting")'),'Host query is status-scoped');
+assert(sql.includes('host_id=(select auth.uid())'),'Host has RLS visibility');
+assert(sql.includes('bm_leave_online_lobby'),'Server supports host closing');
+assert(css.includes('.on-existing-lobby'),'Resume card styling installed');
+assert(css.includes('.on-primary{background:#e1e1e1;color:#111'),'Online buttons neutral');
+for(const hue of ['#e75f18','#e8732f','#eb7835','#f47627','#ffa365','#fba668']) assert(!css.includes(hue),'Online has no orange tint '+hue);
+assert(!/from\s*[\"'][^\"']*GameContext/.test(home) && !/from\s*[\"'][^\"']*GameContext/.test(api),'Online is isolated from single-player context');
+console.log('PASS: Online neutral UI, existing-lobby discovery/resume/close, single-player isolation');

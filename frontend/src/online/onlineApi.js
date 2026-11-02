@@ -9,6 +9,17 @@ export async function rpc(name, params = {}) {
   return data;
 }
 export async function profile(name = null) { return rpc("bm_online_profile", { p_name: name }); }
+export async function hostedLobby(userId) {
+  // The database holds the lobby, not the device that originally hosted it.
+  // RLS permits the authenticated host to read their own waiting lobby.
+  if (!userId) return null;
+  const { data, error } = await supabase.from("bm_online_lobbies")
+    .select("id,join_code,roster_kind,status")
+    .eq("host_id", userId).eq("status", "waiting")
+    .order("created_at", { ascending: false }).limit(1).maybeSingle();
+  err(error);
+  return data || null;
+}
 export async function profilesFor(ids) {
   const filtered = [...new Set(ids.filter(Boolean))];
   if (!filtered.length) return {};

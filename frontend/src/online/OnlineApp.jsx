@@ -1,9 +1,12 @@
 import React, { useEffect, useState } from "react";
-import { BrowserRouter, Routes, Route, Link, useNavigate, useParams } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Link, useNavigate, useParams, useLocation } from "react-router-dom";
 import { supabase } from "../auth/supabaseClient.js";
 import { profile } from "./onlineApi.js";
 import OnlineHome from "./OnlineHome.jsx";
 import OnlineLobby from "./OnlineLobby.jsx";
+import OnlineFranchise from "./OnlineFranchise.jsx";
+import OnlineFranchiseLibrary from "./OnlineFranchiseLibrary.jsx";
+import useOnlineGameSounds from "./useOnlineGameSounds.js";
 import "./online.css";
 
 function Gate({ children }) {
@@ -64,12 +67,23 @@ function Gate({ children }) {
   </form></main>;
   return children({user,onlineProfile, setOnlineProfile});
 }
-export default function OnlineApp(){return <BrowserRouter><Gate>{ctx=><div className="on-root">
-  <header className="on-header"><a className="on-logo" href="/game-modes">BM <span>ONLINE BETA</span></a>
-  <div className="on-player-id">{ctx.onlineProfile.display_name}<b>#{ctx.onlineProfile.player_tag}</b></div></header>
-  <Routes>
-    <Route path="/online" element={<OnlineHome {...ctx}/>}/>
-    <Route path="/online/lobby/:id" element={<OnlineLobby {...ctx}/>}/>
-    <Route path="*" element={<main className="on-center"><Link to="/online">← Online Home</Link></main>}/>
-  </Routes>
-</div>}</Gate></BrowserRouter>}
+function OnlineSoundBridge(){useOnlineGameSounds();return null;}
+function OnlineAuthenticatedScreen({ctx}) {
+  const location = useLocation();
+  const isLobby = location.pathname.startsWith("/online/lobby/");
+  const isFranchise = location.pathname.startsWith("/online/franchise/");
+  return <div className={`on-root${isLobby ? " on-root-lobby" : ""}${isFranchise ? " on-root-franchise" : ""}`}>
+    <OnlineSoundBridge/>
+    {!isLobby && !isFranchise && <header className="on-header"><a className="on-logo" href="/game-modes">BM <span>ONLINE BETA</span></a>
+      <div className="on-header-meta"><div className="on-player-id">{ctx.onlineProfile.display_name}<b>#{ctx.onlineProfile.player_tag}</b></div></div>
+    </header>}
+    <Routes>
+      <Route path="/online" element={<OnlineHome {...ctx}/>}/>
+      <Route path="/online/library" element={<OnlineFranchiseLibrary {...ctx}/>}/>
+      <Route path="/online/lobby/:id" element={<OnlineLobby {...ctx}/>}/>
+      <Route path="/online/franchise/:id" element={<OnlineFranchise {...ctx}/>}/>
+      <Route path="*" element={<main className="on-center"><Link to="/online">← Online Home</Link></main>}/>
+    </Routes>
+  </div>;
+}
+export default function OnlineApp(){return <BrowserRouter><Gate>{ctx=><OnlineAuthenticatedScreen ctx={ctx}/>}</Gate></BrowserRouter>}

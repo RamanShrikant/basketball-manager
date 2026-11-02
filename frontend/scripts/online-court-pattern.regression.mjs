@@ -1,0 +1,18 @@
+import assert from 'node:assert/strict';
+import {readFileSync, existsSync} from 'node:fs';
+const css=readFileSync(new URL('../src/online/online.css',import.meta.url),'utf8');
+const shared=readFileSync(new URL('../src/styles/BMPageBackground.css',import.meta.url),'utf8');
+const svgPath=new URL('../src/assets/basketball-pattern.svg',import.meta.url);
+assert(existsSync(svgPath),'shared basketball-pattern.svg asset must exist');
+const svg=readFileSync(svgPath,'utf8');
+assert(svg.includes('<circle')&&svg.includes('<path'),'asset contains curved basketball seams');
+const marker='/* BM ONLINE — exact curved court pattern from BMPageBackground.css */';
+assert(css.includes(marker),'Online court style override exists');
+const block=css.slice(css.indexOf(marker));
+const sharedLayer=shared.slice(shared.indexOf('  background-image:'),shared.indexOf('  background-blend-mode:')+'  background-blend-mode: soft-light, normal, normal, normal;'.length);
+assert(block.includes(sharedLayer),'Online root background uses exact BM court composition');
+assert(block.includes('.on-root .on-panel,'),'Online panels receive curved court surface');
+assert(block.includes('.on-drawer,'),'Friends & Profile drawer receives curved court surface');
+assert(block.includes('.on-profile-box {'),'Profile card receives curved court surface');
+assert(block.includes('url("../assets/basketball-pattern.svg")'),'Online uses original shared asset');
+console.log('PASS: Online reuses exact curved basketball pattern and account surfaces, no square-grid replacement');

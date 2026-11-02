@@ -27,7 +27,7 @@ const lobby=read('src/online/OnlineLobby.jsx');
 assert.match(lobby,/bm_set_online_team/);
 assert.match(lobby,/bm_set_online_ready/);
 assert.match(lobby,/bm_cancel_online_lobby_invite/);
-assert.match(lobby,/Start League — Coming Soon/);
+assert.match(lobby,/launchSharedFranchise\(lobby\)/);
 assert.doesNotMatch(lobby,/window\.location\.assign\("\/team-hub"/);
 const friends=read('src/online/FriendsPanel.jsx');
 for(const fn of ['bm_send_friend_request','bm_answer_friend_request','bm_cancel_friend_request','bm_remove_friend'])assert(friends.includes(fn),`Missing ${fn}`);
