@@ -1,0 +1,605 @@
+﻿Online All-Star checkpoint, parity presentation and extension guard passed.
+PASS: automatic host bootstrap, shared server-owned schedule, version guards, no single-player writes
+PASS: Online host-only game-day simulation, original Python engine, injury/stats, dialog, state isolation, private SQL.
+TAP version 13
+# Subtest: custom league UI rejects every team count except exactly 30
+ok 1 - custom league UI rejects every team count except exactly 30
+  ---
+  duration_ms: 0.9476
+  type: 'test'
+  ...
+# Subtest: no one can bypass team-count enforcement by creating an online lobby directly
+ok 2 - no one can bypass team-count enforcement by creating an online lobby directly
+  ---
+  duration_ms: 1.1575
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 9.0618
+PASS: original-class carousel, sidebar code, separate Online state, and original lobby RPCs
+PASS: authoritative Coach & Free Agency routes, no SP persistence or direct DB writes, 55 imports resolved
+PASS: shared Online Coach gameplans, separate Online Free Agency, no single-player persistence, 55 imports resolved
+PASS: contract salary schedules/minimums/maximums, revisioned server RPC, guarded options and Online isolation
+NOTE: SQL execution and two-account concurrency still require manual live verification.
+PASS: current diagonal-only Online background, shared basketball SVG preserved for single-player
+PASS: original CPU trade finder, authenticated server read-only search, human-team exclusion, stale offer handoff, online routing, isolation.
+TAP version 13
+# Subtest: G3A1 exposes only the three seasons supported by the trusted CPU backend
+ok 1 - G3A1 exposes only the three seasons supported by the trusted CPU backend
+  ---
+  duration_ms: 0.6446
+  type: 'test'
+  ...
+# Subtest: OnlineCpuTradeFinder.jsx uses the bounded CPU year hint instead of 2026-only disable
+ok 2 - OnlineCpuTradeFinder.jsx uses the bounded CPU year hint instead of 2026-only disable
+  ---
+  duration_ms: 1.6364
+  type: 'test'
+  ...
+# Subtest: OnlineCpuTradeRoom.jsx uses the bounded CPU year hint instead of 2026-only disable
+ok 3 - OnlineCpuTradeRoom.jsx uses the bounded CPU year hint instead of 2026-only disable
+  ---
+  duration_ms: 0.745
+  type: 'test'
+  ...
+# Subtest: frontend never treats a suggestion as accepted and CPU commits remain server-authoritative
+ok 4 - frontend never treats a suggestion as accepted and CPU commits remain server-authoritative
+  ---
+  duration_ms: 1.4704
+  type: 'test'
+  ...
+1..4
+# tests 4
+# suites 0
+# pass 4
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 10.994
+PASS: CPU trade route, original Python evaluator trust boundary, SQL transaction guards, retry behavior, and single-player isolation.
+PASS online Top-N protections: token validation, 210 draft-slot outcomes, duplicate/stale protection checks, SQL and online-only integration
+PASS: online diagonal-only pass installed
+PASS: online asset-trade gateway, original draft-rule provenance, UI and state isolation
+PENDING: PostgreSQL SQL execution, protected/swap picks, pick-only offers, CPU approval, live GM conflicts
+PASS: draft navigation, ownership warning, server auth, and storage isolation
+PASS: authenticated shared draft, rights ownership, GM/CPU controls, and local-state isolation
+PASS: original TeamSelector visual classes and controls, togglable lobby, authentic game SFX, and isolated Supabase mutations
+PASS: Original single-player visual classes and complete ratings table mirrored in Online
+PASS: authoritative revisioned signing retained; browser saves, GameProvider and local simulation isolated
+PASS: Online isolated boot, 4-digit identity, friend operations, 4-seat lobby, team uniqueness, ready states, RLS SQL contract
+PASS: online franchise library, personal archive permissions, 15 frontend imports, and SP isolation
+PASS: two-league listing, GM ownership, per-user archived visibility and archive RPC against mock Supabase
+PASS: Phase 2A host-only transactional launch, read-only shared franchise, team integrity and Online isolation
+PASS: online home locked to one-screen layout and social drawer gets grid background
+PASS: Online home has client-side back navigation, current beta copy and compact layout
+TAP version 13
+# Subtest: host update paths are paired and atomically locked
+ok 1 - host update paths are paired and atomically locked
+  ---
+  duration_ms: 0.7654
+  type: 'test'
+  ...
+# Subtest: transfer requires host nomination and explicit nominee acceptance
+ok 2 - transfer requires host nomination and explicit nominee acceptance
+  ---
+  duration_ms: 0.1132
+  type: 'test'
+  ...
+# Subtest: recovery requires authenticated non-host membership and 48h inactivity
+ok 3 - recovery requires authenticated non-host membership and 48h inactivity
+  ---
+  duration_ms: 0.1401
+  type: 'test'
+  ...
+# Subtest: recovery requires quorum, self vote and bound 24-hour epoch
+ok 4 - recovery requires quorum, self vote and bound 24-hour epoch
+  ---
+  duration_ms: 0.1008
+  type: 'test'
+  ...
+# Subtest: host activity cancels pending recovery and does not run on idle timer
+ok 5 - host activity cancels pending recovery and does not run on idle timer
+  ---
+  duration_ms: 0.1487
+  type: 'test'
+  ...
+# Subtest: no browser DML grants on governance tables
+ok 6 - no browser DML grants on governance tables
+  ---
+  duration_ms: 0.1007
+  type: 'test'
+  ...
+# Subtest: all authority changes are audited without roster or runtime mutation
+ok 7 - all authority changes are audited without roster or runtime mutation
+  ---
+  duration_ms: 0.146
+  type: 'test'
+  ...
+# Subtest: UI integrates commissioner controls and polls host changes independently of roster revision
+ok 8 - UI integrates commissioner controls and polls host changes independently of roster revision
+  ---
+  duration_ms: 0.1022
+  type: 'test'
+  ...
+# Subtest: read-only precheck and postcheck cover database safety
+ok 9 - read-only precheck and postcheck cover database safety
+  ---
+  duration_ms: 0.2723
+  type: 'test'
+  ...
+1..9
+# tests 9
+# suites 0
+# pass 9
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 10.438
+PASS: human-GM finder matches, both-team salary checks, roster/eligibility cases, route-prefill isolation, idempotency
+PENDING: live SQL and GM-to-GM browser acceptance; CPU Trade Finder parity is NOT established
+PASS: Human-GM offer/accept transaction boundaries, readonly isolation, original first-stage SQL authorization, salary parity overlay and live-journal integration.
+NOTE: This is not full trade-engine parity, and live SQL + two-account tests remain required.
+PASS: no extra lobby header, code/copy in side panel, full-viewport selector, Supabase and collapse preserved
+PASS: Online lobby discovery/resume/close, button states, single-player isolation
+PASS 2026 opening season maintains legacy preview eligibility
+PASS 2027-28 remains eligible after the first verified rollover
+PASS 2028-29 eligible after two completed championships
+PASS 2029-30 and subsequent years stay locked
+PASS missing or inconsistent 2028 rollover history is rejected
+PASS stale schedule and fake rollover status are rejected
+PASS offseason and in-progress markets cannot use regular-season signing preview
+PASS financial year, baseline and inflation mismatches are rejected
+PASS 2028 payroll cap and player minimums use original inflation-aware financial engine
+PASS migration is an explicit 4-function guarded transaction, no table mutations
+PASS contracts, transactions and dead-cap protections remain in the SQL
+PASS 2026 and 2027 SQL branches preserved and 2028-29 bounded
+PASS UI uses a verified season gate and does not silently fall back to first-year cap
+13/13 G1 targeted checks passed (static and pure-function tests only)
+PASS migration starts and ends as one transaction
+PASS exact 3 legacy RPCs retained and protected
+PASS original 2026 financial and dead cap checks carried over
+PASS 2027 requires actual rollover and verified financial inputs
+PASS post-rollover salary preview uses stored league finances
+PASS inflation-aware salary limits match original free-agency formulas
+6/6 F2 source and financial-rule checks passed (not a live SQL test).
+TAP version 13
+# Subtest: all sidebar destinations have explicit online availability
+ok 1 - all sidebar destinations have explicit online availability
+  ---
+  duration_ms: 1.0589
+  type: 'test'
+  ...
+# Subtest: pending routes cannot be clicked as available Link items
+ok 2 - pending routes cannot be clicked as available Link items
+  ---
+  duration_ms: 0.1989
+  type: 'test'
+  ...
+# Subtest: direct deep links remain recoverable and do not open single-player
+ok 3 - direct deep links remain recoverable and do not open single-player
+  ---
+  duration_ms: 0.1617
+  type: 'test'
+  ...
+# Subtest: online-only styling has small-screen and screen reader treatment
+ok 4 - online-only styling has small-screen and screen reader treatment
+  ---
+  duration_ms: 0.1111
+  type: 'test'
+  ...
+1..4
+# tests 4
+# suites 0
+# pass 4
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 8.468
+PASS online offseason market UI + API + server parity and isolation
+PASS: C2 market resolution, human RFA/signing decisions, isolated single-player presentation
+PASS: original options engine, team-scoped decisions, host finalization, online isolation and SQL guards
+PASS online paired first-round swaps: token/security guards, stale offers, 1740 original-draft-resolver outcomes, finalization, source isolation
+PASS: online playoff host controls, original bracket, series history, server-only results and champion
+PASS: host-only shared playoff bracket, original Python Play-In, no single-player save access
+PASS: online premium styling retained and synthesized audio replaced with authentic game sounds
+PASS online protected rights: 16+ conditional, range, integrity, isolation and migration checks
+PASS: all 43 relative imports resolve across four Online read-only screens; original CSS reused
+PASS: original roster/standings/draft/salary views wired to Online snapshot, mutators locked, no SP save access
+PASS — Online release, dead-cap signing, realtime/reconnect and isolation static contracts
+NOTE — Static checks do not replace Supabase migrations and live two-account testing.
+PASS: online-only retirement integration, host control, immutable draft order, and visual route wiring.
+PASS: Online Bird rights/QO decisions are own-team, revisioned, responsive and server-only
+F3B1 regression: 21/21 PASS
+PASS: online rookie signings, GM/CPU ownership, original contracts and single-player isolation
+PASS: Phase 2C.1 SQL permission structure, runtime initialization, metadata polling, state refresh and isolation
+TAP version 13
+# Subtest: all 29 sidebar destinations either render a dedicated online component or are unavailable
+ok 1 - all 29 sidebar destinations either render a dedicated online component or are unavailable
+  ---
+  duration_ms: 0.6588
+  type: 'test'
+  ...
+# Subtest: unimplemented nine are visibly unavailable and never fallback to single player
+ok 2 - unimplemented nine are visibly unavailable and never fallback to single player
+  ---
+  duration_ms: 0.1677
+  type: 'test'
+  ...
+# Subtest: authoritative read-only context is separate from local GameProvider
+ok 3 - authoritative read-only context is separate from local GameProvider
+  ---
+  duration_ms: 0.1276
+  type: 'test'
+  ...
+# Subtest: full single-player roster-management parity is intentionally NOT yet achieved
+ok 4 - full single-player roster-management parity is intentionally NOT yet achieved
+  ---
+  duration_ms: 0.0873
+  type: 'test'
+  ...
+# Subtest: archived stats and playoffs are NOT full online parity yet
+ok 5 - archived stats and playoffs are NOT full online parity yet
+  ---
+  duration_ms: 0.1783
+  type: 'test'
+  ...
+# Subtest: online routes still use current single-player style and utilities where mirrored
+ok 6 - online routes still use current single-player style and utilities where mirrored
+  ---
+  duration_ms: 2.7978
+  type: 'test'
+  ...
+1..6
+# tests 6
+# suites 0
+# pass 6
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 11.0413
+PASS: online-only Schedule and Playoff Picture routes, no SP data, all imports resolved, model behavior verified
+TAP version 13
+# Subtest: bundled 2026 NBA seed is a valid playable 30-team, 2027 draft starting universe
+ok 1 - bundled 2026 NBA seed is a valid playable 30-team, 2027 draft starting universe
+  ---
+  duration_ms: 14.9703
+  type: 'test'
+  ...
+# Subtest: flat valid custom upload is converted to canonical East/West without a second teams copy
+ok 2 - flat valid custom upload is converted to canonical East/West without a second teams copy
+  ---
+  duration_ms: 33.0333
+  type: 'test'
+  ...
+# Subtest: custom team names are allowed when NBA division/conference structure is provided
+ok 3 - custom team names are allowed when NBA division/conference structure is provided
+  ---
+  duration_ms: 31.7249
+  type: 'test'
+  ...
+# Subtest: reject 30 name-only teams even though the older lobby name-only check accepted them
+ok 4 - reject 30 name-only teams even though the older lobby name-only check accepted them
+  ---
+  duration_ms: 0.5057
+  type: 'test'
+  ...
+# Subtest: reject a team with fewer than eight players
+ok 5 - reject a team with fewer than eight players
+  ---
+  duration_ms: 16.1758
+  type: 'test'
+  ...
+# Subtest: reject duplicate player IDs across teams
+ok 6 - reject duplicate player IDs across teams
+  ---
+  duration_ms: 16.6938
+  type: 'test'
+  ...
+# Subtest: reject duplicate ID between team and free-agent pool
+ok 7 - reject duplicate ID between team and free-agent pool
+  ---
+  duration_ms: 16.6326
+  type: 'test'
+  ...
+# Subtest: reject two identical active player names on one roster
+ok 8 - reject two identical active player names on one roster
+  ---
+  duration_ms: 16.1175
+  type: 'test'
+  ...
+# Subtest: reject invalid player skill vectors
+ok 9 - reject invalid player skill vectors
+  ---
+  duration_ms: 16.535
+  type: 'test'
+  ...
+# Subtest: reject missing salary years for rostered players
+ok 10 - reject missing salary years for rostered players
+  ---
+  duration_ms: 15.4054
+  type: 'test'
+  ...
+# Subtest: reject expired contracts at franchise start
+ok 11 - reject expired contracts at franchise start
+  ---
+  duration_ms: 16.0008
+  type: 'test'
+  ...
+# Subtest: reject invalid salary
+ok 12 - reject invalid salary
+  ---
+  duration_ms: 15.9494
+  type: 'test'
+  ...
+# Subtest: reject missing free-agent array
+ok 13 - reject missing free-agent array
+  ---
+  duration_ms: 15.554
+  type: 'test'
+  ...
+# Subtest: reject missing draft-pick ledger
+ok 14 - reject missing draft-pick ledger
+  ---
+  duration_ms: 17.3272
+  type: 'test'
+  ...
+# Subtest: reject incomplete first-year draft
+ok 15 - reject incomplete first-year draft
+  ---
+  duration_ms: 16.1936
+  type: 'test'
+  ...
+# Subtest: reject ghost draft-pick owners
+ok 16 - reject ghost draft-pick owners
+  ---
+  duration_ms: 14.8508
+  type: 'test'
+  ...
+# Subtest: reject missing NBA season calendar
+ok 17 - reject missing NBA season calendar
+  ---
+  duration_ms: 16.525
+  type: 'test'
+  ...
+# Subtest: reject invalid calendar dates
+ok 18 - reject invalid calendar dates
+  ---
+  duration_ms: 16.9872
+  type: 'test'
+  ...
+# Subtest: reject missing salary-cap financial setup
+ok 19 - reject missing salary-cap financial setup
+  ---
+  duration_ms: 17.6845
+  type: 'test'
+  ...
+# Subtest: reject duplicate pick rights
+ok 20 - reject duplicate pick rights
+  ---
+  duration_ms: 15.3709
+  type: 'test'
+  ...
+# Subtest: reject duplicate team names ignoring case
+ok 21 - reject duplicate team names ignoring case
+  ---
+  duration_ms: 14.762
+  type: 'test'
+  ...
+# Subtest: reject wrong team count
+ok 22 - reject wrong team count
+  ---
+  duration_ms: 16.3331
+  type: 'test'
+  ...
+# Subtest: reject incorrect division assignment
+ok 23 - reject incorrect division assignment
+  ---
+  duration_ms: 15.3349
+  type: 'test'
+  ...
+# Subtest: reject unbalanced divisions
+ok 24 - reject unbalanced divisions
+  ---
+  duration_ms: 16.3396
+  type: 'test'
+  ...
+# Subtest: reject ambiguous flat names with no conference metadata
+ok 25 - reject ambiguous flat names with no conference metadata
+  ---
+  duration_ms: 14.807
+  type: 'test'
+  ...
+# Subtest: reject flat + conference split-brain
+ok 26 - reject flat + conference split-brain
+  ---
+  duration_ms: 16.0409
+  type: 'test'
+  ...
+# Subtest: reject unsupported starting season
+ok 27 - reject unsupported starting season
+  ---
+  duration_ms: 15.8179
+  type: 'test'
+  ...
+# Subtest: read-only view compatibility normalizes a valid legacy flat league without mutating the input
+ok 28 - read-only view compatibility normalizes a valid legacy flat league without mutating the input
+  ---
+  duration_ms: 14.9352
+  type: 'test'
+  ...
+# Subtest: ambiguous legacy flat layout is left unchanged rather than guessing conference data
+ok 29 - ambiguous legacy flat layout is left unchanged rather than guessing conference data
+  ---
+  duration_ms: 0.1424
+  type: 'test'
+  ...
+# Subtest: upload, launch, and online-only read provider are wired into the validator
+ok 30 - upload, launch, and online-only read provider are wired into the validator
+  ---
+  duration_ms: 2.9952
+  type: 'test'
+  ...
+# Subtest: authoritative SQL blocks invalid INSERT and preserves original RPC body
+ok 31 - authoritative SQL blocks invalid INSERT and preserves original RPC body
+  ---
+  duration_ms: 1.8405
+  type: 'test'
+  ...
+1..31
+# tests 31
+# suites 0
+# pass 31
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 484.9995
+PASS: Team Hub JSX mirrored; single-player provider and browser save reads isolated; Online navigation and GM drawer guarded
+PASS: Online 2C.2A signing RPC wiring, explicit permissions, revision/idempotency/roster/cap guards and import paths
+PASS: Online-only sim-to-date queue, checkpoint gate, replay recovery, no local results or single-player mutation
+PASS: Online Stats and Power Rankings use original UI, isolated shared state, no direct persistent browser writes and fully resolved direct imports
+TAP version 13
+# Subtest: third NBA year opens a bounded 2029-2035 draft pick window and 2029-2034 swaps
+ok 1 - third NBA year opens a bounded 2029-2035 draft pick window and 2029-2034 swaps
+  ---
+  duration_ms: 1.7012
+  type: 'test'
+  ...
+# Subtest: no fake rollover, missing archive or missing outer entitlements can open 2028 trading
+ok 2 - no fake rollover, missing archive or missing outer entitlements can open 2028 trading
+  ---
+  duration_ms: 0.4133
+  type: 'test'
+  ...
+# Subtest: 2026 and validated 2027 pick windows stay unchanged
+ok 3 - 2026 and validated 2027 pick windows stay unchanged
+  ---
+  duration_ms: 0.1146
+  type: 'test'
+  ...
+# Subtest: G2B SQL preserves the draft-right transfer, protection and swap algorithms
+ok 4 - G2B SQL preserves the draft-right transfer, protection and swap algorithms
+  ---
+  duration_ms: 2.3578
+  type: 'test'
+  ...
+1..4
+# tests 4
+# suites 0
+# pass 4
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 11.7026
+PASS: exact Trade Center source parity, isolated online state, safe navigation, human ideas and CPU player negotiations via server bridge
+PASS: host trade-deadline checkpoint, authoritative completion, inbox and CPU lock, protected sim progression
+PASS: Online 2C.2D-3A salary gateway and original single-player matching fixtures (cap room, bands, first apron)
+NOTE: SQL syntax execution and live two-GM tests must happen in Supabase; CPU/pick parity is not included.
+PASS: current/stale offer checks, duplicate ID ownership, draft ownership, subscription, polling recovery, safe SQL publication, no single-player mutations
+TAP version 13
+# Subtest: name index handles both conferences, free agents, and untrusted empty state
+ok 1 - name index handles both conferences, free agents, and untrusted empty state
+  ---
+  duration_ms: 1.5306
+  type: 'test'
+  ...
+# Subtest: other GM cap-room signing shows confirmed team and player
+ok 2 - other GM cap-room signing shows confirmed team and player
+  ---
+  duration_ms: 0.7592
+  type: 'test'
+  ...
+# Subtest: release reports player and keeps debt warning noncommittal
+ok 3 - release reports player and keeps debt warning noncommittal
+  ---
+  duration_ms: 0.2325
+  type: 'test'
+  ...
+# Subtest: human trade identifies both teams and assets in the correct direction
+ok 4 - human trade identifies both teams and assets in the correct direction
+  ---
+  duration_ms: 0.3884
+  type: 'test'
+  ...
+# Subtest: CPU trade has same final-only treatment, no claim of negotiation acceptance
+ok 5 - CPU trade has same final-only treatment, no claim of negotiation acceptance
+  ---
+  duration_ms: 0.2188
+  type: 'test'
+  ...
+# Subtest: human draft selection names rookie and official pick
+ok 6 - human draft selection names rookie and official pick
+  ---
+  duration_ms: 0.1454
+  type: 'test'
+  ...
+# Subtest: CPU draft picks are not misrepresented as actions by other GMs
+ok 7 - CPU draft picks are not misrepresented as actions by other GMs
+  ---
+  duration_ms: 0.1629
+  type: 'test'
+  ...
+# Subtest: own actions do not notify yourself
+ok 8 - own actions do not notify yourself
+  ---
+  duration_ms: 0.1038
+  type: 'test'
+  ...
+# Subtest: offers, declined trades, draft openings and no-op market decisions are not called transactions
+ok 9 - offers, declined trades, draft openings and no-op market decisions are not called transactions
+  ---
+  duration_ms: 0.495
+  type: 'test'
+  ...
+# Subtest: market completed GM signing uses exact player id only, never pending offer
+ok 10 - market completed GM signing uses exact player id only, never pending offer
+  ---
+  duration_ms: 0.5082
+  type: 'test'
+  ...
+# Subtest: rookie contracts show grounded counts, not invented rookie names
+ok 11 - rookie contracts show grounded counts, not invented rookie names
+  ---
+  duration_ms: 0.3191
+  type: 'test'
+  ...
+# Subtest: cursor ordering, replay suppression, burst cap and latest revision selection
+ok 12 - cursor ordering, replay suppression, burst cap and latest revision selection
+  ---
+  duration_ms: 1.0838
+  type: 'test'
+  ...
+# Subtest: we do not assert a missing player name or crash on malformed event
+ok 13 - we do not assert a missing player name or crash on malformed event
+  ---
+  duration_ms: 0.1016
+  type: 'test'
+  ...
+# Subtest: UI is mounted inside online franchise, has a working X, limit and nonblocking poll recovery
+ok 14 - UI is mounted inside online franchise, has a working X, limit and nonblocking poll recovery
+  ---
+  duration_ms: 2.1113
+  type: 'test'
+  ...
+1..14
+# tests 14
+# suites 0
+# pass 14
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 17.5338
+PASS Online veteran extensions: original Python engine, GM-only offers, host CPU closure, calendar block, server auth, revisioned SQL and isolated UI

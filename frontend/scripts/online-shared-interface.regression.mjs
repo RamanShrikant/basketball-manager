@@ -22,7 +22,7 @@ assert(sidebar.includes('TeamHubSidebar.module.css'),'same original sidebar styl
 assert(sidebar.includes('OnlineBmIcons.jsx'),'same sidebar SVG icons');
 assert(sidebar.includes('encodeURIComponent(path)'),'sidebar navigation stays online');
 assert(franchise.includes('<OnlineTeamHubMirror/>'),'uses actual TeamHub mirror');
-assert(franchise.includes('franchiseForLobby(id)'),'Supabase remains the source of truth');
+assert(franchise.includes('readOnlineRuntime(id)') && franchise.includes('initializeOnlineRuntime(id)'),'Supabase runtime remains the source of truth');
 assert(franchise.includes('OnlineGmPanel'),'player panel present');
 assert(app.includes('on-root-franchise'),'franchise full screen');
 assert(css.includes('Phase 2B UI: same single-player Team Hub dashboard'),'Online-only CSS present');

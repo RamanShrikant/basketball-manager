@@ -1,12 +1,14 @@
 import React, {createContext, useContext, useMemo} from "react";
 import {useNavigate, useParams} from "react-router-dom";
+import {normalizeOnlineTeamLayout} from "./onlineSeedIntegrity.mjs";
 
 // Separate from GameContext: does not mount GameProvider, hydrate IndexedDB,
 // set selectedTeam, or run any local/cloud league autosave effects.
 const OnlineReadOnlyContext = createContext(null);
 
-export function OnlineReadOnlyProvider({seed, selectedTeam, children}) {
-  const value = useMemo(() => Object.freeze({leagueData: seed, selectedTeam}), [seed, selectedTeam]);
+export function OnlineReadOnlyProvider({seed, selectedTeam, revision=null, lobbyId=null, onAccepted=null, isHost=false, humanTeamNames=[], calendarSetup=null, retryCalendarSetup=null, children}) {
+  // Display-only fallback for an older flat-format league. No runtime writes.
+  const value = useMemo(() => Object.freeze({leagueData: normalizeOnlineTeamLayout(seed), selectedTeam, revision, lobbyId, onAccepted, isHost, humanTeamNames, calendarSetup, retryCalendarSetup}), [seed, selectedTeam, revision, lobbyId, onAccepted, isHost, humanTeamNames, calendarSetup, retryCalendarSetup]);
   return <OnlineReadOnlyContext.Provider value={value}>{children}</OnlineReadOnlyContext.Provider>;
 }
 

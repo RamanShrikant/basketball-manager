@@ -50,6 +50,9 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // Local development only: forward authenticated multiplayer requests to
+    // the separate trusted backend. This does not expose a service-role key.
+    proxy: {'/api/online': {target:'http://127.0.0.1:5000',changeOrigin:true}},
   },
   // Trade Finder worker imports app modules, so production builds need ES module workers.
   // Rollup/Vite's default iife worker format cannot code-split that worker graph.

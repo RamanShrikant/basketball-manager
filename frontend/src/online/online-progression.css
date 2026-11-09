@@ -1,0 +1,34 @@
+/* Online-only progression. Reuses the existing dark Samsara/BM season shell. */
+.bmOnlineProgression{min-width:0}
+.bmOnlineProgressionReady{flex:1;align-items:center}
+.bmOnlineProgressionReady span{display:block;color:#f0b886;font-size:11px;margin-top:10px}
+.bmOnlineProgressionScroll{display:flex;flex-direction:column;gap:13px;padding-bottom:10px}
+.bmOnlineProgressionSummary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.bmOnlineProgressionSummary>div{min-width:0;display:flex;flex-direction:column;gap:6px;border:1px solid #353535;background:linear-gradient(140deg,#1b1b1b,#111);padding:14px 16px;border-radius:12px}
+.bmOnlineProgressionSummary small{font-size:9px;font-weight:900;letter-spacing:.12em;color:#b0a39b}
+.bmOnlineProgressionSummary strong{font-size:clamp(22px,2.3vw,34px);font-weight:950;letter-spacing:-.04em;color:#f4f1ee;font-variant-numeric:tabular-nums;line-height:1}
+.bmOnlineProgressionSummary span{font-size:10px;color:#918b86;line-height:1.3}
+.bmOnlineProgression .positive{color:#7bd7a2!important}.bmOnlineProgression .negative{color:#ee9b90!important}.bmOnlineProgression .neutral{color:#b7b7b7!important}
+.bmOnlineProgressionBoard{border:1px solid #35302d;border-radius:13px;overflow:hidden;background:#111}
+.bmOnlineProgressionToolbar{display:flex;align-items:center;gap:16px;justify-content:space-between;flex-wrap:wrap;padding:15px 17px;background:#1a1817;border-bottom:1px solid #38302c}
+.bmOnlineProgressionToolbar small{font-size:9px;font-weight:900;letter-spacing:.11em;color:#e4a67b}
+.bmOnlineProgressionToolbar h2{font-size:18px;color:#eee;margin:4px 0 0;font-weight:900}
+.bmOnlineProgressionFilters{display:flex;align-items:end;gap:9px;flex-wrap:wrap}
+.bmOnlineProgressionFilters label{font-size:10px;font-weight:700;color:#b7aea7;display:grid;gap:5px}
+.bmOnlineProgressionFilters input,.bmOnlineProgressionFilters select{background:#151515;border:1px solid #4a403b;color:#eee;border-radius:7px;padding:8px;font:inherit;font-size:11px;min-height:34px;max-width:190px;outline-offset:2px;color-scheme:dark}
+.bmOnlineProgressionRows{overflow-x:auto;min-width:0}
+.bmOnlineProgressionRow{display:grid;grid-template-columns:minmax(160px,2fr) repeat(4,minmax(80px,1fr));align-items:center;gap:10px;padding:11px 17px;border-bottom:1px solid #272727;color:#d2d2d2;font-size:12px;font-variant-numeric:tabular-nums;min-width:630px}
+.bmOnlineProgressionRow:nth-child(2n+1):not(.bmOnlineProgressionRowHead){background:#151414}
+.bmOnlineProgressionRowHead{background:#211c19;color:#af9f95;font-size:9px;letter-spacing:.1em;font-weight:900;padding-top:10px;padding-bottom:10px}
+.bmOnlineProgressionRow>span:not(:first-child){text-align:center;font-weight:800}
+.bmOnlineProgressionName{min-width:0;display:flex;flex-direction:column;gap:3px}
+.bmOnlineProgressionName strong{font-weight:850;color:#eee;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bmOnlineProgressionName small{font-size:10px;color:#968a80;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bmOnlineProgressionArrow{padding:0 5px;font-weight:600;color:#796e66}
+.bmOnlineProgressionCount{padding:12px 17px;font-size:10px;color:#a69b95}
+.bmOnlineProgressionEmpty{padding:18px;color:#aaa;font-size:12px}
+.bmOnlineProgressionNext{display:flex;gap:8px 15px;align-items:center;flex-wrap:wrap;border:1px solid #4b392c;border-radius:9px;padding:12px 15px;background:#1c1511;font-size:11px;color:#bfa796}
+.bmOnlineProgressionNext strong{color:#f1bf9b;font-size:12px}
+.bmOnlineProgressionNotice{margin:0;font-size:11px;color:#9bd9b1;border:1px solid #355a43;padding:9px 12px;border-radius:8px;background:#122419}
+@media(max-width:1100px){.bmOnlineProgressionSummary{grid-template-columns:repeat(2,minmax(0,1fr))}.bmOnlineProgressionToolbar{align-items:stretch}.bmOnlineProgressionFilters{width:100%}.bmOnlineProgressionFilters label{flex:1 1 115px}.bmOnlineProgressionFilters input,.bmOnlineProgressionFilters select{width:100%;max-width:none}}
+@media(max-width:600px){.bmOnlineProgressionSummary{gap:6px}.bmOnlineProgressionSummary>div{padding:11px}.bmOnlineProgressionRow{padding:9px 12px}}

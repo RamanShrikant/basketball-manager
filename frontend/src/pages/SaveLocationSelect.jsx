@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { Link } from "react-router-dom";
 import { activeBrowserAccountId, getAccountSaveMode, requestAccountSaveMode } from "../auth/accountLocalVault.js";
-import { checkpointActiveLeagueSave, getActiveLeagueSaveId } from "../storage/leagueSaves.js";
+import { checkpointActiveLeagueSave, getActiveLeagueSaveId, listLeagueSaves } from "../storage/leagueSaves.js";
 import { flushAllLeagueRuntimeWrites } from "../storage/saveManager.js";
 import { uploadCloudSave, notifyCloudSaveStatus } from "../auth/cloudSaveClient.js";
 import { useGame } from "../context/GameContext.jsx";
@@ -20,7 +20,21 @@ export default function SaveLocationSelect({ user }) {
       // Save and drain the CURRENT world before switching; next boot swaps stores
       // before the game's modules initialize. No gameplay storage is shared.
       if (getActiveLeagueSaveId() && leagueData) {
-        await checkpointActiveLeagueSave({ leagueData, selectedTeamName: selectedTeam?.name || "", source: "SaveLocationSelect.changeMode" });
+        const result = await checkpointActiveLeagueSave({ leagueData, selectedTeamName: selectedTeam?.name || "", source: "SaveLocationSelect.changeMode" });
+        if (!result) throw new Error("The active save is unlinked. Open that franchise and use its recovery screen before switching modes.");
+      } else if (!getActiveLeagueSaveId() && leagueData) {
+        // Following a successful Save & Exit, the active ID is intentionally
+        // cleared but the last game may remain cached in GameContext. Only
+        // switch if that cache belongs to a persistently saved franchise.
+        const identity = String(leagueData?.__leagueStorageId || "").trim();
+        const hasTeams = Boolean((Array.isArray(leagueData?.teams) && leagueData.teams.length) ||
+          (leagueData?.conferences && Object.values(leagueData.conferences).flat().length));
+        if (hasTeams) {
+          const saved = await listLeagueSaves();
+          const matched = identity && saved.some(row =>
+            String(row?.snapshot?.leagueData?.__leagueStorageId || "").trim() === identity);
+          if (!matched) throw new Error("An unslotted live franchise is still in memory. Export or recover it before switching save locations.");
+        }
       }
       await flushAllLeagueRuntimeWrites();
       if (mode !== active && active === "cloud") {
@@ -64,7 +78,9 @@ export default function SaveLocationSelect({ user }) {
           <span className="mt-7 text-sm font-black text-orange-200">Open Cloud →</span>
         </button>
       </div>
-      {error && <p role="alert" className="mt-5 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm font-semibold text-red-200">{error}</p>}
+      {error && <p role="alert" className="mt-5 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm font-semibold text-red-200">
+        {error} {/unslotted|unlinked/i.test(error) && <Link to="/team-hub" className="ml-2 underline">Open franchise recovery →</Link>}
+      </p>}
       <p className="mt-6 text-xs text-white/35">Existing browser franchises remain in Local. Older account-wide cloud backups are retained for recovery and are not automatically imported into the new single-slot cloud system.</p>
     </section>
   </main>;

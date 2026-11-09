@@ -1,5 +1,5 @@
 import React,{useCallback,useEffect,useState} from "react";
-import {useNavigate} from "react-router-dom";
+import {Link,useNavigate} from "react-router-dom";
 import {defaultTeams,uploadCustomRoster,inbox,hostedLobby,profilesFor,rpc,watchTables} from "./onlineApi.js";
 import FriendsPanel from "./FriendsPanel.jsx";
 import {newestSharedFranchise} from "./onlineFranchiseApi.js";
@@ -21,7 +21,7 @@ export default function OnlineHome({user,onlineProfile,setOnlineProfile}){
  });}
  async function join(){await run(async()=>{const id=await rpc("bm_join_online_lobby",{p_code:code.trim().toUpperCase()});navigate(`/online/lobby/${id}`);});}
  async function closeExisting(){if(!activeLobby||!window.confirm("Close your current lobby for everyone?"))return;await run(()=>rpc("bm_leave_online_lobby",{p_lobby:activeLobby.id}));}
- return <main className="on-page on-online-home"><div className="on-hero"><div className="on-home-topline"><button type="button" className="on-back-link" onClick={()=>navigate("/game-modes")}>← Back to Game Modes</button><div className="on-library-home-actions"><button type="button" className="on-secondary" onClick={()=>navigate("/online/library")}>My Leagues</button><button className="on-social-trigger" onClick={()=>setFriendsOpen(true)}>👤 Friends & Profile <span>#{onlineProfile.player_tag}</span></button></div></div><p className="on-kicker">BASKETBALL MANAGER • ONLINE BETA</p><div className="on-hero-main"><h1>Your Online Franchise</h1><p className="on-sub">Host a private NBA universe, invite friends, and prepare to control rival teams together.</p></div></div>
+ return <main className="on-page on-online-home"><div className="on-hero"><div className="on-home-topline"><Link to="/game-modes" className="on-back-link">← Back to Game Modes</Link><div className="on-library-home-actions"><button type="button" className="on-secondary" onClick={()=>navigate("/online/library")}>My Leagues</button><button className="on-social-trigger" onClick={()=>setFriendsOpen(true)}>👤 Friends & Profile <span>#{onlineProfile.player_tag}</span></button></div></div><p className="on-kicker">BASKETBALL MANAGER • ONLINE BETA</p><div className="on-hero-main"><h1>Your Online Franchise</h1><p className="on-sub">Host a private NBA universe, invite friends, and prepare to control rival teams together.</p></div></div>
   {error&&<p className="on-error" role="alert">{error}</p>}
   {sharedFranchise&&<section className="on-existing-lobby" aria-label="Resume your shared NBA league">
     <div><p className="on-kicker">ONLINE FRANCHISE LIBRARY</p><h2>Manage your saved shared leagues</h2>
@@ -47,7 +47,7 @@ export default function OnlineHome({user,onlineProfile,setOnlineProfile}){
     {invites.invites.map(x=><div className="on-invite" key={x.id}><div><b>{invites.people[x.sender_id]?.display_name||"Friend"} invited you</b><small>{x.message||"Join their private franchise lobby"}</small></div><div className="on-inline"><button className="on-small on-accent" disabled={busy} onClick={()=>run(async()=>{const id=await rpc("bm_answer_online_lobby_invite",{p_invite:x.id,p_accept:true});navigate(`/online/lobby/${id}`);})}>Join</button><button className="on-small" disabled={busy} onClick={()=>run(()=>rpc("bm_answer_online_lobby_invite",{p_invite:x.id,p_accept:false}))}>Decline</button></div></div>)}
    </div>
   </section></div>
-  <div className="on-info on-home-note"><b>Waiting-room beta</b><p>The host can now create a persistent shared NBA league when everyone is ready. The shared Team Hub is read-only in this phase; simulation, trades and free agency remain locked.</p></div>
+  <div className="on-info on-home-note"><b>Online franchise beta</b><p>Host or join a shared NBA league, select your teams, and manage the season together. Simulation, trades, and free agency are available in started leagues when their season phase permits.</p></div>
   {friendsOpen&&<FriendsPanel user={user} onlineProfile={onlineProfile} onClose={()=>setFriendsOpen(false)} onProfileChange={setOnlineProfile}/>}
  </main>;
 }

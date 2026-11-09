@@ -1,0 +1,116 @@
+.trade-context-modal-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(249, 115, 22, 0.82) rgba(18, 18, 18, 0.35);
+}
+
+.trade-context-modal-scroll::-webkit-scrollbar {
+  width: 7px;
+}
+
+.trade-context-modal-scroll::-webkit-scrollbar-track {
+  background: rgba(18, 18, 18, 0.35);
+  border-radius: 999px;
+}
+
+.trade-context-modal-scroll::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(251, 146, 60, 0.9), rgba(234, 88, 12, 0.9));
+  border: 1px solid rgba(18, 18, 18, 0.8);
+  border-radius: 999px;
+}
+
+.trade-context-modal-scroll::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, #fb923c, #f97316);
+}
+
+/* Position-detail player rows: portrait/rating visuals stay clean and minimal. */
+.trade-context-player-row {
+  min-height: 72px;
+  overflow: visible;
+}
+
+
+/* Fixed visual viewport: text tuning never changes modal/row geometry. */
+.trade-context-player-copy {
+  position: relative;
+  height: 58px;
+  overflow: hidden;
+  line-height: 1.15;
+}
+
+.trade-context-player-name {
+  position: absolute;
+  left: 0;
+  top: 20px;
+  max-width: 100%;
+  white-space: nowrap;
+}
+
+.trade-context-player-age {
+  position: absolute;
+  left: 0;
+  top: 39px;
+  max-width: 100%;
+  white-space: nowrap;
+}
+
+/* Never create a horizontal scrollbar from visual-only transforms. */
+.trade-context-modal-scroll {
+  overflow-x: hidden;
+}
+
+/* TRADE CENTER PLAYER SEARCH — visuals only. Original result height is
+   preserved (40px portrait + 8px vertical padding on each side). */
+.trade-search-player-row {
+  position: relative;
+  isolation: isolate;
+  min-height: 56px;
+  overflow: hidden;
+}
+.trade-search-player-row > :not(.trade-search-team-logo-bg) { position: relative; z-index: 1; }
+.trade-search-team-logo-bg {
+  position: absolute;
+  inset: 0 12px 0 auto;
+  z-index: 0;
+  width: 86px;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+.trade-search-team-logo-bg img {
+  width: 80px;
+  height: 70px;
+  object-fit: contain;
+  opacity: .13;
+  filter: saturate(.9);
+}
+.trade-search-headshot {
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.trade-search-headshot img { display: block; }
+.trade-search-player-copy { display: flex; flex-direction: column; gap: 1px; }
+.trade-search-player-name { line-height: 1.1; }
+.trade-search-player-meta { line-height: 1.15; }
+.trade-search-contract-annual {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  white-space: nowrap;
+  scrollbar-width: none;
+  font-size: 9px;
+  font-weight: 650;
+  color: #c3a58a;
+  line-height: 1.2;
+}
+.trade-search-contract-annual::-webkit-scrollbar { display: none; }
+.trade-search-rating-shell {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+}
+.trade-search-rating { transform: scale(.82); transform-origin: center; }

@@ -105,7 +105,16 @@ export default function AccountRoot({ children, onInitialize }) {
       }
     };
     window.addEventListener("storage", onStorage);
-    return () => { cancelled = true; window.removeEventListener("storage", onStorage); };
+    // A sign-out or account switch in Online/another tab must not leave the
+    // old single-player league running with a stale authenticated user.
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      const activeId = activeUserIdRef.current;
+      if (!activeId) return;
+      if (event === "SIGNED_OUT" || (session?.user?.id && session.user.id !== activeId)) {
+        window.location.replace("/game-modes");
+      }
+    });
+    return () => { cancelled = true; window.removeEventListener("storage", onStorage); subscription.unsubscribe(); };
   }, [continueAs]);
 
   async function submit(event) {

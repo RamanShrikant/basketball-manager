@@ -53,6 +53,7 @@ import PastChampions from "./pages/PastChampions.jsx";
 import GlobalGameNav from "./components/GlobalGameNav.jsx";
 import SeasonBriefingHost from "./components/SeasonBriefingHost.jsx";
 import PageFade from "./components/PageFade.jsx";
+import FranchiseRouteGate from "./navigation/FranchiseRouteGate.jsx";
 import PersistentGameShell from "./components/PersistentGameShell.jsx";
 import "./components/PageFade.css";
 
@@ -113,6 +114,7 @@ function App({ user }) {
 
           {/* ✅ Standalone full-screen routes */}
           <Route path="/play" element={<Play />} />
+          <Route element={<FranchiseRouteGate />}>
           <Route path="/team-selector" element={<TeamSelector />} />
           <Route path="/team-hub" element={<TeamHub />} />
           <Route path="/roster-view" element={<RosterView />} />
@@ -153,6 +155,8 @@ function App({ user }) {
           <Route path="/player-team-options" element={<PlayerTeamOptions />} />
           <Route path="/player-retirements" element={<PlayerRetirements />} />
           <Route path="/viewing-offers" element={<ViewingOffers />} />
+          </Route>
+          <Route path="*" element={<Navigate to="/game-modes" replace />} />
         </Routes>
         </RoutePageFade>
       </PersistentGameShell>

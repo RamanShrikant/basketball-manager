@@ -7,6 +7,7 @@ import { checkpointActiveLeagueSave, clearActiveLeagueSaveId } from "../storage/
 import { flushAllLeagueRuntimeWrites } from "../storage/saveManager.js";
 import { activeBrowserAccountId, getAccountSaveMode } from "../auth/accountLocalVault.js";
 import { uploadCloudSave, notifyCloudSaveStatus } from "../auth/cloudSaveClient.js";
+import { saveFranchiseForExit, recoverUnlinkedFranchise, exportEmergencyFranchise, exitToLeagueSlots } from "../navigation/franchiseExit.js";
 import {
   isAllStarsAvailable,
   readOffseasonState as readAllStarsOffseasonState,
@@ -102,7 +103,6 @@ const ACTIVE_ROUTE_ALIASES = {
   "/league-history": "Transaction History",
   "/award-history": "Award History",
   "/past-champions": "Past Champions",
-  "/league-editor": "Save & Exit",
   "/settings": "Settings",
 };
 
@@ -292,6 +292,9 @@ export default function TeamHubSidebar() {
   const [exitError, setExitError] = useState("");
   const [exitCloudWarning, setExitCloudWarning] = useState("");
   const [exitStage, setExitStage] = useState("");
+  const [exitNeedsRecovery, setExitNeedsRecovery] = useState(false);
+  const [emergencyExported, setEmergencyExported] = useState(false);
+  const [unsafeExitAcknowledged, setUnsafeExitAcknowledged] = useState(false);
 
   const offseasonState = safeJSON(localStorage.getItem(OFFSEASON_STATE_KEY), {});
   const postseasonState = safeJSON(localStorage.getItem(POSTSEASON_KEY), null);
@@ -446,7 +449,7 @@ export default function TeamHubSidebar() {
           {
             name: "Save & Exit",
             sidebarLabel: "Save & Exit",
-            path: "/league-editor",
+            path: "/play",
             enabled: true,
             sectionKey: null,
             icon: "edit",
@@ -534,17 +537,17 @@ export default function TeamHubSidebar() {
     }));
   };
 
-  // Leaving the current franchise is NOT allowed to clear its active save ID
-  // until the local checkpoint is complete and the cloud attempt has settled.
+  // Never leave a franchise before its persistent slot is verified. All exit
+  // paths end at Play save slots, not the League Editor.
   const finishSaveAndExit = () => {
-    clearTradeBuilderResumeWhenLeaving(location.pathname, "/league-editor");
+    clearTradeBuilderResumeWhenLeaving(location.pathname, "/play");
     writeTeamHubReturnContext(null);
     clearActiveLeagueSaveId();
     setExitConfirmOpen(false);
     setExitCloudWarning("");
     setExitError("");
     setExitStage("");
-    navigate("/league-editor");
+    exitToLeagueSlots();
   };
 
   const confirmSaveAndExit = async () => {
@@ -552,49 +555,60 @@ export default function TeamHubSidebar() {
     setExitBusy(true);
     setExitError("");
     setExitCloudWarning("");
+    setExitNeedsRecovery(false);
     setExitStage("local");
     try {
-      // Never publish a partial calendar/playoff simulation as a completed save.
-      const calendarIntent = JSON.parse(localStorage.getItem("bm_pending_calendar_sim_v1") || "null");
-      const playoffIntent = JSON.parse(localStorage.getItem("bm_pending_postseason_sim_v1") || "null");
-      if ((calendarIntent && !calendarIntent.pausedReason) || (playoffIntent && !playoffIntent.pausedReason)) {
-        throw new Error("Finish or safely pause the current simulation before saving and exiting.");
-      }
-      const saved = await checkpointActiveLeagueSave({
+      const result = await saveFranchiseForExit({
         leagueData,
         selectedTeamName: selectedTeam?.name || "",
-        source: "TeamHubSidebar.saveAndExit",
         savedRoute: location.pathname,
+        onStage: setExitStage,
       });
-      if (!saved) throw new Error("No active league save slot is available.");
-      // Several gameplay sidecars write asynchronously; include their final state.
-      await flushAllLeagueRuntimeWrites();
-
-      const accountId = activeBrowserAccountId();
-      if (accountId && getAccountSaveMode(accountId) === "cloud") {
-        setExitStage("cloud");
-        notifyCloudSaveStatus("saving", "Backing up franchise before exit…");
-        try {
-          // Force a final checkpoint even if a debounced autosync is in flight.
-          // The cloud client serializes uploads and rejects stale-device overwrites.
-          await uploadCloudSave(accountId, { force: true });
-          notifyCloudSaveStatus("saved", "Cloud saved before exiting league");
-        } catch (cloudError) {
-          const detail = cloudError?.message || String(cloudError);
-          notifyCloudSaveStatus("error", detail);
-          console.warn("[TeamHubSidebar] Cloud backup failed; local franchise is saved:", cloudError);
-          setExitCloudWarning(detail);
-          return; // Keep the user here until they retry or explicitly exit locally.
-        }
+      if (result.status === "empty") {
+        finishSaveAndExit();
+        return;
+      }
+      if (result.status === "unlinked") {
+        setExitNeedsRecovery(true);
+        setExitError(result.reason);
+        return;
+      }
+      if (result.status === "cloud-failed") {
+        setExitCloudWarning(result.reason);
+        return; // Explicit local-only exit or a retry required.
       }
       finishSaveAndExit();
     } catch (error) {
-      console.warn("[TeamHubSidebar] Save & Exit local checkpoint failed.", error);
-      setExitError(error?.message || "The league could not be saved. Your game is still open.");
-    } finally {
-      setExitStage("");
-      setExitBusy(false);
-    }
+      console.warn("[TeamHubSidebar] Save & Exit failed; staying in franchise", error);
+      setExitError(error?.message || "Save failed. Your current game is still open.");
+      setExitNeedsRecovery(true); // Offer safe export if the local write failed.
+    } finally { setExitStage(""); setExitBusy(false); }
+  };
+
+  const recoverAndExit = async () => {
+    if (exitBusy) return;
+    setExitBusy(true); setExitError("");
+    try {
+      const result = await recoverUnlinkedFranchise({
+        leagueData, selectedTeamName: selectedTeam?.name || "",
+        savedRoute: location.pathname, onStage: setExitStage,
+      });
+      if (result.status === "cloud-failed") {
+        setExitNeedsRecovery(false); // The recovered local slot now exists.
+        setExitCloudWarning(result.reason);
+      } else finishSaveAndExit();
+    } catch (error) { setExitError(error?.message || "Could not recover into a new slot."); }
+    finally { setExitBusy(false); setExitStage(""); }
+  };
+
+  const exportAndStay = async () => {
+    if (exitBusy) return;
+    setExitBusy(true); setExitError("");
+    try {
+      await exportEmergencyFranchise({ leagueData, selectedTeamName: selectedTeam?.name || "" });
+      setEmergencyExported(true);
+    } catch (error) { setExitError(error?.message || "Emergency export failed."); }
+    finally { setExitBusy(false); }
   };
 
   return (
@@ -670,6 +684,7 @@ export default function TeamHubSidebar() {
       <div className={styles.exitModalBackdrop} role="presentation" onMouseDown={() => !exitBusy && setExitConfirmOpen(false)}>
         <section
           className={styles.exitModal}
+          style={{ maxHeight: "92dvh", overflowY: "auto" }}
           role="dialog"
           aria-modal="true"
           aria-labelledby="save-exit-title"
@@ -677,7 +692,9 @@ export default function TeamHubSidebar() {
         >
           <p className={styles.exitModalKicker}>Save & Exit</p>
           <h2 id="save-exit-title">Exit this league?</h2>
-          <p>Your current league will be saved locally and backed up to your account cloud before exiting.</p>
+          <p>{getAccountSaveMode(activeBrowserAccountId()) === "cloud"
+            ? "Your league will be saved to this device first, then backed up to your account Cloud slot."
+            : "Your league will be saved to its Local slot on this device. It will not be uploaded to the cloud."}</p>
           {exitCloudWarning && (
             <p className={styles.exitModalError}>
               Saved safely on this computer, but cloud backup failed: {exitCloudWarning}.
@@ -685,6 +702,23 @@ export default function TeamHubSidebar() {
             </p>
           )}
           {exitError && <p className={styles.exitModalError}>{exitError}</p>}
+          {exitNeedsRecovery && <div className="mt-3 space-y-2 text-xs text-white/75">
+            <p>To avoid losing your unslotted progress, recover into a NEW empty save slot. Existing saves will not be overwritten. If recovery cannot work, export the current game before leaving.</p>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" className={styles.exitModalPrimary} disabled={exitBusy} onClick={recoverAndExit}>Recover to empty slot &amp; exit</button>
+              <button type="button" className={styles.exitModalSecondary} disabled={exitBusy} onClick={exportAndStay}>Export emergency backup</button>
+            </div>
+            {emergencyExported && <button type="button" className={styles.exitModalSecondary} disabled={exitBusy} onClick={() => {
+              if (window.confirm("The emergency JSON was downloaded, but no new save slot was written. Leave anyway?")) finishSaveAndExit();
+            }}>Leave after emergency export</button>}
+            {!emergencyExported && <div className="mt-2 border-t border-red-500/20 pt-2 text-red-200">
+              <label className="flex items-start gap-2"><input type="checkbox" checked={unsafeExitAcknowledged} onChange={e => setUnsafeExitAcknowledged(e.target.checked)} /> I understand that leaving without a saved slot or backup could permanently lose unsaved progress.</label>
+              <button type="button" className={styles.exitModalSecondary} disabled={exitBusy || !unsafeExitAcknowledged} onClick={() => {
+                if (window.confirm("LAST RESORT: no backup was created. Exit anyway and risk losing current unsaved progress?")) finishSaveAndExit();
+              }}>Exit without saving (last resort)</button>
+            </div>}
+            <p>Emergency JSON includes the runtime but cannot yet be imported automatically.</p>
+          </div>}
           <div className={styles.exitModalActions}>
             <button type="button" className={styles.exitModalSecondary} disabled={exitBusy} onClick={() => { setExitError(""); setExitCloudWarning(""); setExitConfirmOpen(false); }}>
               {exitCloudWarning ? "Stay" : "No, stay here"}

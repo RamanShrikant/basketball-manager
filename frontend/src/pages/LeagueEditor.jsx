@@ -90,11 +90,12 @@ async function clearRuntimeSeasonStores() {
     })();
 
     if (liveLeague && (Array.isArray(liveLeague?.teams) || liveLeague?.conferences)) {
-      await checkpointActiveLeagueSave({
+      const result = await checkpointActiveLeagueSave({
         leagueData: liveLeague,
         selectedTeamName,
         source: "LeagueEditor.beforeImport",
       });
+      if (!result) throw new Error("This franchise is not linked to a valid save slot. Import cancelled to preserve the existing game.");
     } else {
       await flushLeagueSaveSlotWrites();
     }

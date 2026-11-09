@@ -636,6 +636,15 @@
 .bmOnlineGameShell{width:100%;height:100dvh;min-height:0;overflow:hidden;background:#050505;--bm-persistent-sidebar-width:clamp(210px,14.2vw,252px);--bm-online-panel-width:310px}
 .bmOnlineSidebar{z-index:65!important;background:#090909!important;background-image:none!important}
 .bmOnlineSidebar a{text-decoration:none}
+/* G3A4: a non-interactive status, not a broken or deceptively clickable route. */
+.bmOnlineSidebar .bmOnlineNavUnavailable{cursor:default;opacity:.78;color:#8d8178;user-select:none}
+.bmOnlineSidebar .bmOnlineNavUnavailable:hover{background:transparent;color:#8d8178;transform:none}
+.bmOnlineNavLabel{display:flex;align-items:center;justify-content:space-between;gap:5px;min-width:0}
+.bmOnlineNavLabelText{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bmOnlineNavSoon{flex:0 0 auto;padding:3px 5px;border:1px solid #3b332e;border-radius:4px;color:#a79a8e;font-size:9px;font-weight:700;letter-spacing:.01em}
+.bmOnlinePendingHomeLink{margin-left:20px}
+@media (max-width:1180px){.bmOnlineNavSoon{font-size:8px;padding:2px 4px}}
+
 .bmOnlineGameCanvas{margin-left:var(--bm-persistent-sidebar-width);margin-right:var(--bm-online-panel-width);height:100dvh;min-width:0;overflow:hidden;position:relative;background:#050505}
 .bmOnlineGameCanvas .bm-page-fade{height:100%;min-height:0}
 .bmOnlineGmPanel{position:fixed;inset:0 0 0 auto;width:var(--bm-online-panel-width);height:100dvh;z-index:70;overflow-y:auto;color:#efefef;background:#0b0b0c;border-left:1px solid #313135;box-shadow:-8px 0 22px rgba(0,0,0,.28);padding:22px 16px 20px;transform:translateX(100%);transition:transform .2s ease}
@@ -699,3 +708,335 @@
 .on-library-home-actions{display:flex;align-items:center;gap:9px}.on-library-home-actions .on-secondary{font-size:12px}
 @media(max-width:880px){.on-library-list{grid-template-columns:1fr}.on-franchise-library{padding:16px 14px 32px}.on-library-heading{align-items:flex-start;flex-direction:column}.on-library-tally{width:100%;max-width:220px}}
 @media(max-width:560px){.on-library-home-actions{flex-wrap:wrap}.on-library-home-actions .on-secondary,.on-library-home-actions .on-social-trigger{font-size:11px}.on-library-filter{flex-wrap:wrap}}
+
+/* PHASE 2B4B ONLINE COACH AND FREE AGENCY */
+/* PHASE 2B4B Online preview only. Scoped: never changes single-player layout. */
+.bmOnlinePreviewPage{height:100%;min-height:0;display:flex;flex-direction:column;overflow:hidden;padding:12px 15px 0;background:#080808;color:#f6f6f6;font-family:inherit}
+.bmOnlinePreviewHeader{display:grid;grid-template-columns:40px minmax(0,1fr) 40px;align-items:center;gap:12px;flex:none;min-height:52px;margin-bottom:7px}
+.bmOnlinePreviewHeader>button{background:transparent;border:0;color:#eee;cursor:pointer;font-size:17px}
+.bmOnlinePreviewHeader>button:hover{color:#f97316}
+.bmOnlinePreviewHeader>div{display:flex;justify-content:center;align-items:center;gap:10px;min-width:0}
+.bmOnlinePreviewHeader img{width:42px;height:42px;object-fit:contain}
+.bmOnlinePreviewHeader h1{font-size:clamp(17px,1.8vw,25px);font-weight:900;margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bmOnlinePreviewSub{font-size:11px;color:#ffad73;letter-spacing:.025em;margin:0 0 9px;flex:none}
+.bmOnlineCoachHero,.bmOnlineFreeHero{position:relative;display:flex;justify-content:space-between;align-items:center;gap:12px;border:1px solid #373737;background:linear-gradient(105deg,#141414,#0c0c0c);border-radius:13px 13px 0 0;padding:10px 15px;flex:none;min-height:118px;overflow:hidden}
+.bmOnlineCoachPlayer,.bmOnlineFreeHeroPlayer{display:flex;align-items:center;gap:15px;min-width:0}
+.bmOnlineCoachPortrait{width:120px!important;height:110px!important;min-width:100px;flex:none}
+.bmOnlineCoachPlayer h2,.bmOnlineFreeHeroPlayer h2{font-size:clamp(20px,2vw,29px);font-weight:900;margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bmOnlineCoachPlayer p,.bmOnlineFreeHeroPlayer p{font-size:13px;color:#ddd;font-weight:650;margin:4px 0}
+.bmOnlineFreeHeroPlayer span{color:#ffae77;font-size:11px;font-weight:850}
+.bmOnlineCoachHeroRight{display:flex;align-items:center;gap:12px;flex:none}
+.bmOnlineCoachMinutes{text-align:center;border:1px solid #343434;border-radius:9px;padding:10px 14px;min-width:130px}
+.bmOnlineCoachMinutes strong{font-size:21px;color:#ffad69;display:block}.bmOnlineCoachMinutes small{font-size:9px;letter-spacing:.06em;color:#aaa;display:block;margin-top:3px}
+.bmOnlineCoachTable,.bmOnlineFreeTable{flex:1;min-height:0;overflow:auto;border:1px solid #343434;border-top:0;background:rgba(7,7,7,.9);scrollbar-color:#ea580c #111;scrollbar-width:thin}
+.bmOnlineCoachTable table,.bmOnlineFreeTable table{width:100%;border-collapse:collapse;text-align:left;font-size:13px}
+.bmOnlineCoachTable thead th,.bmOnlineFreeTable thead th{position:sticky;top:0;z-index:2;background:#242424;color:#ddd;font-size:11px;letter-spacing:.04em;padding:10px 12px;font-weight:900}
+.bmOnlineCoachTable tbody td,.bmOnlineFreeTable tbody td{padding:9px 12px;border-bottom:1px solid #242424;font-weight:700;white-space:nowrap}
+.bmOnlineCoachTable tbody tr,.bmOnlineFreeTable tbody tr{cursor:pointer}
+.bmOnlineCoachTable tbody tr:hover,.bmOnlineFreeTable tbody tr:hover{background:#242424}
+.bmOnlineCoachTable tbody tr.bmOnlineCoachSelected,.bmOnlineFreeTable tbody tr.bmOnlineCoachSelected{background:#e95c0b;color:#fff}
+.bmOnlineCoachTable tbody tr.bmOnlineCoachSection{background:#1a1a1a;color:#ff9d46;cursor:default}
+.bmOnlineCoachMinutesCell{display:flex;align-items:center;gap:8px;justify-content:flex-end;min-width:125px}
+.bmOnlineCoachTrack{height:5px;width:min(110px,65%);background:#444;border-radius:10px;display:inline-block;overflow:hidden}
+.bmOnlineCoachTrack i{height:100%;display:block;background:#f97316;border-radius:10px}
+.bmOnlinePreviewFooter{min-height:48px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex:none;font-size:10px;color:#aaa;padding:8px 3px}
+.bmOnlinePreviewFooter button{background:#26190f;border:1px solid #70421f;border-radius:9px;color:#bb8357;padding:10px 13px;cursor:not-allowed;white-space:nowrap}
+.bmOnlineFreeTitle{display:flex;align-items:end;justify-content:space-between;gap:15px;min-height:52px;flex:none}
+.bmOnlineFreeTitle h1{font-size:30px;line-height:1;font-weight:900;color:#f97316;margin:0 0 9px}
+.bmOnlineFreeTitle span{font-size:11px;color:#aaa;margin-bottom:9px}
+.bmOnlineFreeStats{display:flex;align-items:center;gap:10px;flex:none;margin-bottom:9px}
+.bmOnlineFreeStats>span{display:flex;flex-direction:column;min-width:100px;padding:9px 13px;border-radius:9px;border:1px solid #333;background:#141414}
+.bmOnlineFreeStats small{font-size:9px;color:#aaa;font-weight:800;letter-spacing:.05em}.bmOnlineFreeStats b{font-size:15px;margin-top:4px;color:#ff9b50}
+.bmOnlineFreeHero{min-height:112px;border-radius:12px 12px 0 0}
+.bmOnlineFreeFilters{display:flex;gap:9px;border-left:1px solid #333;border-right:1px solid #333;padding:8px;background:#121212;flex:none}
+.bmOnlineFreeFilters input,.bmOnlineFreeFilters select{min-width:0;border:1px solid #3b3b3b;background:#090909;color:#f7f7f7;border-radius:7px;padding:9px 11px;font-size:12px}
+.bmOnlineFreeFilters input{flex:1}.bmOnlineFreeFilters select{width:110px}
+.bmOnlineFreeTable th:nth-child(n+3){cursor:pointer}.bmOnlineFreeTable th:nth-child(n+3):hover{color:#fa8337}
+.bmOnlinePreviewEmpty{flex:1;min-height:0;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;padding:32px;border:1px solid #373737;border-radius:12px;background:#101010;color:#ccc}
+.bmOnlinePreviewEmpty h2{color:#fff;font-size:20px;font-weight:850;margin:0 0 8px}.bmOnlinePreviewEmpty p{max-width:500px;color:#aaa;font-size:13px;line-height:1.7}
+@media(max-width:1100px){.bmOnlineCoachPortrait{width:88px!important;min-width:82px;height:95px!important}.bmOnlineCoachMinutes{min-width:100px}.bmOnlineCoachHero{padding:8px}}
+@media(max-width:650px){.bmOnlineCoachHeroRight{gap:3px}.bmOnlineCoachMinutes{display:none}.bmOnlineCoachTable table,.bmOnlineFreeTable table{min-width:620px}.bmOnlineFreeTitle span{display:none}.bmOnlineCoachPlayer h2{white-space:normal;font-size:20px}}
+
+
+/* PHASE 2C1 ONLINE RUNTIME */
+.bmOnlineRuntimeControls{display:flex;flex-direction:column;gap:7px;padding:12px 0;border-top:1px solid #292929}
+.bmOnlineRuntimeControls button{font:inherit;font-size:11px;font-weight:800;text-align:center;padding:10px;border:1px solid #5d391c;background:#1a130f;color:#ffad70;border-radius:9px;cursor:pointer}
+.bmOnlineRuntimeControls button:hover:not(:disabled){border-color:#f97316;color:#fff}
+.bmOnlineRuntimeControls button:disabled{opacity:.55;cursor:not-allowed}
+.bmOnlineRuntimeError{font-size:10px;line-height:1.4;color:#f0b8a8;word-break:break-word}
+
+/* BM Online Free Agency — presentation parity with the real single-player FreeAgents.jsx.
+   Scope only to the Online franchise and never override single-player layout. */
+.bmOnlineReadOnlyScreen:has(.bmOnlineFaRoot) > .bmOnlineReadOnlyNotice {
+  display: none;
+}
+.bmOnlineReadOnlyScreenBody:has(.bmOnlineFaRoot) {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: #0d0d0d;
+}
+.bmOnlineReadOnlyScreenBody:has(.bmOnlineFaRoot) > .bm-page-fade {
+  min-height: 0;
+  height: 100%;
+  flex: 1 1 auto;
+}
+.bmOnlineFaRoot { min-height: 0; }
+.bmOnlineFaRoot .bmTableScroller { overscroll-behavior: contain; }
+
+/* BM_ROSTER_SINGLEPLAYER_SHELL_PARITY_V1
+   The Online roster itself already mirrors the original single-player JSX
+   and CSS module. Only the extra Online wrapper was changing its geometry.
+   Scope this fix to the Online roster view; leave Team Hub/other Online
+   screens and all original single-player files completely untouched. */
+.bmOnlineReadOnlyScreen[data-online-view="/roster-view"] > .bmOnlineReadOnlyNotice {
+  display: none;
+}
+.bmOnlineReadOnlyScreen[data-online-view="/roster-view"] > .bmOnlineReadOnlyScreenBody {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.bmOnlineReadOnlyScreen[data-online-view="/roster-view"] > .bmOnlineReadOnlyScreenBody > .bm-page-fade {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+.bmOnlineReadOnlyScreen[data-online-view="/roster-view"] > .bmOnlineReadOnlyScreenBody > .bm-page-fade > [class*="rosterPage"] {
+  flex: 1 1 auto;
+  height: 100%;
+  min-height: 0;
+}
+
+/* BM_ONLINE_PORTRAIT_ALIGNMENT_V1_START */
+/* ONLINE ONLY: four editable alignment controls, each with X/Y offsets.
+   Tuning: adjust the declarations below in frontend/src/online/online.css.
+   Offsets gently adapt between laptops and widescreen desktop monitors.
+   Single-player components and global headshotLayout.js remain untouched. */
+.bmOnlineReadOnlyScreen {
+  --bm-online-roster-portrait-x: 0px;
+  --bm-online-roster-portrait-y: clamp(3px, 0.30vw, 6px);
+  --bm-online-roster-name-x: calc(-1 * clamp(4px, 0.36vw, 8px));
+  --bm-online-roster-name-y: 0px;
+  --bm-online-fa-portrait-x: 0px;
+  --bm-online-fa-portrait-y: clamp(3px, 0.30vw, 6px);
+  --bm-online-fa-name-x: calc(-1 * clamp(4px, 0.36vw, 8px));
+  --bm-online-fa-name-y: 0px;
+}
+.bmOnlineReadOnlyScreen[data-online-view="/roster-view"] .bmOnlineRosterPortraitOffset {
+  transform: translate3d(var(--bm-online-roster-portrait-x), var(--bm-online-roster-portrait-y), 0) !important;
+}
+.bmOnlineReadOnlyScreen[data-online-view="/roster-view"] .bmOnlineRosterNameOffset {
+  transform: translate3d(var(--bm-online-roster-name-x), var(--bm-online-roster-name-y), 0) !important;
+}
+.bmOnlineReadOnlyScreen .bmOnlineFaRoot .bmOnlineFAPortraitOffset {
+  transform: translate3d(var(--bm-online-fa-portrait-x), var(--bm-online-fa-portrait-y), 0) !important;
+}
+.bmOnlineReadOnlyScreen .bmOnlineFaRoot .bmOnlineFANameOffset {
+  transform: translate3d(var(--bm-online-fa-name-x), var(--bm-online-fa-name-y), 0) !important;
+}
+/* BM_ONLINE_PORTRAIT_ALIGNMENT_V1_END */
+
+
+/* Phase 2C.2D-1: embed the original single-player Trade Center layout
+   inside the Online-only canvas, without setting a global body route. */
+.bmOnlineReadOnlyScreen[data-online-view="/trades"] > .bmOnlineReadOnlyScreenBody {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.bmOnlineReadOnlyScreen[data-online-view="/trades"] > .bmOnlineReadOnlyScreenBody > .bm-page-fade {
+  flex: 1;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+.bmOnlineReadOnlyScreen[data-online-view="/trades"] .bmCourtPage.bm-trade-center-viewport {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100% !important;
+  max-height: 100% !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+}
+.bmOnlineReadOnlyScreen[data-online-view="/trades"] .trade-center-grid {
+  min-height: 0 !important;
+}
+.bmOnlineReadOnlyScreen[data-online-view="/trades"] .trade-center-panel:first-child > div:first-child {
+  overflow: hidden !important;
+}
+@media (max-width: 1050px) {
+  .bmOnlineReadOnlyScreen[data-online-view="/trades"] > .bmOnlineReadOnlyScreenBody {
+    overflow-y: auto;
+  }
+  .bmOnlineReadOnlyScreen[data-online-view="/trades"] .bmCourtPage.bm-trade-center-viewport {
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+  .bmOnlineReadOnlyScreen[data-online-view="/trades"] .trade-center-grid {
+    grid-template-columns: minmax(0, 1fr);
+    overflow: visible;
+  }
+}
+
+/* Phase 2C.2D-2 — Online-only human GM trade room, no single-player CSS changes. */
+.bmOnlineHumanTradeRoom{min-height:100%;max-height:100%;overflow-y:auto;padding:22px;color:#f7f7f7;background:linear-gradient(135deg,#101216,#08090d);font-family:inherit}
+.bmOnlineTradeHeading{display:flex;gap:18px;justify-content:space-between;align-items:center;margin-bottom:16px}
+.bmOnlineTradeHeading small{font-size:10px;letter-spacing:2px;font-weight:900;color:#fb923c}
+.bmOnlineTradeHeading h1{font-size:28px;line-height:1.1;font-weight:900;margin:7px 0}
+.bmOnlineTradeHeading p{font-size:12px;color:#a3a3a3;max-width:640px}
+.bmOnlineTradeHeading button,.bmOnlineTradeOffersTitle button{border:1px solid #525252;border-radius:10px;padding:10px 14px;font-size:12px;font-weight:800;background:#181b22;color:white;flex-shrink:0}
+.bmOnlineTradeGuard{font-size:12px;line-height:1.55;color:#fdba74;background:#25170f;border:1px solid #9a3412;border-radius:10px;padding:12px 14px;margin:12px 0}
+.bmOnlineTradeError,.bmOnlineTradeSuccess{padding:11px 13px;margin:9px 0;border-radius:10px;font-size:12px;font-weight:700}
+.bmOnlineTradeError{color:#fecaca;background:#401617;border:1px solid #b91c1c}
+.bmOnlineTradeSuccess{color:#bbf7d0;background:#102b20;border:1px solid #166534}
+.bmOnlineTradeBuilder,.bmOnlineTradeOffers{background:#111318;border:1px solid #34363d;border-radius:16px;padding:16px;margin-bottom:14px}
+.bmOnlineTradeTarget{display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap}
+.bmOnlineTradeTarget label{font-size:13px;font-weight:900;color:#d4d4d8}
+.bmOnlineTradeTarget select{background:#080a0e;border:1px solid #53535b;color:white;padding:9px 12px;border-radius:9px;font-size:12px;min-width:235px;max-width:100%}
+.bmOnlineTradeColumns{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px}
+.bmOnlineTradeSide{min-width:0;border:1px solid #383a40;background:#0a0c10;border-radius:12px;padding:12px}
+.bmOnlineTradeSide h3{font-size:15px;font-weight:900;color:#fff}
+.bmOnlineTradeSide h3 small{display:block;font-size:11px;font-weight:600;color:#fb923c;margin-top:3px}
+.bmOnlineTradeSide>p,.bmOnlineTradeMuted{font-size:11px;color:#a1a1aa;margin:7px 0 12px}
+.bmOnlineTradePlayerList{display:grid;gap:4px;max-height:295px;overflow-y:auto}
+.bmOnlineTradePlayer{display:flex;gap:9px;align-items:center;padding:9px;border:1px solid transparent;border-radius:8px;cursor:pointer;background:#17191e;font-size:12px}
+.bmOnlineTradePlayer.selected{border-color:#fb923c;background:#29180f}
+.bmOnlineTradePlayer input{accent-color:#ea580c;flex-shrink:0}
+.bmOnlineTradePlayerName{font-weight:800;min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bmOnlineTradePlayerName small{font-size:10px;color:#a3a3a3;margin-left:5px}
+.bmOnlineTradePlayer strong{font-size:11px;white-space:nowrap;color:#e4e4e7}
+.bmOnlineTradeTotals{display:flex;flex-wrap:wrap;gap:14px;align-items:center;padding:13px 2px;font-size:12px;color:#e4e4e7}
+.bmOnlineTradeTotals strong{color:#fda4af}.bmOnlineTradeTotals strong.valid{color:#86efac}
+.bmOnlineTradePrimary{display:block;width:100%;background:#ea580c;color:white;font-size:13px;font-weight:900;border-radius:10px;padding:13px;border:0}
+.bmOnlineTradePrimary:disabled{background:#3f3f46;color:#a1a1aa;cursor:not-allowed}
+.bmOnlineTradeOffersTitle{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:15px}
+.bmOnlineTradeOffersTitle h2{font-size:16px;font-weight:900}
+.bmOnlineTradeOffer{border:1px solid #393b42;border-radius:10px;padding:14px;margin:9px 0;background:#17191e;font-size:12px}
+.bmOnlineTradeOfferHeader{display:flex;justify-content:space-between;gap:8px;margin-bottom:7px;font-size:13px}
+.bmOnlineTradeOfferHeader span{color:#fb923c;font-size:10px;font-weight:900}
+.bmOnlineTradeOffer p{color:#d4d4d8;margin:4px 0;overflow-wrap:anywhere}
+.bmOnlineTradeOfferActions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.bmOnlineTradeOfferActions button{border:1px solid #57534e;border-radius:9px;padding:9px 13px;background:#24262b;color:white;font-size:11px;font-weight:900}
+.bmOnlineTradeOfferActions button:first-child{background:#9a3412;border-color:#c2410c}
+.bmOnlineTradeOfferActions button:disabled{opacity:.45;cursor:not-allowed}
+@media(max-width:950px){.bmOnlineHumanTradeRoom{padding:12px}.bmOnlineTradeColumns{grid-template-columns:minmax(0,1fr)}.bmOnlineTradeHeading h1{font-size:23px}.bmOnlineTradePlayerList{max-height:190px}}
+
+
+/* Human-GM Trade Finder — online-only, visually aligned to the existing Trade Center. */
+.bmOnlineTradeHeadingActions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.bmOnlineTradeFinderFilters{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.bmOnlineTradeFinderFilters label{display:grid;gap:7px;color:#a3a3a3;font-size:10px;font-weight:900;letter-spacing:.08em;text-transform:uppercase}
+.bmOnlineTradeFinderFilters select{min-width:0;width:100%;background:#0b0d11;border:1px solid #444750;color:#fff;border-radius:10px;padding:12px;font-size:12px;font-weight:750;letter-spacing:normal}
+.bmOnlineTradeFinderCaption{display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;margin:20px 0 10px;font-size:11px}
+.bmOnlineTradeFinderCaption strong{color:#fb923c;text-transform:uppercase;letter-spacing:.08em}
+.bmOnlineTradeFinderCaption span{color:#929299}
+.bmOnlineTradeFinderResults{display:grid;gap:8px}
+.bmOnlineTradeFinderResult{display:flex;align-items:center;gap:13px;padding:13px;background:#16191e;border:1px solid rgba(255,255,255,.075);border-radius:13px;min-width:0;transition:border-color .16s,background .16s}
+.bmOnlineTradeFinderResult:hover{border-color:rgba(251,146,60,.34);background:#1b1b1e}
+.bmOnlineTradeFinderIndex{font-size:12px;color:#fb923c;font-weight:900;font-variant-numeric:tabular-nums}
+.bmOnlineTradeFinderDetails{min-width:0;flex:1;display:grid;gap:5px}
+.bmOnlineTradeFinderDetails strong{color:white;font-size:13px;line-height:1.45;overflow-wrap:anywhere}
+.bmOnlineTradeFinderDetails strong span{color:#f97316;padding:0 4px}
+.bmOnlineTradeFinderDetails small{color:#a1a1aa;font-size:11px;line-height:1.4}
+.bmOnlineTradeFinderResult button{flex-shrink:0;border:1px solid #9a3412;border-radius:9px;background:#9a3412;color:#fff;padding:10px 12px;font-size:11px;font-weight:900;transition:background .15s}
+.bmOnlineTradeFinderResult button:hover{background:#c2410c}
+.bmOnlineTradeFinderResult button span{margin-left:5px}
+.bmOnlineTradeFinderEmpty{border:1px dashed #464851;border-radius:12px;padding:22px;text-align:center;color:#a1a1aa;font-size:12px}
+.bmOnlineTradeSecondary{width:100%;margin-top:14px;border-radius:10px;border:1px solid #444750;padding:12px;background:#1b1e25;color:white;font-size:12px;font-weight:800}
+.bmOnlineTradeSecondary:hover{border-color:#fb923c}
+@media(max-width:760px){.bmOnlineTradeFinderFilters{grid-template-columns:minmax(0,1fr)}.bmOnlineTradeFinderResult{align-items:flex-start;flex-wrap:wrap}.bmOnlineTradeFinderResult button{margin-left:auto}.bmOnlineTradeHeadingActions{width:100%}}
+
+/* Trade Inbox: filtered, two-step approval; no single-player stylesheet changes. */
+.bmOnlineTradeInboxFilters{display:flex;gap:7px;flex-wrap:wrap;margin:0 0 14px}
+.bmOnlineTradeInboxFilters button{padding:7px 11px;border:1px solid #3f4249;border-radius:8px;color:#a1a1aa;background:#15171b;font-size:11px;font-weight:800}
+.bmOnlineTradeInboxFilters button.active{color:#fed7aa;background:#2b1b11;border-color:#9a3412}
+.bmOnlineTradeConfirm{margin-top:11px;background:#241810;border:1px solid #9a3412;border-radius:11px;padding:13px}
+.bmOnlineTradeConfirm strong{color:#fed7aa;font-size:12px}
+.bmOnlineTradeConfirm p{color:#d4d4d8;font-size:11px;line-height:1.5;margin:6px 0 11px}
+.bmOnlineTradeConfirm>div{display:flex;gap:8px;flex-wrap:wrap}
+.bmOnlineTradeConfirm button{border:1px solid #9a3412;border-radius:8px;padding:9px 12px;background:#c2410c;color:white;font-size:11px;font-weight:900}
+.bmOnlineTradeConfirm button+button{background:#19191c;border-color:#4b4b50}
+.bmOnlineTradeConfirm button:disabled{opacity:.5;cursor:not-allowed}
+
+/* 2C.2D-5: unobtrusive trade inbox connectivity and stale-offer feedback. */
+.bmOnlineTradeInboxControls {display:flex;align-items:center;gap:12px;flex-wrap:wrap;justify-content:flex-end}
+.bmOnlineTradeConnection {display:inline-flex;align-items:center;gap:7px;color:#9da2ac;font-size:11px;letter-spacing:.02em}
+.bmOnlineTradeConnection i {width:7px;height:7px;border-radius:50%;background:#626774;flex:none}
+.bmOnlineTradeConnection i.live {background:#5ccfa7;box-shadow:0 0 0 3px rgba(92,207,167,.09)}
+.bmOnlineTradeStaleNote {margin:8px 0 13px;padding:10px 13px;border-radius:9px;border:1px solid rgba(248,172,75,.24);background:rgba(248,172,75,.05);font-size:12px;line-height:1.5;color:#e4b47d}
+.bmOnlineTradeStaleNote strong {color:#fac991}
+@media(max-width:700px){.bmOnlineTradeInboxControls{justify-content:flex-start;width:100%}}
+
+/* Online CPU trade bridge — scoped, dark, restrained, laptop friendly. */
+.bmOnlineCpuTradeRoom .bmOnlineTradeBuilder{display:flex;flex-direction:column;gap:14px}
+.bmOnlineCpuTradeRoom .bmOnlineTradeColumns{min-width:0}
+.bmOnlineCpuTradeRoster{min-width:0;border:1px solid rgba(255,255,255,.08);background:#101217;border-radius:16px;padding:14px}
+.bmOnlineCpuTradeRosterTitle{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:10px}
+.bmOnlineCpuTradeRosterTitle strong{color:#fff;font-size:14px}
+.bmOnlineCpuTradeRosterTitle small{font-size:11px;color:#a3a3a3;overflow-wrap:anywhere;text-align:right}
+.bmOnlineCpuTradeFooter{display:flex;justify-content:space-between;align-items:center;gap:16px;border-top:1px solid rgba(255,255,255,.08);padding-top:16px}
+.bmOnlineCpuTradeFooter>div{display:flex;flex-direction:column;gap:4px;min-width:0}
+.bmOnlineCpuTradeFooter strong{color:white;font-size:13px}
+.bmOnlineCpuTradeFooter small{color:#a3a3a3;font-size:11px;line-height:1.5}
+.bmOnlineCpuTradeSubmit{flex-shrink:0;border-radius:12px;background:#ea580c;color:white;font-weight:800;font-size:12px;padding:13px 19px;border:1px solid rgba(251,146,60,.35)}
+.bmOnlineCpuTradeSubmit:hover:not(:disabled){background:#f97316}
+.bmOnlineCpuTradeSubmit:disabled{opacity:.45;cursor:not-allowed}
+@media(max-width:760px){.bmOnlineCpuTradeFooter{align-items:stretch;flex-direction:column}.bmOnlineCpuTradeSubmit{width:100%}}
+
+/* 2C.2D7 — online-only CPU Finder; match existing responsive Trade Center. */
+.bmOnlineCpuFinder .bmOnlineTradeBuilder{display:flex;flex-direction:column;gap:14px}
+.bmOnlineCpuFinderGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;max-height:340px;overflow-y:auto;overscroll-behavior:contain;padding-right:3px}
+.bmOnlineCpuFinderGrid .bmOnlineTradePlayer{min-width:0}
+.bmOnlineCpuFinderIntro{display:flex;flex-direction:column;justify-content:end;gap:7px}
+.bmOnlineCpuFinderIntro strong{font-size:13px;color:#fafafa}
+.bmOnlineCpuFinderIntro small{font-size:11px;color:#a1a1aa}
+.bmOnlineCpuFinderActions{display:flex;gap:8px;flex-wrap:wrap}
+.bmOnlineCpuFinderActions button{border:1px solid rgba(251,146,60,.3);background:#16191e;color:#f3f4f6;border-radius:9px;padding:10px 14px;font-size:12px;font-weight:800}
+.bmOnlineCpuFinderActions button:hover{background:#26201c;border-color:rgba(251,146,60,.6)}
+.bmOnlineCpuFinder .bmOnlineTradeFinderResult button:disabled{opacity:.45;cursor:not-allowed}
+@media(max-width:900px){.bmOnlineCpuFinderGrid{grid-template-columns:1fr}}
+@media(max-width:650px){.bmOnlineCpuFinder .bmOnlineTradeFinderResult{flex-wrap:wrap}.bmOnlineCpuFinder .bmOnlineTradeFinderResult button{margin-left:auto}}
+
+/* Rights-aware draft pick inventory: restricted assets stay visible and inert. */
+.bmOnlineTradePlayer.bmOnlinePickLocked{opacity:.57;background:#111318;border-color:rgba(255,255,255,.055);cursor:not-allowed}
+.bmOnlineTradePlayer.bmOnlinePickLocked input{cursor:not-allowed}
+.bmOnlineTradePlayer.bmOnlinePickLocked .bmOnlineTradePlayerName small{color:#a3a3a3}
+
+/* Online draft protection choice: compact, responsive and keyboard accessible. */
+.bmOnlinePickToggle{display:flex;align-items:center;gap:9px;flex:1;min-width:0;cursor:pointer}
+.bmOnlinePickProtectionSelect{max-width:125px;min-width:99px;background:#111318;border:1px solid rgba(251,146,60,.35);color:#f4f4f5;border-radius:6px;padding:6px;font-size:11px;cursor:pointer}
+.bmOnlinePickProtectionSelect:focus-visible{outline:2px solid #fb923c;outline-offset:2px}
+@media(max-width:460px){.bmOnlineTradePlayer:has(.bmOnlinePickProtectionSelect){flex-wrap:wrap}.bmOnlinePickProtectionSelect{margin-left:24px;max-width:calc(100% - 24px)}}
+
+/* Online paired pick-right arrangement: compact, responsive, independent of single-player styles. */
+.bmOnlineSwapOptions { border:1px solid rgba(255,255,255,.10); border-radius:10px; padding:13px 15px; display:grid; gap:7px; background:rgba(255,255,255,.025); }
+.bmOnlineSwapOptions label {font-size:.74rem;letter-spacing:.055em;text-transform:uppercase;color:#c7cbd2;font-weight:650;}
+.bmOnlineSwapOptions select {width:100%;max-width:460px;min-height:38px;color:inherit;background:#22272d;border:1px solid rgba(255,255,255,.17);border-radius:7px;padding:7px 10px;}
+.bmOnlineSwapOptions p {color:#d3b896;font-size:.82rem;line-height:1.5;margin:0;}
+.bmOnlineSwapOptions p.bmOnlineTradeMuted {color:#949ba5;}
+@media(max-width:680px){.bmOnlineSwapOptions{padding:12px}.bmOnlineSwapOptions select{max-width:100%;}}
+
+/* PHASE 2D.2-B — manual Coach Gameplan. Online-scoped, responsive controls. */
+.bmOnlineCoachMinutesCell input{width:54px;min-width:48px;padding:6px 4px;background:#131313;color:#fff;border:1px solid #606060;border-radius:7px;text-align:center;font:inherit;font-size:12px;font-weight:800}
+.bmOnlineCoachMinutesCell input:focus-visible,.bmOnlineCoachOrder button:focus-visible,.bmOnlineCoachActions button:focus-visible{outline:2px solid #fb923c;outline-offset:2px}
+.bmOnlineCoachMinutesCell input:disabled{opacity:.45;cursor:not-allowed}
+.bmOnlineCoachOrder{display:flex;gap:5px;justify-content:center}
+.bmOnlineCoachOrder button{border:1px solid #494949;border-radius:6px;background:#1a1a1a;color:#ffad70;padding:4px 9px;cursor:pointer}
+.bmOnlineCoachOrder button:hover:not(:disabled){border-color:#f97316;color:#fff}
+.bmOnlineCoachOrder button:disabled{opacity:.3;cursor:not-allowed}
+.bmOnlineCoachInjured{margin-left:7px;font-size:9px;color:#ffaf86;font-weight:900;letter-spacing:.05em}
+.bmOnlineCoachMessage{border:1px solid #934333;border-radius:7px;background:#34140f;color:#ffc1ac;padding:8px 11px;font-size:11px}
+.bmOnlineCoachMessage.success{border-color:#32674a;background:#0c2516;color:#baf5ca}
+.bmOnlineCoachActions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+.bmOnlinePreviewFooter .bmOnlineCoachActions button{border:1px solid #4c4c4c;border-radius:7px;background:#202020;color:#eee;padding:8px 12px;cursor:pointer;font-weight:800}
+.bmOnlinePreviewFooter .bmOnlineCoachActions button.bmOnlineCoachSave{border-color:#b45309;background:#9a3412;color:white}
+.bmOnlinePreviewFooter .bmOnlineCoachActions button:disabled{opacity:.45;cursor:not-allowed}
+@media(max-width:820px){.bmOnlineCoachPreview .bmOnlineCoachTable table{min-width:760px}.bmOnlineCoachPreview .bmOnlinePreviewFooter{flex-wrap:wrap;justify-content:center}.bmOnlineCoachHeroRight .bmOnlineCoachMinutes{display:none}}

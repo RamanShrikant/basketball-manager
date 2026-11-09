@@ -1,0 +1,12 @@
+﻿{
+    "files":  [
+                  {
+                      "sha":  "a3782a2b715afd93e9f55244b1882c5cc4cd16d6262274008890f32c657e0c59",
+                      "path":  "frontend/src/audio/uiSoundBindings.js"
+                  },
+                  {
+                      "sha":  "95c7120d90c713f757bc37a9f32a70b0bfe93636a135fc94dbf841b7e07c7aad",
+                      "path":  "frontend/src/pages/Play.jsx"
+                  }
+              ]
+}

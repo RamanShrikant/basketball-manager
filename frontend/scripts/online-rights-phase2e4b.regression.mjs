@@ -1,0 +1,32 @@
+// Static Online-only safety regression: rights UI is adapter-only, never local game save.
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+const source=file=>readFileSync(new URL(`../${file}`,import.meta.url),'utf8');
+const ui=source('src/online/OnlineOffseasonRights.jsx');
+const css=source('src/online/online-rights.css');
+const freeAgency=source('src/online/OnlineFreeAgencyPreview.jsx');
+const sidebar=source('src/online/OnlineBmSidebar.jsx');
+const franchise=source('src/online/OnlineFranchise.jsx');
+const backend=readFileSync(new URL('../../backend/onlineRights.js',import.meta.url),'utf8');
+const sql=readFileSync(new URL('../../supabase/bm_online_bird_rights_qualifying_offers_phase2e4b.sql',import.meta.url),'utf8');
+assert.match(ui,/function OnlineOffseasonRights/);
+for(const field of ['qualifyingOfferEligible','qualifyingOffer','capHold','availableDecisions','renounce','withdraw_qo','extend_qo'])assert.ok(ui.includes(field),field);
+for(const route of ['preview','submit','finalize'])assert.ok(backend.includes(`mode==='${route}'`)||backend.includes(`'${route}'`));
+assert.match(ui,/api\/online\/offseason\/rights/);
+assert.match(ui,/sessionStorage\.setItem\(draftKey/); // draft choices only, never league state
+assert.doesNotMatch(ui,/localStorage\.|updateLeagueData\(|saveLeague\(|setLeagueData\(|supabase\.rpc\(/);
+assert.match(ui,/everyone.*humanTeamNames\.length/);
+assert.match(ui,/disabled=\{busy\|\|!everyone\}/);
+assert.match(ui,/aria-label=\{`\$\{row\.playerName\} rights decision`\}/);
+assert.match(css,/@media\(max-width:650px\)/);
+assert.match(sidebar,/\["Free Agent Rights","\/free-agent-rights","wallet"\]/);
+assert.match(franchise,/"\/free-agent-rights":OnlineOffseasonRights/);
+assert.match(franchise,/OnlineGmPanel/);
+assert.match(sql,/bm_online_offseason_market_gate_phase2e4b/);
+assert.match(freeAgency,/offseasonMarketLocked/);
+assert.match(freeAgency,/Review Free Agent Rights/);
+assert.match(freeAgency,/if\(offseasonMarketLocked\)return/);
+assert.match(sql,/OLD\.state->'freeAgents' IS DISTINCT FROM NEW\.state->'freeAgents'/);
+assert.match(sql,/pg_catalog\.current_setting\('bm\.online_rights_write'/);
+assert.doesNotMatch(backend,/clientSuppliedRoster|req\.body\.freeAgents|req\.body\.state/);
+console.log('PASS: Online Bird rights/QO decisions are own-team, revisioned, responsive and server-only');

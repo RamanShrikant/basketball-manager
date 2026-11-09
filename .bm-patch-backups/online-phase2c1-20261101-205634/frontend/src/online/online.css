@@ -1,0 +1,750 @@
+/* Online Beta is its own styling and runtime island; no single-player CSS touched. */
+.on-root {min-height:100vh;background:#060606;color:#f6f6f6;font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;}
+.on-root *, .on-center *{box-sizing:border-box}
+.on-root button,.on-root input,.on-center button,.on-center input{font:inherit}
+.on-root button,.on-center button{cursor:pointer}
+.on-root button:disabled,.on-center button:disabled{opacity:.48;cursor:not-allowed}
+.on-root a,.on-center a{text-decoration:none;color:inherit}
+.on-header{height:74px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #292929;padding:0 clamp(18px,4vw,66px);background:#090909}
+.on-logo{font-size:22px;font-weight:950;letter-spacing:-.08em;color:#f47627!important}.on-logo span{display:inline-block;margin-left:9px;vertical-align:middle;color:#efebe6;font-size:10px;letter-spacing:.2em}
+.on-player-id{font-size:13px;font-weight:750}.on-player-id b{color:#fba668;margin-left:0}
+.on-page{max-width:1390px;margin:0 auto;padding:clamp(20px,4vw,48px) clamp(16px,3vw,38px) 70px}
+.on-hero{padding:32px 0 22px}.on-hero h1,.on-lobby-title h1{font-size:clamp(32px,4vw,52px);line-height:1.04;letter-spacing:-.06em;font-weight:950;margin:10px 0 12px}
+.on-kicker{color:#ffa365;font-size:10px;letter-spacing:.19em;font-weight:900;text-transform:uppercase;margin:0}
+.on-sub{max-width:680px;color:#9a9a9a;font-size:14px;line-height:1.7;margin:12px 0 22px}
+.on-between{display:flex;align-items:center;justify-content:space-between;gap:18px}
+.on-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}
+.on-panel{border:1px solid #343434;background:#101010;border-radius:18px;padding:clamp(22px,3vw,34px);box-shadow:0 18px 55px rgba(0,0,0,.2)}
+.on-panel h1,.on-panel h2,.on-drawer h2{font-size:26px;line-height:1.16;letter-spacing:-.04em;font-weight:950;margin:11px 0}
+.on-panel h3,.on-drawer h3{font-size:14px;font-weight:900;margin:28px 0 12px;color:#ebebeb}.on-panel h3 small,.on-drawer h3 small{font-size:10px;color:#999;margin-left:8px}
+.on-root label,.on-center label{display:grid;gap:8px;font-size:12px;font-weight:800;margin:14px 0;color:#e7e7e7}
+.on-root input,.on-center input{width:100%;min-width:0;padding:13px 14px;border-radius:10px;background:#090909;color:white;border:1px solid #434343;outline:none;font-size:14px}
+.on-root input:focus,.on-center input:focus{border-color:#b5b5b5;box-shadow:0 0 0 2px #ffffff16}
+.on-primary,.on-secondary,.on-small,.on-social-trigger{border-radius:10px;font-size:13px;font-weight:900;border:1px solid #404040;padding:12px 16px;transition:background .15s,border-color .15s,transform .15s}
+.on-primary{background:#141414;color:#ffb178;border-color:#5a4333}.on-primary:not(:disabled):hover{background:#1d1713;color:#ffd2aa;border-color:#8b5d3d;transform:translateY(-1px)}
+.on-secondary{background:#141414;color:#f2efeb;border-color:#3f3f3f}.on-secondary:hover,.on-small:hover{background:#1f1f1f}
+.on-small{padding:8px 10px;background:#171717;border-color:#363636;color:#ffb178;font-size:11px;white-space:nowrap}
+.on-accent{color:#ffb178;border-color:#6b492f}
+.on-text-btn{background:none;border:0;color:#ffb178;font-size:12px;padding:12px;cursor:pointer}
+.on-link{display:inline-flex;color:#ffb178!important;font-size:12px;font-weight:750;margin-bottom:22px}
+.on-muted{font-size:12px;line-height:1.65;color:#909090;margin:8px 0}
+.on-options{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin:20px 0}
+.on-option{background:#171717;color:#eee;border:1px solid #3b3b3b;border-radius:10px;padding:14px;text-align:left;font-weight:900;font-size:13px}
+.on-option small{display:block;margin-top:7px;font-size:11px;font-weight:500;line-height:1.45;color:#aaa}
+.on-option.active{border-color:#6b492f;background:#1a1410;color:#fff}
+.on-file{border:1px dashed #4e4e4e;border-radius:12px;padding:16px}.on-file input{padding:9px 0;border:none;box-shadow:none}.on-file small{color:#959595;font-size:12px}
+.on-info{margin-top:22px;background:#101010;border:1px solid #292929;border-radius:12px;padding:20px 24px}.on-info b{color:#d6d6d6;font-size:12px}.on-info p{color:#999;font-size:12px;line-height:1.65;max-width:850px;margin:8px 0 0}
+.on-social-trigger{background:#151515;color:#e3e3e3;border-color:#535353;white-space:nowrap}.on-social-trigger span{margin-left:10px;color:#ff9546}
+.on-invite-list{margin-top:26px;border-top:1px solid #303030;padding-top:5px}.on-invite,.on-social-row{display:flex;align-items:center;justify-content:space-between;gap:10px;border-bottom:1px solid #292929;padding:12px 0;font-size:12px}
+.on-invite b,.on-social-row b{display:block;font-weight:800}.on-invite small,.on-social-row small{display:block;color:#969696;margin-top:5px}
+.on-inline{display:flex;align-items:center;gap:8px}.on-inline input{min-width:0;flex:1}
+.on-center{min-height:100vh;display:grid;place-items:center;padding:24px;background:#060606;color:#ededed}
+.on-auth{width:min(440px,100%)}.on-auth h1{font-size:31px;letter-spacing:-.05em}.on-auth .on-primary{width:100%;margin-top:14px}
+.on-error,.on-success{border-radius:9px;padding:12px 15px;font-size:12px;line-height:1.5}
+.on-error{border:1px solid #924c4c;background:#311817;color:#ffbbbb}.on-success{background:#10271c;color:#89efb4;border:1px solid #245e39}
+.on-drawer-backdrop{position:fixed;inset:0;z-index:100;background:#000a;display:flex;justify-content:flex-end}
+.on-drawer{width:min(460px,100vw);height:100vh;background:#101010;border-left:1px solid #444444;overflow-y:auto;padding:30px 25px;box-shadow:-20px 0 65px #0008}
+.on-drawer h2{font-size:26px}.on-profile-box{background:#191919;border:1px solid #494949;border-radius:12px;padding:16px;margin:22px 0 30px}
+.on-profile-box b{font-size:16px;color:#eeeeee}.on-profile-box p{font-size:12px;color:#9c9c9c;line-height:1.5}
+.on-lobby-title{align-items:center;margin:10px 0 28px}.on-code-box{background:#1a1a1a;border:1px solid #5b5b5b;border-radius:12px;padding:16px;text-align:center;min-width:170px}.on-code-box small{font-size:9px;letter-spacing:.13em;font-weight:900;color:#b8b8b8;display:block}.on-code-box b{display:block;font-size:21px;letter-spacing:.16em;margin:8px 0;color:#f4f4f4}
+.on-lobby-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(290px,345px);gap:18px;align-items:start}
+.on-team-select{min-height:640px}.on-teams-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin-top:22px;max-height:55vh;overflow-y:auto;padding-right:4px}
+.on-team-choice{display:flex;align-items:center;gap:8px;text-align:left;min-height:65px;background:#161616;border:1px solid #3a3a3a;border-radius:11px;padding:11px;color:#eee;font-size:11px;font-weight:800}
+.on-team-choice:hover:not(:disabled){border-color:#9a9a9a}.on-team-choice.picked{border-color:#e0e0e0;background:#292929}.on-team-choice span:not(.on-team-badge){flex:1}.on-team-choice small{font-size:9px;color:#ededed}
+.on-team-badge{width:38px;height:38px;display:inline-flex;justify-content:center;align-items:center;flex-shrink:0;border:1px solid #454545;background:#202020;border-radius:50%;font-weight:950;color:#aaaaaa;font-size:11px;overflow:hidden}
+.on-team-badge img{object-fit:contain;width:34px;height:34px}
+.on-ready-bar{display:flex;align-items:center;justify-content:space-between;gap:15px;border-top:1px solid #353535;margin-top:22px;padding-top:23px}
+.on-ready-bar b{font-size:15px}.on-player-slot{display:flex;gap:11px;align-items:center;padding:12px 0;border-bottom:1px solid #303030}.on-player-slot>div{min-width:0;flex:1}.on-player-slot b{font-size:12px;overflow-wrap:anywhere}.on-player-slot small{display:block;font-size:10px;color:#999999;margin-top:5px}.on-ready{color:#fb8b8b;font-size:20px;font-weight:900}.on-ready.on-is-ready{color:#5ad093}
+.on-count{font-size:12px;color:#dadada}.on-invite-area{margin-top:23px}.on-invite-area .on-secondary{width:100%;margin-top:9px}
+.on-lobby-footer{border-top:1px solid #323232;margin-top:24px;padding-top:16px;display:grid;gap:8px}.on-empty{max-width:650px}.on-empty h1{font-size:32px}
+@media(max-width:930px){.on-lobby-layout{grid-template-columns:1fr}.on-lobby-side{order:-1}.on-team-select{min-height:unset}.on-teams-grid{max-height:unset}}
+@media(max-width:700px){.on-grid{grid-template-columns:1fr}.on-hero .on-between,.on-lobby-title{flex-direction:column;align-items:stretch}.on-options{grid-template-columns:1fr}.on-teams-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.on-ready-bar{flex-direction:column;align-items:stretch}.on-header{padding:0 16px}.on-logo span{font-size:8px}}
+
+/* Online beta neutral design. This stylesheet never styles single-player. */
+.on-existing-lobby{display:flex;align-items:center;justify-content:space-between;gap:22px;
+  margin:10px 0 22px;padding:20px 24px;border:1px solid #3a3a3a;
+  border-radius:16px;background:#111;}
+.on-existing-lobby h2{font-size:19px;margin:7px 0 4px;letter-spacing:-.03em}
+.on-existing-lobby .on-muted{max-width:690px}
+.on-existing-meta{font-size:12px;color:#aaa;margin:10px 0 0}
+.on-existing-meta strong{color:#ffb477;letter-spacing:.1em;margin-left:8px}
+.on-existing-actions{display:flex;gap:10px;align-items:center;flex-shrink:0}
+@media(max-width:800px){.on-existing-lobby{flex-direction:column;align-items:stretch}
+.on-existing-actions{flex-wrap:wrap}}
+
+
+/* Online home polish: back navigation, orange text accents, and 1080p one-screen layout. */
+.on-online-home{min-height:calc(100vh - 74px);padding:16px clamp(16px,2.5vw,30px) 18px;display:flex;flex-direction:column;overflow:hidden}
+.on-online-home .on-hero{padding:2px 0 10px}
+.on-home-topline{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:10px}
+.on-back-link{display:inline-flex;align-items:center;gap:8px;background:none;border:0;padding:0;color:#ffb178;font-size:12px;font-weight:900;letter-spacing:.01em}
+.on-back-link:hover{text-decoration:underline}
+.on-hero-main{display:block}
+.on-online-home .on-hero h1{margin:8px 0 6px;font-size:clamp(30px,3.5vw,50px)}
+.on-online-home .on-sub{max-width:760px;line-height:1.55;margin:0}
+.on-online-home .on-existing-lobby{margin:8px 0 12px;padding:16px 20px}
+.on-online-home .on-existing-lobby h2{font-size:18px}
+.on-home-grid{gap:14px}
+.on-online-home .on-panel{padding:18px 20px}
+.on-online-home .on-panel h2{font-size:24px;margin:10px 0 6px}
+.on-online-home .on-panel .on-sub{font-size:13px;line-height:1.55;margin:0 0 10px}
+.on-online-home .on-options{margin:14px 0 12px}
+.on-online-home label{margin:10px 0}
+.on-online-home .on-primary,.on-online-home .on-secondary,.on-online-home .on-social-trigger{padding:11px 15px}
+.on-online-home .on-invite-list{margin-top:14px;padding-top:4px;max-height:122px;overflow:auto;padding-right:4px}
+.on-online-home .on-info{margin-top:12px;padding:14px 16px}
+.on-home-note p{max-width:none}
+.on-online-home .on-existing-actions .on-primary,.on-online-home .on-existing-actions .on-secondary{min-width:142px}
+@media(max-height:950px){.on-online-home{padding-top:12px;padding-bottom:12px}.on-online-home .on-hero{padding-bottom:8px}.on-online-home .on-panel{padding:16px 18px}.on-online-home .on-info{padding:12px 14px}}
+@media(max-width:900px){.on-online-home{min-height:auto;overflow:auto}.on-home-topline{flex-direction:column;align-items:stretch}.on-online-home .on-social-trigger{width:100%}.on-online-home .on-grid{grid-template-columns:1fr}.on-online-home .on-invite-list{max-height:none;overflow:visible}}
+
+
+/* Online home final fit + social drawer grid treatment. */
+.on-online-home{
+  height:calc(100vh - 74px);
+  min-height:calc(100vh - 74px);
+  max-height:calc(100vh - 74px);
+  padding:10px clamp(12px,2vw,26px) 10px;
+  display:grid;
+  grid-template-rows:auto auto auto 1fr auto;
+  align-content:start;
+  gap:10px;
+  overflow:hidden;
+}
+.on-online-home>.on-error{margin:0}
+.on-online-home .on-hero{padding:0}
+.on-home-topline{margin-bottom:6px}
+.on-back-link{font-size:11px}
+.on-online-home .on-hero h1{margin:6px 0 4px;font-size:clamp(28px,3.2vw,42px);line-height:1}
+.on-online-home .on-sub{max-width:780px;font-size:12px;line-height:1.45;margin:0}
+.on-online-home .on-existing-lobby{margin:0;padding:12px 18px;min-height:0}
+.on-online-home .on-existing-lobby .on-kicker{margin-bottom:3px}
+.on-online-home .on-existing-lobby h2{font-size:16px;margin:4px 0}
+.on-online-home .on-existing-lobby .on-muted{max-width:700px;font-size:11px;line-height:1.45;margin:4px 0 0}
+.on-online-home .on-existing-meta{margin-top:6px;font-size:11px}
+.on-online-home .on-existing-actions .on-primary,.on-online-home .on-existing-actions .on-secondary{min-width:130px}
+.on-home-grid{gap:12px;min-height:0;align-items:stretch}
+.on-home-grid>.on-panel{display:flex;flex-direction:column;min-height:0}
+.on-online-home .on-panel{padding:14px 18px;min-height:0}
+.on-online-home .on-panel h2{font-size:21px;margin:8px 0 4px}
+.on-online-home .on-panel .on-sub{font-size:12px;line-height:1.45;margin:0 0 8px}
+.on-online-home .on-options{margin:10px 0 10px}
+.on-online-home .on-option{padding:12px}
+.on-online-home .on-option small{margin-top:5px;font-size:10px;line-height:1.35}
+.on-online-home label{margin:8px 0}
+.on-online-home input{padding:11px 12px;font-size:13px}
+.on-online-home .on-primary,.on-online-home .on-secondary,.on-online-home .on-small,.on-online-home .on-social-trigger{padding:10px 14px}
+.on-online-home .on-invite-list{margin-top:10px;padding-top:4px;max-height:92px;overflow:auto;padding-right:4px}
+.on-online-home .on-invite,.on-online-home .on-social-row{padding:9px 0}
+.on-online-home .on-info{margin-top:0;padding:12px 14px}
+.on-online-home .on-info p{font-size:11px;line-height:1.45;margin-top:6px}
+.on-home-note{min-height:0}
+
+/* Friends & Profile / account drawer gets the subtle line-grid background used elsewhere in BM. */
+.on-drawer{
+  background-color:#0f0f10;
+  background-image:
+    linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,.03) 1px, transparent 1px),
+    linear-gradient(180deg, rgba(255,255,255,.02), rgba(255,255,255,0));
+  background-size:24px 24px,24px 24px,auto;
+  background-position:0 0,0 0,0 0;
+}
+.on-profile-box{
+  background-color:rgba(23,23,24,.92);
+  background-image:linear-gradient(135deg, rgba(255,255,255,.04), rgba(255,255,255,0) 58%);
+  border-color:#444;
+}
+
+@media(max-height:900px){
+  .on-online-home{padding-top:8px;padding-bottom:8px;gap:8px}
+  .on-home-topline{margin-bottom:4px}
+  .on-online-home .on-hero h1{font-size:clamp(26px,3vw,38px)}
+  .on-online-home .on-panel{padding:12px 16px}
+  .on-online-home .on-existing-lobby{padding:10px 16px}
+  .on-online-home .on-invite-list{max-height:74px}
+  .on-online-home .on-info{padding:10px 12px}
+}
+@media(max-width:900px){
+  .on-online-home{height:auto;min-height:auto;max-height:none;overflow:auto}
+}
+
+
+/* Online premium pass: grid surfaces, orange scrollbar, and tighter invite styling. */
+.on-root{
+  height:100vh;
+  overflow:hidden;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.018), rgba(255,255,255,0) 18%),
+    linear-gradient(rgba(255,255,255,.02) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,.02) 1px, transparent 1px),
+    #060606;
+  background-size:auto, 24px 24px, 24px 24px, auto;
+  background-position:0 0, 0 0, 0 0, 0 0;
+}
+.on-root *{scrollbar-width:thin;scrollbar-color:#e57c2f #0f0f10}
+.on-root *::-webkit-scrollbar{width:10px;height:10px}
+.on-root *::-webkit-scrollbar-track{background:#0f0f10;border-radius:999px;border:1px solid #2d2018}
+.on-root *::-webkit-scrollbar-thumb{background:linear-gradient(180deg,#ffae6d,#df7628);border-radius:999px;border:2px solid #0f0f10}
+.on-root *::-webkit-scrollbar-thumb:hover{background:linear-gradient(180deg,#ffc18c,#ee8540)}
+
+.on-online-home{
+  height:calc(100vh - 74px);
+  max-height:calc(100vh - 74px);
+  overflow:hidden;
+  gap:10px;
+}
+.on-online-home .on-hero{
+  padding:0;
+}
+.on-online-home .on-hero h1{
+  font-size:clamp(30px,3.2vw,48px);
+  letter-spacing:-.065em;
+}
+.on-online-home .on-sub,
+.on-online-home .on-muted,
+.on-online-home .on-info p,
+.on-online-home .on-option small,
+.on-profile-box p{
+  color:#a8a8aa;
+}
+.on-online-home .on-panel,
+.on-online-home .on-existing-lobby,
+.on-online-home .on-info,
+.on-drawer,
+.on-profile-box{
+  background-color:rgba(16,16,17,.92);
+  background-image:
+    linear-gradient(180deg, rgba(255,255,255,.028), rgba(255,255,255,0) 24%),
+    linear-gradient(rgba(255,255,255,.022) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,.02) 1px, transparent 1px);
+  background-size:auto, 24px 24px, 24px 24px;
+  background-position:0 0, 0 0, 0 0;
+}
+.on-online-home .on-panel,
+.on-online-home .on-existing-lobby,
+.on-online-home .on-info{
+  border-color:#2c2c2f;
+  box-shadow:0 14px 36px rgba(0,0,0,.18);
+}
+.on-online-home .on-panel{
+  padding:16px 18px;
+  border-radius:16px;
+}
+.on-online-home .on-existing-lobby{
+  padding:14px 18px;
+  border-radius:16px;
+}
+.on-online-home .on-info{
+  padding:12px 14px;
+  border-radius:14px;
+}
+.on-home-grid{gap:14px;min-height:0}
+.on-home-grid > .on-panel{min-height:0}
+
+.on-primary,
+.on-secondary,
+.on-small,
+.on-social-trigger,
+.on-option,
+.on-back-link{
+  transition:transform .14s ease, border-color .14s ease, color .14s ease, background .14s ease, box-shadow .14s ease;
+}
+.on-primary,
+.on-secondary,
+.on-small,
+.on-social-trigger{
+  border-radius:12px;
+  letter-spacing:.01em;
+  font-weight:800;
+}
+.on-primary{
+  background:rgba(18,18,19,.94);
+  color:#ffaf72;
+  border-color:#5a3b27;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.035);
+}
+.on-primary:not(:disabled):hover{
+  background:rgba(27,20,16,.98);
+  color:#ffd6b4;
+  border-color:#925a33;
+  transform:translateY(-1px);
+  box-shadow:0 10px 20px rgba(0,0,0,.18), inset 0 1px 0 rgba(255,255,255,.04);
+}
+.on-secondary{
+  background:rgba(18,18,19,.94);
+  color:#f1efea;
+  border-color:#3d3d40;
+}
+.on-secondary:not(:disabled):hover,
+.on-small:not(:disabled):hover,
+.on-social-trigger:not(:disabled):hover,
+.on-option:hover{
+  background:rgba(28,28,30,.96);
+  border-color:#5f5f66;
+  transform:translateY(-1px);
+}
+.on-small{padding:9px 11px;font-size:11px;background:rgba(19,19,20,.95);border-color:#33343a;color:#ffb178}
+.on-social-trigger{background:rgba(18,18,19,.95);border-color:#3e3e44}
+.on-option{background:rgba(18,18,20,.9);border-color:#2f2f35;border-radius:12px;padding:14px}
+.on-option.active{background:rgba(27,20,16,.94);border-color:#7a4a28}
+.on-root input,.on-center input{background:rgba(9,9,10,.9);border-color:#35353a;border-radius:12px}
+.on-root input:focus,.on-center input:focus{border-color:#a66d44;box-shadow:0 0 0 2px rgba(244,118,39,.14)}
+.on-kicker,.on-back-link,.on-primary,.on-small,.on-accent,.on-social-trigger span,.on-existing-meta strong{color:#f69a53}
+
+.on-invite-list{border-top:1px solid #28282d;padding-right:2px}
+.on-invite-list.is-empty{max-height:none;overflow:hidden;padding-bottom:2px}
+.on-invite-list.is-scrollable{max-height:90px;overflow:auto;padding-right:8px}
+.on-invite,
+.on-social-row{border-bottom:1px solid #26262b}
+.on-online-home .on-info{
+  margin-top:0;
+}
+.on-home-note{
+  align-self:stretch;
+}
+.on-drawer{border-left:1px solid #35353a}
+.on-profile-box{border-color:#3b3b42}
+
+@media(max-height:940px){
+  .on-page{padding-top:12px}
+  .on-online-home{gap:8px}
+  .on-online-home .on-panel{padding:14px 16px}
+  .on-online-home .on-existing-lobby{padding:12px 16px}
+  .on-online-home .on-info{padding:10px 12px}
+  .on-online-home .on-panel h2{font-size:19px}
+  .on-online-home label{margin:8px 0}
+  .on-online-home .on-options{margin:10px 0}
+  .on-invite-list.is-scrollable{max-height:72px}
+}
+@media(max-width:900px){
+  .on-root{height:auto;overflow:auto}
+  .on-online-home{height:auto;max-height:none;overflow:auto}
+}
+
+
+/* BM ONLINE — exact curved court pattern from BMPageBackground.css */
+/* Uses the EXISTING src/assets/basketball-pattern.svg. No separate approximation. */
+.on-root {
+  background-color: #0d0d0d;
+  background-image:
+    url("../assets/basketball-pattern.svg"),
+    repeating-linear-gradient(45deg, rgba(255,255,255,0.045) 0 1px, transparent 1px 28px),
+    repeating-linear-gradient(-45deg, rgba(255,255,255,0.035) 0 1px, transparent 1px 22px),
+    radial-gradient(circle at 50% 30%, #2b2b2b 0%, #0d0d0d 80%);
+  background-repeat: repeat, repeat, repeat, no-repeat;
+  background-size: 340px 340px, auto, auto, cover;
+  background-position: center;
+  background-blend-mode: soft-light, normal, normal, normal;
+}
+
+/* Subtle curved seams on all Online panels, including Lobby: no square grid overlay. */
+.on-root .on-panel,
+.on-root .on-existing-lobby,
+.on-root .on-info,
+.on-drawer,
+.on-profile-box {
+  background-color: #101011;
+  background-image:
+    url("../assets/basketball-pattern.svg"),
+    linear-gradient(180deg, #151516 0%, #0d0d0e 100%);
+  background-repeat: repeat, no-repeat;
+  background-size: 340px 340px, cover;
+  background-position: center;
+  background-blend-mode: normal, normal;
+}
+
+/* Keep interactive surfaces readable on top of the court pattern. */
+.on-online-home .on-option,
+.on-online-home input,
+.on-drawer input,
+.on-profile-box input {
+  background-color: rgba(10,10,11,.96);
+}
+.on-online-home .on-option.active {
+  background-color: #1a1410;
+}
+
+
+/* Online diagonal-only pass: remove court-shape overlays and use the clean BM diagonal grid everywhere. */
+.on-root{
+  background-color:#060606;
+  background-image:
+    linear-gradient(180deg, rgba(255,255,255,.02), rgba(255,255,255,0) 16%),
+    repeating-linear-gradient(45deg, rgba(255,255,255,.032) 0 1px, transparent 1px 26px),
+    repeating-linear-gradient(-45deg, rgba(255,255,255,.028) 0 1px, transparent 1px 26px);
+  background-size:auto, 26px 26px, 26px 26px;
+  background-position:0 0, 0 0, 0 0;
+}
+
+.on-header,
+.on-page,
+.on-online-home,
+.on-drawer{
+  background-color:transparent;
+}
+
+.on-header{
+  background-image:
+    linear-gradient(180deg, rgba(255,255,255,.014), rgba(255,255,255,0) 100%),
+    repeating-linear-gradient(45deg, rgba(255,255,255,.028) 0 1px, transparent 1px 26px),
+    repeating-linear-gradient(-45deg, rgba(255,255,255,.024) 0 1px, transparent 1px 26px);
+  background-size:auto, 26px 26px, 26px 26px;
+  background-position:0 0, 0 0, 0 0;
+  border-bottom:1px solid rgba(255,255,255,.07);
+}
+
+.on-online-home .on-panel,
+.on-online-home .on-existing-lobby,
+.on-online-home .on-info,
+.on-drawer,
+.on-profile-box{
+  background-image:
+    linear-gradient(180deg, rgba(255,255,255,.022), rgba(255,255,255,0) 24%),
+    repeating-linear-gradient(45deg, rgba(255,255,255,.02) 0 1px, transparent 1px 26px),
+    repeating-linear-gradient(-45deg, rgba(255,255,255,.018) 0 1px, transparent 1px 26px) !important;
+  background-size:auto, 26px 26px, 26px 26px !important;
+  background-position:0 0, 0 0, 0 0 !important;
+}
+
+.on-online-home .on-panel,
+.on-online-home .on-existing-lobby,
+.on-online-home .on-info,
+.on-profile-box{
+  background-color:rgba(12,12,13,.92);
+}
+
+.on-drawer{
+  background-color:rgba(10,10,11,.97);
+}
+
+.on-profile-box{
+  box-shadow:0 14px 32px rgba(0,0,0,.16);
+}
+
+
+/* BM ONLINE CAROUSEL WAITING ROOM — reuses the actual single-player TeamSelector CSS module. */
+.on-header-meta{display:flex;align-items:center;gap:18px;min-width:0}
+#bm-online-header-lobby-code{display:flex;align-items:center;min-width:0}
+.on-top-code{display:flex;align-items:center;gap:9px;border-right:1px solid #38383c;padding-right:18px;font-size:12px;white-space:nowrap}
+.on-top-code span{color:#aaa;font-size:9px;font-weight:900;letter-spacing:.15em}
+.on-top-code strong{color:#f6a367;font-weight:900;letter-spacing:.14em}
+.on-top-code button{background:#19191b;border:1px solid #414145;color:#f1b183;border-radius:7px;padding:5px 9px;font-size:11px;font-weight:750}
+.on-top-code button:hover{background:#252020;border-color:#775036}
+
+.on-online-team-select{box-sizing:border-box;max-width:none;width:100%;height:calc(100dvh - 74px);min-height:0;overflow:hidden;display:flex;flex-direction:column;padding:10px clamp(14px,2vw,28px) 14px;gap:8px}
+.on-online-select-heading{position:relative;text-align:center;flex:0 0 auto;min-height:96px}
+.on-online-select-heading .on-link{position:absolute;left:0;top:6px;margin:0;color:#ffa76b!important;font-size:12px}
+.on-online-select-heading h1{font-family:"Poppins",Inter,sans-serif;font-style:italic;font-weight:850;letter-spacing:-.04em;font-size:clamp(38px,4.4vw,62px);line-height:1.02;margin:21px 0 9px;color:#fff}
+.on-online-select-heading .on-kicker{font-size:10px;letter-spacing:.17em}
+.on-heading-divider{color:#bbb;padding:0 6px}
+.on-online-lobby-error{margin:0 auto;width:100%;max-width:1300px;flex:0 0 auto}
+.on-online-selector-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,355px);gap:clamp(10px,1.2vw,20px);min-height:0;flex:1;align-items:stretch}
+.on-online-carousel-zone{position:relative;min-width:0;min-height:0;overflow:hidden;display:flex;flex-direction:column;align-items:center;justify-content:center;background:transparent}
+.on-team-carousel{width:100%;max-width:100%;min-width:0;min-height:0;flex:1;display:flex;flex-direction:column;align-items:stretch;justify-content:center}
+.on-team-carousel .on-team-carousel-shell{width:100%;min-height:0;max-width:100%;margin:0;flex:1;display:flex;align-items:center;justify-content:center}
+.on-team-carousel .on-carousel-track{width:100%;max-width:100%;height:clamp(290px,49vh,430px);min-height:0;overflow:hidden}
+.on-team-carousel .on-team-card{width:clamp(195px,19vw,290px);height:clamp(270px,45vh,380px);border-radius:20px;background:linear-gradient(180deg,rgba(25,25,26,.98),rgba(10,10,11,.98));font-family:"Poppins",Inter,sans-serif;}
+.on-team-carousel .on-team-card[data-offset="-2"]{transform:translateX(-166%) scale(.76);opacity:.18}
+.on-team-carousel .on-team-card[data-offset="-1"]{transform:translateX(-83%) scale(.86);opacity:.48}
+.on-team-carousel .on-team-card[data-offset="0"]{transform:translateX(0) scale(1);opacity:1;z-index:5}
+.on-team-carousel .on-team-card[data-offset="1"]{transform:translateX(83%) scale(.86);opacity:.48}
+.on-team-carousel .on-team-card[data-offset="2"]{transform:translateX(166%) scale(.76);opacity:.18}
+.on-team-carousel .on-team-card img{height:clamp(115px,22vh,190px);max-width:83%;margin-bottom:17px;object-fit:contain}
+.on-team-carousel .on-team-card img[src="/nba_PNG20.png"]{height:clamp(135px,24vh,200px)}
+.on-team-carousel .on-team-card h2{font-family:"Poppins",Inter,sans-serif;font-size:clamp(18px,1.55vw,24px);line-height:1.2;font-weight:800;padding:0 10px}
+.on-team-carousel .on-team-card[data-offset="0"]{border-color:#cd8539}
+.on-team-carousel .on-team-card.on-team-taken{filter:saturate(.4)}
+.on-team-carousel .on-team-card.on-team-taken[data-offset="0"]{border-color:#555}
+.on-team-carousel .on-carousel-status{position:absolute;bottom:18px;font-size:10px;font-family:Inter,sans-serif;font-weight:850;letter-spacing:.11em}
+.on-team-carousel .on-carousel-taken{color:#f6a6a6}
+.on-team-carousel .on-carousel-selected{color:#68d69f}
+.on-team-carousel .on-carousel-arrow{width:48px;height:48px;font-size:23px;z-index:8;border-color:#9a642e;background:#111}
+.on-team-carousel .on-carousel-arrow:hover:not(:disabled){background:#1c1713;border-color:#e58e41;transform:translateY(-50%) scale(1.05)}
+.on-team-carousel .on-carousel-prev{left:4px}
+.on-team-carousel .on-carousel-next{right:4px}
+.on-carousel-team-monogram{display:grid;place-items:center;width:128px;height:128px;border-radius:50%;border:2px solid #555;color:#dedede;font:900 39px Poppins,sans-serif;margin-bottom:24px}
+.on-carousel-controls{width:100%;border-top:1px solid #2e2e32;margin-top:4px;padding:12px clamp(8px,1vw,18px) 4px;flex:0 0 auto;display:flex;flex-direction:column;gap:9px}
+.on-carousel-help{font:700 10px/1.2 ui-monospace,monospace;letter-spacing:.08em;color:#929296}
+.on-carousel-help span{color:#e58a42;padding:0 6px}
+.on-carousel-actions{display:flex;align-items:center;justify-content:flex-end;gap:9px;min-width:0}
+.on-carousel-choice{margin-right:auto;color:#aaa;font:650 12px/1.4 Inter,sans-serif;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.on-carousel-actions .on-primary{padding:10px 14px;white-space:nowrap;font-size:12px}
+.on-carousel-select:not(:disabled){background:#25201a;border-color:#986635;color:#ffc48e}
+.on-carousel-ready:not(:disabled){background:#e18a32;border-color:#efa357;color:#14110d}
+.on-carousel-ready:not(:disabled):hover{background:#f09d47;color:#111}
+
+.on-online-lobby-sidebar{border-radius:14px;padding:clamp(14px,1.5vw,23px)!important;min-height:0;height:100%;overflow-y:auto;display:flex;flex-direction:column;gap:0;background-color:rgba(12,12,13,.96);background-image:none!important;border-color:#363636}
+.on-online-lobby-sidebar .on-lobby-side-title{margin-bottom:0}
+.on-online-lobby-sidebar .on-lobby-side-title h2{font:850 22px/1.15 Poppins,Inter,sans-serif;margin:0}
+.on-lobby-side-sub{font-size:11px;color:#999;margin:6px 0 12px}
+.on-online-lobby-sidebar .on-player-slot{padding:10px 0}
+.on-online-lobby-sidebar .on-player-slot b{font-size:12px}
+.on-online-lobby-sidebar .on-player-slot small{line-height:1.4}
+.on-online-lobby-sidebar .on-invite-area{margin-top:12px}
+.on-online-lobby-sidebar .on-invite-area h3{margin:10px 0}
+.on-online-lobby-sidebar .on-invite-area input{padding:10px}
+.on-online-lobby-sidebar .on-invite-area .on-secondary{margin-top:8px}
+.on-online-lobby-sidebar .on-lobby-footer{margin-top:auto;padding-top:12px;gap:8px}
+.on-online-lobby-sidebar .on-lobby-footer .on-muted{font-size:11px;line-height:1.45;margin:0}
+.on-online-lobby-sidebar .on-lobby-footer button{padding:10px 12px;font-size:11px}
+
+@media(max-height:850px){
+ .on-online-select-heading{min-height:86px}
+ .on-online-select-heading h1{font-size:clamp(34px,4vw,54px);margin-top:16px}
+ .on-team-carousel .on-carousel-track{height:clamp(245px,43vh,360px)}
+ .on-team-carousel .on-team-card{height:clamp(230px,40vh,335px)}
+ .on-team-carousel .on-team-card img{height:clamp(100px,19vh,155px)}
+ .on-carousel-controls{padding-top:9px}
+}
+@media(max-width:1090px){
+ .on-online-selector-layout{grid-template-columns:minmax(0,1fr) minmax(255px,310px)}
+ .on-team-carousel .on-team-card{width:clamp(165px,22vw,235px)}
+ .on-team-carousel .on-team-card[data-offset="-1"]{transform:translateX(-78%) scale(.82)}
+ .on-team-carousel .on-team-card[data-offset="1"]{transform:translateX(78%) scale(.82)}
+}
+@media(max-width:750px){
+ .on-online-team-select{height:auto;min-height:calc(100dvh - 74px);overflow:auto}
+ .on-online-selector-layout{grid-template-columns:1fr;overflow:visible}
+ .on-online-select-heading{min-height:unset;padding-bottom:8px}
+ .on-online-select-heading .on-link{position:static;display:block;text-align:left}
+ .on-online-select-heading h1{margin-top:14px}
+ .on-team-carousel{min-height:420px}
+ .on-team-carousel .on-team-card{width:min(56vw,235px);height:290px}
+ .on-team-carousel .on-carousel-track{height:320px}
+ .on-online-lobby-sidebar{min-height:350px;height:auto;overflow:visible}
+ .on-top-code span{display:none}
+ .on-top-code{gap:5px;padding-right:8px}
+ .on-top-code strong{font-size:10px;letter-spacing:.03em}
+ .on-header{padding:0 12px}
+ .on-header-meta{gap:8px}
+ .on-player-id{font-size:11px}
+}
+
+/* Exact TeamSelector.module.css UI, adapted only for the Online viewport and lobby. */
+.on-real-online-select{position:relative;height:calc(100dvh - 74px);width:100%;overflow:hidden}
+.on-real-team-zone{position:relative;width:100%;height:100%;transition:width .24s ease}
+.on-real-team-zone [data-online-team-selector]{height:100%;min-height:100%;padding-top:18px}
+.on-real-team-zone [data-online-team-selector]::after{opacity:0} /* retain earlier diagonal-only online theme */
+.on-real-team-zone [aria-label="Team carousel"]{max-width:100%;width:min(1640px,97%)}
+.on-real-team-zone [data-online-team-selector] h1{z-index:1}
+.on-real-lobby-open .on-real-team-zone{width:calc(100% - 345px)}
+.on-real-home-link{position:absolute;top:15px;left:20px;color:#ffae73!important;font-size:12px;font-weight:800;z-index:12}
+.on-real-error{position:absolute;left:20px;right:370px;top:100px;z-index:14}
+.on-real-lobby-panel{position:absolute;top:12px;right:10px;bottom:12px;width:330px;min-height:0;height:auto;padding:20px 18px!important;overflow-y:auto;border-radius:15px;z-index:12;background:#111!important;background-image:none!important;border:1px solid #38383c;transition:transform .24s ease,visibility .24s ease;scrollbar-color:#e57c2f #0f0f10;scrollbar-width:thin}
+.on-real-lobby-closed .on-real-lobby-panel{transform:translateX(calc(100% + 15px));visibility:hidden;pointer-events:none}
+.on-real-lobby-toggle{position:absolute;top:50%;right:339px;transform:translateY(-50%);z-index:14;border:1px solid #80522d;border-radius:10px 0 0 10px;background:#111;color:#ffac68;width:30px;height:62px;font-size:21px;cursor:pointer;transition:right .24s ease,border-color .2s ease}
+.on-real-lobby-closed .on-real-lobby-toggle{right:0}
+.on-real-lobby-toggle:hover{border-color:#eb9747;background:#1b1612}
+.on-real-lobby-panel .on-lobby-side-title h2{font-size:22px;margin:0}
+.on-real-lobby-panel .on-lobby-side-sub{font-size:11px;color:#aaa;margin:6px 0 12px}
+.on-real-lobby-panel .on-player-slot{padding:10px 0}
+.on-real-lobby-panel .on-player-slot b{font-size:12px}
+.on-real-lobby-panel .on-player-slot small{line-height:1.4}
+.on-real-lobby-panel .on-invite-area{margin-top:15px}
+.on-real-lobby-panel .on-invite-area h3{margin:12px 0}
+.on-real-lobby-panel .on-invite-area input{padding:10px}
+.on-real-lobby-panel .on-invite-area .on-secondary{margin-top:7px}
+.on-real-lobby-panel .on-lobby-footer{padding-top:14px;margin-top:18px;gap:7px}
+.on-real-lobby-panel .on-lobby-footer button{font-size:11px;padding:10px}
+.on-real-lobby-panel .on-lobby-footer .on-muted{font-size:11px;line-height:1.45;margin:0}
+.on-real-ready-area{display:flex;gap:10px;align-items:center;justify-content:space-between;margin:14px 0 2px}
+.on-real-ready-label{min-width:0;font-size:12px;font-weight:750;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.on-real-ready-label small{display:block;font-size:10px;font-weight:400;color:#aaa;margin-top:3px}
+.on-real-ready-area .on-primary{font-size:11px;padding:9px 11px;white-space:nowrap}
+.on-real-team-monogram{width:150px;height:150px;display:grid;place-items:center;border:1px solid #555;border-radius:50%;color:#eee;font:900 42px Poppins,sans-serif;margin-bottom:16px}
+/* The carousel card, large logo, center/side transform, title and control bar
+   are intentionally styled by the untouched single-player CSS module. */
+@media(min-width:1024px){
+ .on-real-lobby-open .on-real-team-zone [data-online-team-selector] [aria-label="Team carousel"]{width:100%}
+ .on-real-lobby-open .on-real-team-zone [data-online-team-selector] [data-offset="-2"]{transform:translateX(-480px) scale(.76)}
+ .on-real-lobby-open .on-real-team-zone [data-online-team-selector] [data-offset="2"]{transform:translateX(480px) scale(.76)}
+ .on-real-lobby-open .on-real-team-zone [data-online-team-selector] [data-offset="-1"]{transform:translateX(-260px) scale(.87)}
+ .on-real-lobby-open .on-real-team-zone [data-online-team-selector] [data-offset="1"]{transform:translateX(260px) scale(.87)}
+}
+@media(max-width:1120px){
+ .on-real-lobby-open .on-real-team-zone{width:calc(100% - 290px)}
+ .on-real-lobby-panel{width:277px}
+ .on-real-lobby-toggle{right:286px}
+ .on-real-error{right:300px}
+ .on-real-lobby-open .on-real-team-zone [data-online-team-selector] [data-offset="-2"]{opacity:0}
+ .on-real-lobby-open .on-real-team-zone [data-online-team-selector] [data-offset="2"]{opacity:0}
+}
+@media(max-width:750px){
+ .on-real-lobby-open .on-real-team-zone{width:100%}
+ .on-real-lobby-panel{width:min(355px,92vw);right:0;top:10px;bottom:10px}
+ .on-real-lobby-toggle{right:min(355px,92vw)}
+ .on-real-lobby-closed .on-real-lobby-toggle{right:0}
+ .on-real-team-zone [data-online-team-selector] [aria-label="Team carousel"]{width:100%}
+ .on-real-team-zone [data-online-team-selector] [data-offset="-2"],.on-real-team-zone [data-online-team-selector] [data-offset="2"]{opacity:0}
+ .on-real-team-zone [data-online-team-selector] [data-offset="-1"]{transform:translateX(-190px) scale(.85)}
+ .on-real-team-zone [data-online-team-selector] [data-offset="1"]{transform:translateX(190px) scale(.85)}
+}
+
+/* Online full-height Team Select: no top app header on the lobby route. */
+.on-root-lobby{height:100dvh;min-height:100dvh;max-height:100dvh;overflow:hidden}
+.on-root-lobby .on-real-online-select{height:100dvh;min-height:0;max-height:100dvh;overflow:hidden}
+.on-root-lobby .on-real-team-zone{height:100%;min-height:0}
+.on-root-lobby .on-real-team-zone [data-online-team-selector]{height:100%;min-height:0;padding-top:18px}
+.on-root-lobby .on-real-team-zone [data-online-team-selector] > div:last-child{bottom:18px;z-index:3}
+.on-real-lobby-code{display:flex;align-items:center;gap:9px;min-width:0;margin:9px 0 13px;padding:10px 11px;border:1px solid #353536;border-radius:10px;background:rgba(7,7,8,.75)}
+.on-real-lobby-code span{font-size:9px;white-space:nowrap;letter-spacing:.13em;color:#aaa;font-weight:900}
+.on-real-lobby-code strong{min-width:0;flex:1;font-size:12px;letter-spacing:.12em;color:#ffb279;overflow-wrap:anywhere}
+.on-real-lobby-code button{padding:6px 8px;font-size:10px}
+.on-real-lobby-home{display:inline-block;margin-top:4px;color:#ffae73!important;font-size:11px;font-weight:800;text-decoration:none}
+.on-real-lobby-home:hover{text-decoration:underline}
+@media(max-height:820px){
+ .on-root-lobby .on-real-team-zone [data-online-team-selector]{padding-top:12px}
+ .on-root-lobby .on-real-team-zone [data-online-team-selector] h1{margin-bottom:10px}
+ .on-root-lobby .on-real-team-zone [data-online-team-selector] > div:last-child{bottom:14px}
+ .on-real-lobby-panel .on-player-slot{padding:7px 0}
+ .on-real-lobby-code{padding:7px 9px;margin:6px 0 9px}
+}
+
+/* Online shared franchise Phase 2A: read-only authoritative franchise viewer */
+.on-franchise-page{padding-top:28px;max-width:1450px}
+.on-franchise-top{display:flex;align-items:flex-end;justify-content:space-between;gap:20px}
+.on-franchise-top h1{font-size:clamp(30px,4vw,52px);letter-spacing:-.055em;margin:9px 0}
+.on-franchise-revision{border:1px solid #3b3632;border-radius:13px;padding:13px 18px;text-align:center;min-width:120px;background:rgba(10,10,11,.85)}
+.on-franchise-revision small,.on-franchise-revision span{display:block;color:#a9a5a4;font-size:10px;letter-spacing:.12em}
+.on-franchise-revision b{display:block;color:#ffab65;font-size:28px}
+.on-franchise-statline{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:18px 0}
+.on-franchise-statline section{border:1px solid #353233;border-radius:12px;padding:14px 18px;background:rgba(13,13,14,.9)}
+.on-franchise-statline small{display:block;color:#a39d99;font-size:10px;font-weight:900;letter-spacing:.12em}
+.on-franchise-statline strong{display:block;color:#faf8f5;margin-top:6px;font-size:14px}
+.on-franchise-columns{display:grid;grid-template-columns:minmax(0,1fr) minmax(260px,340px);gap:16px;align-items:start}
+.on-franchise-roster{max-height:min(55vh,560px);overflow-y:auto}
+.on-franchise-roster-head,.on-franchise-player{display:grid;grid-template-columns:minmax(0,1fr) 75px 50px;gap:10px;padding:12px 10px;border-bottom:1px solid #333}
+.on-franchise-roster-head{color:#ffb376;font-size:10px;font-weight:900;letter-spacing:.1em}
+.on-franchise-player{font-size:13px}.on-franchise-player strong{color:#ffb376}
+.on-franchise-tabs{display:flex;gap:8px;margin:14px 0}
+.on-franchise-teams{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;max-height:55vh;overflow:auto}
+.on-franchise-teams span{padding:9px 11px;border:1px solid #343437;border-radius:10px;font-size:12px;background:rgba(10,10,10,.8)}
+.on-franchise-gm{border-bottom:1px solid #343434;padding:12px 0;font-size:13px}
+.on-franchise-gm small{display:block;color:#a5a0a0;margin-top:4px}
+.on-franchise-locked{border-top:1px solid #343434;margin-top:22px;padding-top:20px}
+.on-franchise-locked h3{font-size:16px;margin:10px 0}
+@media(max-width:900px){.on-franchise-top{align-items:start;flex-direction:column}.on-franchise-statline{grid-template-columns:1fr}.on-franchise-columns{grid-template-columns:1fr}}
+/* Online Home / lobby stay one-screen; the separate roster viewer may scroll on laptops. */
+.on-root:has(.on-franchise-page){height:100dvh;max-height:100dvh;overflow-y:auto}
+.on-online-home .on-existing-lobby[aria-label="Resume your shared NBA league"]{padding:10px 16px;min-height:0}
+.on-online-home .on-existing-lobby[aria-label="Resume your shared NBA league"] h2{margin:3px 0;font-size:16px}
+
+
+/* Phase 2B UI: same single-player Team Hub dashboard + sidebar, Online-only state. */
+.on-root.on-root-franchise{width:100%;height:100dvh;min-height:100dvh;max-height:100dvh;overflow:hidden;background:#050505}
+.bmOnlineGameShell{width:100%;height:100dvh;min-height:0;overflow:hidden;background:#050505;--bm-persistent-sidebar-width:clamp(210px,14.2vw,252px);--bm-online-panel-width:310px}
+.bmOnlineSidebar{z-index:65!important;background:#090909!important;background-image:none!important}
+.bmOnlineSidebar a{text-decoration:none}
+.bmOnlineGameCanvas{margin-left:var(--bm-persistent-sidebar-width);margin-right:var(--bm-online-panel-width);height:100dvh;min-width:0;overflow:hidden;position:relative;background:#050505}
+.bmOnlineGameCanvas .bm-page-fade{height:100%;min-height:0}
+.bmOnlineGmPanel{position:fixed;inset:0 0 0 auto;width:var(--bm-online-panel-width);height:100dvh;z-index:70;overflow-y:auto;color:#efefef;background:#0b0b0c;border-left:1px solid #313135;box-shadow:-8px 0 22px rgba(0,0,0,.28);padding:22px 16px 20px;transform:translateX(100%);transition:transform .2s ease}
+.bmOnlineGmPanelOpen{transform:translateX(0)}
+.bmOnlineGmHeader{display:flex;align-items:center;justify-content:space-between;font-size:23px;letter-spacing:-.05em;font-weight:900}
+.bmOnlineGmHeader small{font-size:13px;font-weight:800;color:#ffaf72}
+.bmOnlineGmSub{font-size:11px;color:#999;margin:7px 0 20px}
+.bmOnlineGmPlayer{display:flex;align-items:center;gap:10px;padding:13px 4px;border-bottom:1px solid #292929;font-size:12px}
+.bmOnlineGmPlayer>div{min-width:0}.bmOnlineGmPlayer b{overflow-wrap:anywhere}.bmOnlineGmPlayer em{font-style:normal;color:#ff9b59}.bmOnlineGmPlayer small{display:block;margin-top:6px;color:#adadad;font-size:11px}
+.bmOnlineGmDot{height:34px;width:34px;border-radius:50%;background:#202023;border:1px solid #38383a;display:grid;place-items:center;font-size:15px;color:#ffa85e;flex:0 0 34px}
+.bmOnlineGmOpenSlot{opacity:.53}
+.bmOnlineGmFooter{margin-top:22px;display:grid;gap:15px;font-size:11px;color:#aaa}.bmOnlineGmFooter a{color:#ffa66b;text-decoration:none}
+.bmOnlineGmToggle{position:fixed;right:var(--bm-online-panel-width);top:50%;transform:translateY(-50%);z-index:80;background:#111;color:#ffa45d;border:1px solid #75451f;border-radius:10px 0 0 10px;padding:20px 10px;box-shadow:0 6px 22px #0008}
+.bmOnlineGameShell:has(.bmOnlineGmToggle:not(.bmOnlineGmToggleOpen)) .bmOnlineGameCanvas{margin-right:0}
+.bmOnlineGameShell:has(.bmOnlineGmToggle:not(.bmOnlineGmToggleOpen)) .bmOnlineGmToggle{right:0}
+.bmOnlinePendingPage{padding:clamp(24px,5vw,72px);font-family:Inter,system-ui,sans-serif;min-height:100%;color:#fff;background:#080808}
+.bmOnlinePendingTag{font-size:11px;letter-spacing:.18em;color:#ffac6e;font-weight:900}
+.bmOnlinePendingPage h1{font-size:clamp(30px,3.8vw,54px);letter-spacing:-.05em;margin:16px 0}
+.bmOnlinePendingPage p{max-width:630px;color:#aaa;line-height:1.7}
+.bmOnlinePendingPage a{display:inline-block;margin-top:30px;color:#ffa66b}
+@media(max-width:1180px){.bmOnlineGameShell{--bm-online-panel-width:265px;--bm-persistent-sidebar-width:200px}}
+@media(max-width:800px){.bmOnlineGameShell{--bm-online-panel-width:260px;--bm-persistent-sidebar-width:190px}.bmOnlineGameCanvas{margin-right:0}.bmOnlineGmPanel{width:min(300px,80vw)}.bmOnlineGmToggle{right:0}.bmOnlineGmToggleOpen{right:min(300px,80vw)}}
+
+
+
+/* Phase 2B2: original read-only basketball pages inside isolated Online shell. */
+.bmOnlineReadOnlyScreen{display:flex;flex-direction:column;min-height:0;height:100%;background:#080808;color:#eee}
+.bmOnlineReadOnlyNotice{display:flex;align-items:center;gap:10px;min-height:32px;flex:0 0 auto;padding:6px 14px;border-bottom:1px solid #403026;background:#16120f;color:#f9ba84;font-size:11px;font-weight:700;letter-spacing:.01em}
+.bmOnlineReadOnlyScreenBody{min-height:0;flex:1;overflow:auto;position:relative;isolation:isolate}
+.bmOnlineReadOnlyScreenBody>*{min-height:0}
+.bmOnlineReadOnlyScreenBody .bm-page-fade{min-height:0;height:auto}
+.bmOnlineReadOnlyScreenBody::-webkit-scrollbar{width:8px}
+.bmOnlineReadOnlyScreenBody::-webkit-scrollbar-thumb{background:#cb6a25;border-radius:8px}
+.bmOnlineReadOnlyScreenBody{scrollbar-width:thin;scrollbar-color:#cb6a25 #141414}
+
+/* Phase 2B.3 Online Franchise Library — isolated from original single-player pages. */
+.on-franchise-library{height:calc(100dvh - 74px);min-height:0;max-height:calc(100dvh - 74px);overflow-y:auto;max-width:1530px;margin:0 auto;padding:24px clamp(18px,4vw,64px) 42px}
+.on-library-top{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:25px}
+.on-franchise-library h1{font-size:clamp(29px,4vw,52px);letter-spacing:-.055em;line-height:1.06;margin:9px 0 8px}
+.on-library-heading{display:flex;align-items:center;justify-content:space-between;gap:25px;margin-bottom:26px}
+.on-library-heading .on-sub{max-width:730px;color:#aaa;font-size:13px;line-height:1.55}
+.on-library-tally{display:grid;grid-template-columns:auto auto;gap:3px 12px;border:1px solid #333;border-radius:14px;background:rgba(8,8,8,.78);padding:13px 18px;min-width:150px}
+.on-library-tally b{color:#ff9e59;font-size:19px}.on-library-tally span{color:#999;font-size:11px;align-self:center}
+.on-library-toolbar{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:18px}
+.on-library-filter{display:flex;gap:8px}.on-library-filter button{padding:9px 14px;font-size:12px}
+.on-library-filter button.is-current{color:#ffb47d;border-color:#b76534;background:#21160f}
+.on-library-tip{font-size:11px;color:#999}
+.on-library-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.on-library-entry{min-width:0;border:1px solid #33343a;border-radius:14px;background:linear-gradient(180deg,rgba(24,24,25,.97),rgba(10,10,11,.97));padding:19px 20px;box-shadow:0 10px 28px #0004}
+.on-library-entry-head{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.on-library-entry-head>span:last-child{font-size:11px;color:#b4b4b4}
+.on-library-entry h2{font-size:25px;font-weight:900;letter-spacing:-.04em;margin:13px 0 4px;color:#fff}
+.on-library-date{color:#999;font-size:12px;margin:0 0 16px}
+.on-library-members{display:grid;gap:8px;padding:12px 0 16px;border-top:1px solid #313131}
+.on-library-members>span{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;font-size:12px}
+.on-library-members b{font-size:12px;color:#ececec}.on-library-members small{font-size:11px;color:#ffa568}
+.on-library-entry-actions{display:flex;gap:8px;flex-wrap:wrap}.on-library-entry-actions button{font-size:12px;padding:10px 15px}
+.on-library-empty{background:#101012;border:1px solid #383838;border-radius:14px;padding:34px;color:#aaa}
+.on-library-empty h2{color:#fff;margin:0 0 9px}.on-library-empty p{margin:0 0 12px}
+.on-library-empty a{color:#ffad77}.on-library-safety{margin-top:24px;font-size:11px;color:#9b9b9b;max-width:900px;line-height:1.6}
+.on-library-home-actions{display:flex;align-items:center;gap:9px}.on-library-home-actions .on-secondary{font-size:12px}
+@media(max-width:880px){.on-library-list{grid-template-columns:1fr}.on-franchise-library{padding:16px 14px 32px}.on-library-heading{align-items:flex-start;flex-direction:column}.on-library-tally{width:100%;max-width:220px}}
+@media(max-width:560px){.on-library-home-actions{flex-wrap:wrap}.on-library-home-actions .on-secondary,.on-library-home-actions .on-social-trigger{font-size:11px}.on-library-filter{flex-wrap:wrap}}
+
+/* PHASE 2B4B ONLINE COACH AND FREE AGENCY */
+/* PHASE 2B4B Online preview only. Scoped: never changes single-player layout. */
+.bmOnlinePreviewPage{height:100%;min-height:0;display:flex;flex-direction:column;overflow:hidden;padding:12px 15px 0;background:#080808;color:#f6f6f6;font-family:inherit}
+.bmOnlinePreviewHeader{display:grid;grid-template-columns:40px minmax(0,1fr) 40px;align-items:center;gap:12px;flex:none;min-height:52px;margin-bottom:7px}
+.bmOnlinePreviewHeader>button{background:transparent;border:0;color:#eee;cursor:pointer;font-size:17px}
+.bmOnlinePreviewHeader>button:hover{color:#f97316}
+.bmOnlinePreviewHeader>div{display:flex;justify-content:center;align-items:center;gap:10px;min-width:0}
+.bmOnlinePreviewHeader img{width:42px;height:42px;object-fit:contain}
+.bmOnlinePreviewHeader h1{font-size:clamp(17px,1.8vw,25px);font-weight:900;margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bmOnlinePreviewSub{font-size:11px;color:#ffad73;letter-spacing:.025em;margin:0 0 9px;flex:none}
+.bmOnlineCoachHero,.bmOnlineFreeHero{position:relative;display:flex;justify-content:space-between;align-items:center;gap:12px;border:1px solid #373737;background:linear-gradient(105deg,#141414,#0c0c0c);border-radius:13px 13px 0 0;padding:10px 15px;flex:none;min-height:118px;overflow:hidden}
+.bmOnlineCoachPlayer,.bmOnlineFreeHeroPlayer{display:flex;align-items:center;gap:15px;min-width:0}
+.bmOnlineCoachPortrait{width:120px!important;height:110px!important;min-width:100px;flex:none}
+.bmOnlineCoachPlayer h2,.bmOnlineFreeHeroPlayer h2{font-size:clamp(20px,2vw,29px);font-weight:900;margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bmOnlineCoachPlayer p,.bmOnlineFreeHeroPlayer p{font-size:13px;color:#ddd;font-weight:650;margin:4px 0}
+.bmOnlineFreeHeroPlayer span{color:#ffae77;font-size:11px;font-weight:850}
+.bmOnlineCoachHeroRight{display:flex;align-items:center;gap:12px;flex:none}
+.bmOnlineCoachMinutes{text-align:center;border:1px solid #343434;border-radius:9px;padding:10px 14px;min-width:130px}
+.bmOnlineCoachMinutes strong{font-size:21px;color:#ffad69;display:block}.bmOnlineCoachMinutes small{font-size:9px;letter-spacing:.06em;color:#aaa;display:block;margin-top:3px}
+.bmOnlineCoachTable,.bmOnlineFreeTable{flex:1;min-height:0;overflow:auto;border:1px solid #343434;border-top:0;background:rgba(7,7,7,.9);scrollbar-color:#ea580c #111;scrollbar-width:thin}
+.bmOnlineCoachTable table,.bmOnlineFreeTable table{width:100%;border-collapse:collapse;text-align:left;font-size:13px}
+.bmOnlineCoachTable thead th,.bmOnlineFreeTable thead th{position:sticky;top:0;z-index:2;background:#242424;color:#ddd;font-size:11px;letter-spacing:.04em;padding:10px 12px;font-weight:900}
+.bmOnlineCoachTable tbody td,.bmOnlineFreeTable tbody td{padding:9px 12px;border-bottom:1px solid #242424;font-weight:700;white-space:nowrap}
+.bmOnlineCoachTable tbody tr,.bmOnlineFreeTable tbody tr{cursor:pointer}
+.bmOnlineCoachTable tbody tr:hover,.bmOnlineFreeTable tbody tr:hover{background:#242424}
+.bmOnlineCoachTable tbody tr.bmOnlineCoachSelected,.bmOnlineFreeTable tbody tr.bmOnlineCoachSelected{background:#e95c0b;color:#fff}
+.bmOnlineCoachTable tbody tr.bmOnlineCoachSection{background:#1a1a1a;color:#ff9d46;cursor:default}
+.bmOnlineCoachMinutesCell{display:flex;align-items:center;gap:8px;justify-content:flex-end;min-width:125px}
+.bmOnlineCoachTrack{height:5px;width:min(110px,65%);background:#444;border-radius:10px;display:inline-block;overflow:hidden}
+.bmOnlineCoachTrack i{height:100%;display:block;background:#f97316;border-radius:10px}
+.bmOnlinePreviewFooter{min-height:48px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex:none;font-size:10px;color:#aaa;padding:8px 3px}
+.bmOnlinePreviewFooter button{background:#26190f;border:1px solid #70421f;border-radius:9px;color:#bb8357;padding:10px 13px;cursor:not-allowed;white-space:nowrap}
+.bmOnlineFreeTitle{display:flex;align-items:end;justify-content:space-between;gap:15px;min-height:52px;flex:none}
+.bmOnlineFreeTitle h1{font-size:30px;line-height:1;font-weight:900;color:#f97316;margin:0 0 9px}
+.bmOnlineFreeTitle span{font-size:11px;color:#aaa;margin-bottom:9px}
+.bmOnlineFreeStats{display:flex;align-items:center;gap:10px;flex:none;margin-bottom:9px}
+.bmOnlineFreeStats>span{display:flex;flex-direction:column;min-width:100px;padding:9px 13px;border-radius:9px;border:1px solid #333;background:#141414}
+.bmOnlineFreeStats small{font-size:9px;color:#aaa;font-weight:800;letter-spacing:.05em}.bmOnlineFreeStats b{font-size:15px;margin-top:4px;color:#ff9b50}
+.bmOnlineFreeHero{min-height:112px;border-radius:12px 12px 0 0}
+.bmOnlineFreeFilters{display:flex;gap:9px;border-left:1px solid #333;border-right:1px solid #333;padding:8px;background:#121212;flex:none}
+.bmOnlineFreeFilters input,.bmOnlineFreeFilters select{min-width:0;border:1px solid #3b3b3b;background:#090909;color:#f7f7f7;border-radius:7px;padding:9px 11px;font-size:12px}
+.bmOnlineFreeFilters input{flex:1}.bmOnlineFreeFilters select{width:110px}
+.bmOnlineFreeTable th:nth-child(n+3){cursor:pointer}.bmOnlineFreeTable th:nth-child(n+3):hover{color:#fa8337}
+.bmOnlinePreviewEmpty{flex:1;min-height:0;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;padding:32px;border:1px solid #373737;border-radius:12px;background:#101010;color:#ccc}
+.bmOnlinePreviewEmpty h2{color:#fff;font-size:20px;font-weight:850;margin:0 0 8px}.bmOnlinePreviewEmpty p{max-width:500px;color:#aaa;font-size:13px;line-height:1.7}
+@media(max-width:1100px){.bmOnlineCoachPortrait{width:88px!important;min-width:82px;height:95px!important}.bmOnlineCoachMinutes{min-width:100px}.bmOnlineCoachHero{padding:8px}}
+@media(max-width:650px){.bmOnlineCoachHeroRight{gap:3px}.bmOnlineCoachMinutes{display:none}.bmOnlineCoachTable table,.bmOnlineFreeTable table{min-width:620px}.bmOnlineFreeTitle span{display:none}.bmOnlineCoachPlayer h2{white-space:normal;font-size:20px}}
+

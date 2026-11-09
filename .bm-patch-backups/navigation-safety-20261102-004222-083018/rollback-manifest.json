@@ -1,0 +1,80 @@
+[
+  {
+    "path": "frontend/scripts/navigation-session-integrity.regression.mjs",
+    "existed": false,
+    "previous_sha256": null,
+    "installed_sha256": "4794307cb624901ba983938a3496c439dfa9a6e63f70ac5a65bd09f6dca6d168"
+  },
+  {
+    "path": "frontend/scripts/save-exit-cloud.regression.mjs",
+    "existed": true,
+    "previous_sha256": "c8646bd1941e8750c6adadee9e343ffad23d62ab2d5c1661962912ad5fb6beda",
+    "installed_sha256": "d9e9ea3609c5f733adea2f46dca8c7313f78e85b3b1023314019d696baa1aecf"
+  },
+  {
+    "path": "frontend/src/App.jsx",
+    "existed": true,
+    "previous_sha256": "67d69f4d5f4486929a0641fde9fe753bd0994d86aea5aa0be28271b8d8b57810",
+    "installed_sha256": "9553e13e52bfcfedb7a7d0b69ffdb56b2f3234031219361012e1328bb4769a66"
+  },
+  {
+    "path": "frontend/src/auth/AccountControls.jsx",
+    "existed": true,
+    "previous_sha256": "ea5018ad68a873a74a735ed5cc7943d25a1b0eef2819107d76c3ed2c345a7df6",
+    "installed_sha256": "48a7d7a653da64acca68a0e25ce804ca0790573af908cdca3b196a35f69186b7"
+  },
+  {
+    "path": "frontend/src/auth/AccountRoot.jsx",
+    "existed": true,
+    "previous_sha256": "7701fd38b6ea228c65838fb92f3b671cfee97ed9668d9479c6d5f70583ef7d86",
+    "installed_sha256": "13fdfd7fc3d98791d2a915a5d3af280dee7aa969c5034a059c8868a9b32ea27a"
+  },
+  {
+    "path": "frontend/src/components/TeamHubSidebar.jsx",
+    "existed": true,
+    "previous_sha256": "f7d18d65e4bd4bf737a22576925cf5e3e2bc839bc4aca367a8b9293f9b38722d",
+    "installed_sha256": "03da4459f963c667a0dc5736ebe0b00f448f6d1773b9095652cc3df8d08df080"
+  },
+  {
+    "path": "frontend/src/navigation/FranchiseRouteGate.jsx",
+    "existed": false,
+    "previous_sha256": null,
+    "installed_sha256": "3f3d33b18687f1bf62d156d0ad54c2d7c19151d8f52ffb1b4979f11f316b9bb7"
+  },
+  {
+    "path": "frontend/src/navigation/franchiseExit.js",
+    "existed": false,
+    "previous_sha256": null,
+    "installed_sha256": "a003eff8bd5f88a5c3d43a4754609a86bb0b44f8ce0bc17824ade9833cb811ce"
+  },
+  {
+    "path": "frontend/src/online/OnlineApp.jsx",
+    "existed": true,
+    "previous_sha256": "44118c5690945dd55ff0d08aa3d059eb99c339040d74091f471aeedbfd869b58",
+    "installed_sha256": "fd3942a80a335ed0889bc610deca71e5621ab9725d1155a120a10778d4577797"
+  },
+  {
+    "path": "frontend/src/pages/LeagueEditor.jsx",
+    "existed": true,
+    "previous_sha256": "be4a1cf3397a8a835c00839e223d782a7dff8be2ec85243e4e2da42a77d1bc78",
+    "installed_sha256": "258d57e8d1d16ba115cecd978ae24f601a6375c88085dc673d799967ec00cbaa"
+  },
+  {
+    "path": "frontend/src/pages/Play.jsx",
+    "existed": true,
+    "previous_sha256": "1dd2e349bd163f7b8226afcf179d01b3327958e7b02a3fdf1baeb0e25ddad769",
+    "installed_sha256": "2fbbf2beb540a5ead232dddcaca97c283306bf36a6c6dcff51ab7830de252887"
+  },
+  {
+    "path": "frontend/src/pages/SaveLocationSelect.jsx",
+    "existed": true,
+    "previous_sha256": "4f809ff5f8ac145a943c552d26bfc90f9fbfa1e0bc4aa0231791c137f3e3273a",
+    "installed_sha256": "ebda5438843a1f19bb209af5df7e87ca6dac97285363eb3202ccd197dc7847b3"
+  },
+  {
+    "path": "frontend/src/storage/leagueSaves.js",
+    "existed": true,
+    "previous_sha256": "d2e51dcb1af42110cba5427d4c5d682e53d559d41a29b258d201a77be7e5c6be",
+    "installed_sha256": "3d2a9dd6e9337c09d48906a995a0c7fc46653721942d453372ec1c8456a83eca"
+  }
+]

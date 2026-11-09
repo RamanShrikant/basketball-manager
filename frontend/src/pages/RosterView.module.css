@@ -319,3 +319,44 @@
     display: none !important;
   }
 }
+
+/* BM_WIDE_MONITOR_TABLE_FIT_V1_START */
+/* Roster, single-player AND Online. Apply only above laptop widths.
+   The original w-max inner wrapper and 88px min-width headers would make
+   20 attributes wider than large monitor panels. This allows the full table
+   to distribute across the available width while preserving readable
+   minimum space and the existing orange horizontal scrollbar if necessary.
+   Never modifies salary tables, portraits, global font sizes or row heights. */
+@media (min-width: 1500px) {
+  .rosterScroller > div {
+    box-sizing: border-box;
+    width: 100% !important;
+    min-width: max(100%, 1510px) !important;
+  }
+  .rosterScroller > div > table {
+    box-sizing: border-box;
+    width: 100% !important;
+    table-layout: fixed;
+  }
+  .rosterScroller > div > table thead th {
+    min-width: 0 !important;
+    padding-left: 5px !important;
+    padding-right: 5px !important;
+    white-space: nowrap;
+  }
+  .rosterScroller > div > table thead th.text-left {
+    width: clamp(185px, 11vw, 230px) !important;
+    text-align: left;
+  }
+  .rosterScroller > div > table tbody td {
+    padding-left: 5px !important;
+    padding-right: 5px !important;
+  }
+  .rosterScroller > div > table tbody td:first-child {
+    padding-left: 11px !important;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+/* BM_WIDE_MONITOR_TABLE_FIT_V1_END */

@@ -1,25 +1,19 @@
-// Checks that Save & Exit checkpoints local data, waits for sidecars, then
-// commits cloud before clearing active-slot ownership or navigating away.
-// Static guard only: run a real-device upload test before trusting remote saves.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-const sidebar = readFileSync(new URL("../src/components/TeamHubSidebar.jsx", import.meta.url), "utf8");
-const block = sidebar.split("  const confirmSaveAndExit = async () => {")[1]?.split("\n  };",1)[0];
-assert(block, "Save & Exit handler missing");
-const names = [
-  "await checkpointActiveLeagueSave(",
-  "await flushAllLeagueRuntimeWrites()",
-  "await uploadCloudSave(accountId, { force: true })",
-  "finishSaveAndExit()",
-];
-const positions = names.map(name => block.indexOf(name));
-assert(positions.every(x => x >= 0), "Save & Exit missing a required step");
-assert(positions.every((x,i) => i===0 || x>positions[i-1]), "Save & Exit steps in unsafe order");
-assert(block.includes('getAccountSaveMode(accountId) === "cloud"'), "Local Save & Exit must NEVER upload");
-assert(block.includes("setExitCloudWarning(detail)"), "Cloud failure must prompt user");
-assert(block.includes("bm_pending_calendar_sim_v1") && block.includes("bm_pending_postseason_sim_v1"), "Save & Exit must not cloud-publish unfinished simulations");
-assert(block.includes("return; // Keep the user here"), "Cloud failure must block automatic exit");
-assert(sidebar.includes("Exit locally"), "Explicit offline exit is missing");
-const finish = sidebar.split("  const finishSaveAndExit = () => {")[1]?.split("\n  };",1)[0];
-assert(finish && finish.indexOf("clearActiveLeagueSaveId()") < finish.indexOf('navigate("/league-editor")'));
-console.log("PASS: Save & Exit checkpoints local state, awaits cloud, preserves offline fallback");
+const read = rel => readFileSync(new URL(rel, import.meta.url), "utf8");
+const sidebar = read("../src/components/TeamHubSidebar.jsx");
+const exit = read("../src/navigation/franchiseExit.js");
+const checkpoint = read("../src/storage/leagueSaves.js");
+assert.match(sidebar, /saveFranchiseForExit\(/, "Save & Exit must use shared save orchestration");
+assert.match(sidebar, /exitToLeagueSlots\(/, "Exit must return to safe save-slot launcher");
+assert.doesNotMatch(sidebar.split("  const finishSaveAndExit = () => {")[1].split("\n  };")[0], /league-editor/, "Save & Exit cannot open League Editor");
+assert.match(exit, /await flushAllLeagueRuntimeWrites\(\);\s*const saved = await checkpointActiveLeagueSave/);
+assert.match(exit, /const verified = await getLeagueSave\(id\)/);
+assert.match(exit, /verified\.updatedAt !== saved\.updatedAt/);
+assert.match(exit, /getAccountSaveMode\(accountId\) === "cloud"/);
+assert.match(exit, /status: "cloud-failed"/);
+assert.match(exit, /assertFranchiseSimulationPaused\(\)/);
+assert.match(checkpoint, /refusing to create a replacement implicitly/);
+assert.match(sidebar, /Exit locally/);
+assert.match(sidebar, /Recover to empty slot/);
+console.log("PASS: Save & Exit verifies local checkpoint, handles cloud-offline, and never silently creates or overwrites slots");

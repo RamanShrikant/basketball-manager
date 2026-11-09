@@ -1,0 +1,70 @@
+{
+  "id": "bm-online-sql-source-sync-20261108",
+  "base": "full local source ZIP 1,346 files",
+  "scope": "8 SQL source migrations + 1 new backend regression test; no DB/UI/Git writes",
+  "files": [
+    {
+      "path": "supabase/bm_online_trade_deadline_phase2d2d.sql",
+      "action": "replace",
+      "before_sha256": "47E4D3AC6B39D433F2F33C3F4BE623504C697BAD370AF738A417507D301D4A1A",
+      "after_sha256": "E4328DC18D77DBD185F6BC8513CA31332C038B5FD4FEBAC5FEE5FED02A7B552F",
+      "changes": 2
+    },
+    {
+      "path": "supabase/bm_online_all_stars_phase2d2e.sql",
+      "action": "replace",
+      "before_sha256": "01B0B69ABABDC0AC895B60D326FFA3369AA98A4F0F766348F071BDC7B8636C2D",
+      "after_sha256": "04B2AA80364D2095F13957C1EF027DA3498677D5E67E34EA8E4159787FC36104",
+      "changes": 1
+    },
+    {
+      "path": "supabase/bm_online_veteran_extensions_phase2d2f.sql",
+      "action": "replace",
+      "before_sha256": "98E58F9C69B08D816CF4F73D5267DABE2D789BA80EB133C74908285DE732EFBD",
+      "after_sha256": "D5C3D0D0D0FE798D6213FCF83D50CAC5BD900BC7457FC34E9DEA5794F30E4C64",
+      "changes": 3
+    },
+    {
+      "path": "supabase/bm_online_playin_phase2d3a.sql",
+      "action": "replace",
+      "before_sha256": "51FEFD86A3649011C66ECFC43B1E641BD3E4E0EB8489366D4103D6D4E29B249F",
+      "after_sha256": "99C59C0E0112305217EA179AB3156BBA984A867B7C208A65C42EFF33125D4C94",
+      "changes": 1
+    },
+    {
+      "path": "supabase/bm_online_rookie_signings_phase2e3a.sql",
+      "action": "replace",
+      "before_sha256": "3E3538AC95737C5837A137E0ACFEB032D478022E746032834341775F17AE9672",
+      "after_sha256": "A0450CBF968D9D1D3065FED3B9ADDC7A1CF6D85DDCBE36F2D2E9990B716D1657",
+      "changes": 2
+    },
+    {
+      "path": "supabase/bm_online_retirements_phase2e3b.sql",
+      "action": "replace",
+      "before_sha256": "09513B5E9878239E65FA4B14935B5950C0B59F2A92CC6FA1A746B92258F0E9BD",
+      "after_sha256": "B86FA90E68E9E5B510F00B78BACB3E128D9F5A70C099CBEB60BF4F5F8D8237E9",
+      "changes": 3
+    },
+    {
+      "path": "supabase/bm_online_options_phase2e4a.sql",
+      "action": "replace",
+      "before_sha256": "812F284BD2E7842F1FE9EB8EB70D01C1FDDCA5D689121C8EF1E1549D41F52D84",
+      "after_sha256": "67AFCC78F8B89FA21D06B0C08CAF6F36C4822B21DE4ECC55CEAD2FD7B74DDAAA",
+      "changes": 1
+    },
+    {
+      "path": "supabase/bm_online_offseason_market_resolution_phase2e4c2.sql",
+      "action": "replace",
+      "before_sha256": "8D0993001CF8307F681C9C4B5C30806BB93AAFC847C5E13A4C4F88F7C18096DD",
+      "after_sha256": "20769D75D798002F062C9F3C290926E74096AE3E479849A15DDE957AB1619E78",
+      "changes": 1
+    },
+    {
+      "path": "backend/tests/onlineRecoveredSqlSource.g3c.test.mjs",
+      "action": "add",
+      "before_sha256": null,
+      "after_sha256": "ABA8CBD30AA2F482DFC39E4E2ABB56B3DD5AE86BA58CDF16BD4052023925B74E",
+      "changes": 1
+    }
+  ]
+}

@@ -1,6 +1,7 @@
 // Read-only shared NBA league access. Never imports game simulation, GameContext or browser saves.
 import { supabase } from "../auth/supabaseClient.js";
 import { extractTeams } from "./onlineApi.js";
+import { validateOnlineStartingSeed } from "./onlineSeedIntegrity.mjs";
 
 const fail = error => { if (error) throw new Error(error.message || String(error)); };
 
@@ -37,7 +38,9 @@ export async function loadHostSeed(lobby) {
 }
 
 export async function launchSharedFranchise(lobby) {
-  const seed = await loadHostSeed(lobby);
+  // Never trust a storage upload or a waiting lobby as playable.
+  // The launch RPC has a separate authoritative database constraint.
+  const seed = validateOnlineStartingSeed(await loadHostSeed(lobby));
   const { data, error } = await supabase.rpc("bm_launch_online_franchise", {
     p_lobby: lobby.id, p_seed: seed,
   });

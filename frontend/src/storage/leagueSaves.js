@@ -312,7 +312,15 @@ export async function updateLeagueSaveSnapshot(saveId, { leagueName, leagueData,
   const id = String(saveId || "").trim();
   if (!id || !leagueHasTeams(leagueData)) return null;
   return enqueueSaveMutation(async () => {
-    const existing = (await getLeagueSave(id)) || {};
+    const existing = await getLeagueSave(id);
+    if (!existing?.snapshot?.leagueData) {
+      throw new Error("Save slot missing or incomplete; refusing to create a replacement implicitly.");
+    }
+    const previousIdentity = String(existing.snapshot.leagueData?.__leagueStorageId || "").trim();
+    const incomingIdentity = String(leagueData?.__leagueStorageId || "").trim();
+    if (previousIdentity && incomingIdentity && previousIdentity !== incomingIdentity) {
+      throw new Error("Active league identity differs from its saved slot. Refusing to overwrite another franchise.");
+    }
     const now = new Date().toISOString();
     const record = buildSaveRecord({
       existing,

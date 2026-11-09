@@ -58,10 +58,11 @@ export function AccountControls({ user }) {
     try {
       if (activeBrowserAccountId() !== user.id) throw new Error("Another account became active. Reload before signing out.");
       if (getActiveLeagueSaveId() && leagueData) {
-        await checkpointActiveLeagueSave({
+        const record = await checkpointActiveLeagueSave({
           leagueData, selectedTeamName: selectedTeam?.name || "",
           source: "account_sign_out", savedRoute: window.location.pathname,
         });
+        if (!record) throw new Error("Active franchise save is missing. Sign-out aborted to protect your progress.");
       }
       await flushAllLeagueRuntimeWrites();
       await checkpointAccount(user.id);

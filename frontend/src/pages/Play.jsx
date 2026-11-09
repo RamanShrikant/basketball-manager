@@ -450,12 +450,28 @@ export default function Play() {
     return normalized;
   };
 
+  // The launcher can retain a live cache after an exit. It is safe only if
+  // that exact league identity is already present in a persisted save slot.
+  // Without this check, starting/resuming another game could erase an orphan.
+  const assertNoUnlinkedLauncherLeague = async () => {
+    if (getActiveLeagueSaveId() || !leagueData) return;
+    const teams = Array.isArray(leagueData?.teams) ? leagueData.teams
+      : leagueData?.conferences ? Object.values(leagueData.conferences).flat() : [];
+    if (!teams.length) return;
+    const identity = String(leagueData?.__leagueStorageId || "").trim();
+    const slots = await listLeagueSaves();
+    if (identity && slots.some(slot =>
+      String(slot?.snapshot?.leagueData?.__leagueStorageId || "").trim() === identity)) return;
+    throw new Error("Unlinked live franchise detected. Recover or export it before starting or switching saves.");
+  };
+
   const beginNewLeagueSetup = async (slotIndex = null) => {
     if (startingGame || loadingSaveId) return;
     setStartingGame(true);
     setError("");
     setSavesError("");
     try {
+      await assertNoUnlinkedLauncherLeague();
       const existingSaves = await listLeagueSaves();
       const requestedSlotIndex = Number(slotIndex);
       if (!Number.isInteger(requestedSlotIndex) || requestedSlotIndex < 0 || requestedSlotIndex >= modeSlotLimit) {
@@ -466,11 +482,12 @@ export default function Play() {
       }
 
       if (getActiveLeagueSaveId() && leagueData) {
-        await checkpointActiveLeagueSave({
+        const checkpoint = await checkpointActiveLeagueSave({
           leagueData,
           selectedTeamName: selectedTeam?.name || "",
           source: "Play.beginNewLeagueSetup",
         });
+        if (!checkpoint) throw new Error("The active league could not be saved. Recover it before starting a new one.");
       }
 
       clearActiveLeagueSaveId();
@@ -566,13 +583,15 @@ export default function Play() {
     setLoadingSaveId(saveId);
     setSavesError("");
     try {
+      await assertNoUnlinkedLauncherLeague();
       const activeId = getActiveLeagueSaveId();
       if (activeId && leagueData) {
-        await checkpointActiveLeagueSave({
+        const checkpoint = await checkpointActiveLeagueSave({
           leagueData,
           selectedTeamName: selectedTeam?.name || "",
           source: activeId === saveId ? "Play.resumeActiveSave" : "Play.beforeSaveSwitch",
         });
+        if (!checkpoint) throw new Error("The current league save could not be verified. Do not switch yet.");
       }
 
       const { resumeRoute } = await restoreLeagueSaveToActive(saveId);
@@ -648,6 +667,8 @@ export default function Play() {
     }
   };
 
+  const hasOrphanWarning = /Unlinked live franchise/i.test(savesError || error);
+
   const visibleSaveSlots = useMemo(
     () => buildVisibleLeagueSaveSlots(saveSlots, modeSlotLimit),
     [saveSlots, modeSlotLimit]
@@ -692,7 +713,11 @@ export default function Play() {
             </div>
             <div className="flex shrink-0 items-center gap-2">
               {cloudMode && saveSlots.length > 0 && <CloudSaveStatus />}
-              <button type="button" className={`${quietButton} px-3 py-2 text-[11px]`} onClick={() => navigate("/singleplayer")}>← Save Location</button>
+              <button type="button" className={`${quietButton} px-3 py-2 text-[11px]`} onClick={async () => {
+                try { await assertNoUnlinkedLauncherLeague(); navigate("/game-modes"); }
+                catch (error) { setSavesError(error?.message || "Cannot leave an unsaved game."); }
+              }}>← Game Modes</button>
+              <button type="button" className={`${quietButton} px-3 py-2 text-[11px]`} onClick={() => navigate("/singleplayer")}>Save Location</button>
               <div className="flex items-center gap-1.5">
                 <button
                   type="button"
@@ -726,7 +751,9 @@ export default function Play() {
           </header>
 
           {savesError && (
-            <p className="shrink-0 rounded-lg border border-red-500/25 bg-red-500/10 px-3 py-2 text-xs font-bold text-red-200">{savesError}</p>
+            <p className="shrink-0 rounded-lg border border-red-500/25 bg-red-500/10 px-3 py-2 text-xs font-bold text-red-200">
+              {savesError} {hasOrphanWarning && <button type="button" className="ml-2 underline" onClick={() => navigate("/team-hub")}>Open Recovery →</button>}
+            </p>
           )}
 
           <main className={cloudMode ? "grid min-h-0 flex-1 grid-cols-1 gap-3 sm:max-w-[340px]" : "grid min-h-0 flex-1 grid-cols-5 grid-rows-2 gap-3"}>

@@ -1,0 +1,20 @@
+{
+  "basic_offer": {
+    "sourceFile": "bm_online_human_trades_phase2c2d2.sql",
+    "function": "bm_online_offer_human_trade",
+    "args": "uuid,uuid,bigint,text,text[],text[]",
+    "baselineMd5": "98393b5cf7e176972338f427c29d703b"
+  },
+  "asset_offer": {
+    "sourceFile": "bm_online_human_pick_trades_phase2c2d3b.sql",
+    "function": "bm_online_offer_human_asset_trade",
+    "args": "uuid,uuid,bigint,text,text[],text[],text[],text[]",
+    "baselineMd5": "6323a1a36cb9f68b3d8f975e3a2965ed"
+  },
+  "response": {
+    "sourceFile": "bm_online_human_pick_trades_phase2c2d3b.sql",
+    "function": "bm_online_respond_human_trade",
+    "args": "uuid,uuid,uuid,bigint,text",
+    "baselineMd5": "b02c239e73ce858600d18695bfc43a26"
+  }
+}

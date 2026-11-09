@@ -1,0 +1,23 @@
+// Read-only source contract validation; no browser/server start or database calls.
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {firstBlockedOnlineCheckpoint,planOnlineSimToDate} from '../src/online/onlineSimulationCheckpoints.mjs';
+const read=path=>readFileSync(new URL(`../../${path}`,import.meta.url),'utf8');
+const schedule=read('frontend/src/online/OnlineSeasonSchedule.jsx');
+const checkpoint=read('frontend/src/online/OnlineTradeDeadlineCheckpoint.jsx');
+const backend=read('backend/onlineTradeDeadline.js');
+const trades=read('frontend/src/online/OnlineHumanTradeRoom.jsx');
+const cpu=read('backend/onlineCpuTrades.js');
+const s={seasonStartYear:2026,onlineSchedule:{seasonYear:2026,phase:'regular-season',byDate:{'2027-02-05':[{id:'a',date:'2027-02-05',home:'A',away:'B'}], '2027-02-22':[{id:'b',date:'2027-02-22',home:'C',away:'D'}]}},onlineResults:{}};
+assert.equal(planOnlineSimToDate(s,'2027-03-01').blocked.kind,'trade_deadline');
+s.onlineCheckpoints={trade_deadline:{status:'closed',date:'2027-02-04',seasonYear:2026,revision:9}};
+assert.deepEqual(planOnlineSimToDate(s,'2027-03-01').days,['2027-02-05']);
+assert.equal(firstBlockedOnlineCheckpoint(s,'2027-02-22').kind,'all_star');
+for(const phrase of ['OnlineTradeDeadlineCheckpoint','nextCheckpoint?.kind','onAccepted={onAccepted}','isHost={isHost}'])assert.ok(schedule.includes(phrase),phrase);
+for(const phrase of ['crypto.randomUUID','sessionStorage','expectedRevision','getSession','Confirm closure','Finalize trade deadline','disabled={busy||disabled}'])assert.ok(checkpoint.includes(phrase),phrase);
+for(const phrase of ['evaluateTradeDeadlineReadiness','/rpc/bm_online_close_trade_deadline_phase2d2d','host_id','request_id=eq.','lobbyId','expectedRevision'])assert.ok(backend.includes(phrase),phrase);
+for(const phrase of ['tradeClosed','disabled={busy||tradeClosed','decision===\'accept\''])assert.ok(trades.includes(phrase),phrase);
+assert.ok(cpu.includes('The Online trade deadline is closed for this season.'));
+assert.ok(!checkpoint.includes('localStorage.setItem'));
+assert.ok(!checkpoint.includes('setLeagueData('));
+console.log('PASS: host trade-deadline checkpoint, authoritative completion, inbox and CPU lock, protected sim progression');

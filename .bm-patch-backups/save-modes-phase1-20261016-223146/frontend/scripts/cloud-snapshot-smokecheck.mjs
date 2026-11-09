@@ -1,0 +1,31 @@
+// Static integration guard; execution integration still requires two real browsers.
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+
+const root = path.resolve(import.meta.dirname, "..");
+const read = p => fs.readFileSync(path.join(root, p), "utf8");
+const vault = read("src/auth/accountLocalVault.js");
+const account = read("src/auth/AccountRoot.jsx");
+const client = read("src/auth/cloudSaveClient.js");
+const game = read("src/game/BasketballManagerGame.jsx");
+const bridge = read("src/game/CloudAutosaveBridge.jsx");
+const app = read("src/App.jsx");
+const registry = read("src/storage/saveStorageRegistry.js");
+assert.match(vault, /captureAccountCloudSnapshot/);
+assert.match(vault, /restoreAccountCloudSnapshot/);
+assert.match(vault, /prepareCloudRestoreDatabases/);
+assert.match(vault, /recoverInterruptedSwitch/);
+assert.match(account, /cloudStartupDecision/);
+assert.match(account, /restoreCloudSave/);
+assert.match(account, /cloud-choice/);
+assert.match(client, /p_expected_revision/);
+assert.match(client, /Cloud save changed elsewhere/);
+assert.match(client, /CompressionStream/);
+assert.match(game, /CloudAutosaveBridge/);
+assert.match(bridge, /checkpointActiveLeagueSave/);
+assert.match(registry, /bm_cloud_sync_v1_/);
+assert.match(app, /AccountOnPlayOnly/);
+assert.doesNotMatch(game, /<AccountControls user=/);
+assert.doesNotMatch(read("src/main.jsx"), /import .*GameProvider/);
+console.log("PASS: separate cloud snapshot bridge, conflict guard, safe restore and account chip on Play only");

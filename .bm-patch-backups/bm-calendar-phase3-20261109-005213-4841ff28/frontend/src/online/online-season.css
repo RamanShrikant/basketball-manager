@@ -1,0 +1,141 @@
+/* Phase 2B.5 Online-only season views. Does not override the single-player calendar. */
+.bmOnlineSeasonPage{height:100%;min-height:0;display:flex;flex-direction:column;background:#0a0a0a;color:#f5f5f5;padding:clamp(12px,2vw,23px);gap:12px;overflow:hidden}
+.bmOnlineSeasonHeading{display:flex;align-items:center;justify-content:space-between;gap:18px;flex:none;border-bottom:1px solid #2e2e2e;padding-bottom:17px}
+.bmOnlineSeasonEyebrow{font-size:10px;font-weight:950;letter-spacing:.16em;color:#ff9e53}
+.bmOnlineSeasonHeading h1{font-size:clamp(27px,3.1vw,45px);font-weight:900;letter-spacing:-.035em;margin:7px 0 4px;line-height:1.05;color:#fff}
+.bmOnlineSeasonHeading p{color:#a9a9a9;font-size:12px;margin:0;line-height:1.55}
+.bmOnlineSeasonSummary{border:1px solid #383838;border-radius:12px;padding:13px 17px;background:#161616;min-width:170px;display:grid;gap:2px;flex-shrink:0}
+.bmOnlineSeasonSummary small{color:#a5a5a5;font-size:9px;letter-spacing:.1em;font-weight:900}
+.bmOnlineSeasonSummary strong{color:#ff9b4c;font-size:22px;font-weight:900;line-height:1.3}
+.bmOnlineSeasonSummary span{color:#aaa;font-size:10px}
+.bmOnlineSeasonToolbar{flex:none;display:flex;justify-content:space-between;align-items:center;gap:13px;min-height:38px}
+.bmOnlineSeasonTabs{display:flex;align-items:center;gap:8px}.bmOnlineSeasonTabs button,.bmOnlineSeasonToolbar select{border:1px solid #444;border-radius:8px;color:#ddd;background:#191919;padding:9px 14px;font-size:12px;font-weight:800;cursor:pointer}
+.bmOnlineSeasonTabs button.active{background:#24180f;color:#ffad74;border-color:#b26429}.bmOnlineSeasonTabs button:hover{border-color:#b26429}
+.bmOnlineSeasonToolbar label{font-size:11px;color:#aaa;display:flex;align-items:center;gap:8px}
+.bmOnlineSeasonScroll{flex:1;min-height:0;overflow:auto;scrollbar-width:thin;scrollbar-color:#e87928 #111;padding-right:7px}
+.bmOnlineSeasonDate{border:1px solid #313131;border-radius:12px;background:#121212;margin-bottom:12px;overflow:hidden}
+.bmOnlineSeasonDate h2{margin:0;font-size:12px;font-weight:950;letter-spacing:.02em;color:#f5f5f5;padding:13px 15px;background:#1a1a1a;border-bottom:1px solid #343434;display:flex;justify-content:space-between}.bmOnlineSeasonDate h2 span{color:#888;font-size:10px;font-weight:700}
+.bmOnlineSeasonGameList{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 10px;padding:0 8px}
+.bmOnlineSeasonGame{padding:11px 7px;min-width:0;display:flex;justify-content:space-between;align-items:center;gap:15px;border-bottom:1px solid #2a2a2a}
+.bmOnlineSeasonMatchup{display:flex;gap:9px;align-items:center;min-width:0}.bmOnlineSeasonMatchup>div{display:flex;gap:7px;align-items:center;min-width:0}.bmOnlineSeasonMatchup img{width:27px;height:27px;object-fit:contain}.bmOnlineSeasonMatchup span{font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:800}.bmOnlineSeasonMatchup b{font-size:9px;color:#f18d3e}
+.bmOnlineSeasonResult{flex:none;display:grid;justify-items:end;gap:2px}.bmOnlineSeasonResult strong{font-size:13px}.bmOnlineSeasonResult small{font-size:9px;color:#aaa;font-weight:900;letter-spacing:.06em}
+.bmOnlineSeasonEmpty{flex:1;min-height:0;border:1px solid #393939;border-radius:14px;background:linear-gradient(140deg,#151515,#090909);display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;padding:35px;gap:11px}
+.bmOnlineSeasonEmptyMark{font-size:56px;color:#333;font-weight:1000;letter-spacing:-.1em;line-height:1}
+.bmOnlineSeasonEmpty h2{font-size:24px;font-weight:900;margin:0;color:#fff}.bmOnlineSeasonEmpty p{max-width:620px;color:#bbb;font-size:13px;line-height:1.65;margin:0}.bmOnlineSeasonEmpty span{color:#ffb07d;font-size:11px;margin-top:10px}
+.bmOnlineSeasonFooter{font-size:10px;color:#969696;padding-top:9px;border-top:1px solid #2b2b2b;flex:none}
+.bmOnlineBracketScroll{display:grid;grid-template-columns:minmax(0,1fr);gap:15px}.bmOnlineBracketConferences{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:13px}
+.bmOnlineConference{border:1px solid #363636;background:#131313;border-radius:14px;padding:14px;min-width:0}.bmOnlineConference h2{font-size:17px;font-weight:900;margin:0 0 14px;color:#fff}
+.bmOnlineBracketRounds{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px}.bmOnlineBracketRound{min-width:0}.bmOnlineBracketRound h3,.bmOnlinePlayInNode h3{color:#ffb07d;font-size:10px;letter-spacing:.06em;font-weight:900;margin:0 0 8px}.bmOnlineBracketRound>p{font-size:11px;color:#888}
+.bmOnlineSeries{border:1px solid #343434;border-radius:9px;overflow:hidden;background:#0c0c0c;margin-bottom:8px}.bmOnlineSeries header{padding:7px 9px;background:#242424;color:#bcbcbc;font-size:9px;font-weight:900;letter-spacing:.05em}
+.bmOnlineSeriesTeam{display:flex;align-items:center;min-width:0;gap:6px;padding:7px}.bmOnlineSeriesTeam small{color:#888;font-size:9px;min-width:12px}.bmOnlineSeriesTeam img{width:23px;height:23px;object-fit:contain}.bmOnlineSeriesTeam strong{font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}.bmOnlineSeriesTeam strong.pending{color:#888}.bmOnlineSeriesTeam span{color:#ffad6a;font-size:11px;font-weight:900}
+.bmOnlineFinals{border:1px solid #5d3921;background:#16110e;border-radius:13px;padding:15px;max-width:380px;margin:0 auto;width:100%}.bmOnlineFinals h2{font-size:15px;text-align:center;color:#ff9b51;margin:0 0 10px}.bmOnlineFinals p{font-size:13px;text-align:center;color:#ffb77e;font-weight:900}.bmOnlinePlayInGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-content:start;gap:13px}.bmOnlinePlayInNode{border:1px solid #333;border-radius:9px;background:#0c0c0c;padding:13px;margin-bottom:9px}.bmOnlinePlayInNode p{font-size:12px;font-weight:800}.bmOnlinePlayInNode b{color:#ffa05b;font-size:9px}
+@media(max-width:1100px){.bmOnlineBracketConferences,.bmOnlinePlayInGrid,.bmOnlineSeasonGameList{grid-template-columns:1fr}.bmOnlineBracketRounds{grid-template-columns:1fr}.bmOnlineSeasonHeading p{max-width:420px}}
+@media(max-width:650px){.bmOnlineSeasonPage{padding:10px}.bmOnlineSeasonHeading{align-items:stretch;flex-direction:column;gap:10px}.bmOnlineSeasonSummary{min-width:0}.bmOnlineSeasonHeading h1{font-size:27px}}
+
+/* Phase 2D.1 — restrained host-only calendar control */
+.bmOnlineSeasonHostControls{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:13px 16px;background:#15110f;border:1px solid #6c3c22;border-radius:12px}
+.bmOnlineSeasonHostControls>div:first-child{min-width:0}.bmOnlineSeasonHostControls small{display:block;font-size:9px;font-weight:900;letter-spacing:.14em;color:#f9a66f;margin-bottom:5px}.bmOnlineSeasonHostControls strong{display:block;font-size:13px;font-weight:900;color:#fff}.bmOnlineSeasonHostControls p{font-size:11px;color:#b9aba1;line-height:1.5;margin:5px 0 0;max-width:620px}.bmOnlineSeasonHostControls button{border:1px solid #ac5b27;border-radius:8px;background:#28201a;color:#ffb780;padding:9px 14px;cursor:pointer;white-space:nowrap;font-size:11px;font-weight:900}.bmOnlineSeasonHostControls button.primary{background:#b65b21;color:white}.bmOnlineSeasonHostControls button:disabled{opacity:.5;cursor:wait}.bmOnlineSeasonHostActions{display:flex;gap:7px}.bmOnlineSeasonActionError{padding:10px;border:1px solid #923b32;background:#341815;border-radius:8px;color:#fbb;font-size:11px;margin:0}.bmOnlineSeasonActionError button{margin-left:8px;color:#ffcfaa;background:none;border:0;cursor:pointer;text-decoration:underline}
+@media(max-width:900px){.bmOnlineSeasonHostControls{flex-direction:column;align-items:stretch}.bmOnlineSeasonHostControls>button,.bmOnlineSeasonHostActions button{flex:1}}
+
+/* Online calendar 2D.2: restrained box-score presentation, independently scrollable. */
+.bmOnlineSeasonBoxLink{background:transparent;border:0;color:#ffb77c;cursor:pointer;text-decoration:underline;text-underline-offset:3px;font-size:11px;padding:3px 0}
+.bmOnlineSeasonModalScrim{position:fixed;inset:0;z-index:2000;background:rgba(4,7,12,.84);display:flex;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(7px)}
+.bmOnlineSeasonBoxModal{width:min(1100px,100%);max-height:85vh;overflow:auto;border-radius:12px;border:1px solid rgba(231,153,97,.25);background:#10141d;color:#f4f5f7;box-shadow:0 22px 70px rgba(0,0,0,.55);padding:22px}
+.bmOnlineSeasonBoxHeader{display:flex;align-items:flex-start;justify-content:space-between;gap:15px}.bmOnlineSeasonBoxHeader small{color:#e9a270;font-size:10px;letter-spacing:1.3px}.bmOnlineSeasonBoxHeader h2{font-size:20px;margin:8px 0}.bmOnlineSeasonBoxHeader p{color:#aab1bd;font-size:12px;margin:0}.bmOnlineSeasonBoxHeader button{background:transparent;border:1px solid #394150;border-radius:7px;color:#ccd0d8;padding:7px 11px;cursor:pointer}
+.bmOnlineSeasonBoxTableWrap{margin-top:23px;overflow-x:auto}.bmOnlineSeasonBoxTableWrap h3{font-size:14px;margin-bottom:10px;color:#f0b181}.bmOnlineSeasonBoxTableWrap table{width:100%;border-collapse:collapse;white-space:nowrap;font-size:12px}.bmOnlineSeasonBoxTableWrap th{text-align:right;font-size:10px;color:#929ba9;padding:8px 6px;border-bottom:1px solid #343944}.bmOnlineSeasonBoxTableWrap th:first-child,.bmOnlineSeasonBoxTableWrap td:first-child{text-align:left}.bmOnlineSeasonBoxTableWrap td{text-align:right;padding:8px 6px;border-bottom:1px solid rgba(255,255,255,.055)}
+@media(max-width:700px){.bmOnlineSeasonModalScrim{padding:6px}.bmOnlineSeasonBoxModal{padding:14px;max-height:90vh}.bmOnlineSeasonBoxHeader h2{font-size:16px}}
+
+/* Phase 2D.2-C — compact, online-only batch controls; no single-player calendar overrides. */
+.bmOnlineSeasonBatchPanel{display:flex;flex-wrap:wrap;gap:12px 20px;align-items:center;padding:13px 16px;border:1px solid #3d322a;border-radius:12px;background:#111315;flex:none}
+.bmOnlineSeasonBatchIntro{flex:1 1 250px;min-width:0}.bmOnlineSeasonBatchIntro small{display:block;font-size:9px;color:#e9a270;letter-spacing:.13em;font-weight:900}.bmOnlineSeasonBatchIntro strong{display:block;font-size:14px;margin-top:4px}.bmOnlineSeasonBatchIntro p{font-size:11px;color:#aeb2ba;line-height:1.55;margin:5px 0 0;max-width:580px}
+.bmOnlineSeasonBatchActions{display:flex;gap:8px;align-items:end;flex-wrap:wrap}.bmOnlineSeasonBatchActions label{display:flex;flex-direction:column;gap:5px;color:#aeb2ba;font-size:9px;font-weight:850;letter-spacing:.07em}.bmOnlineSeasonBatchActions input{height:35px;background:#1c2026;border:1px solid #48505a;border-radius:7px;color:#f5f5f5;padding:5px 8px;font:inherit;font-size:12px;color-scheme:dark}.bmOnlineSeasonBatchActions button,.bmOnlineSeasonBatchFoot button{border:1px solid #764a32;background:#2b211c;color:#ffd0aa;padding:9px 11px;border-radius:7px;font-size:11px;font-weight:800;cursor:pointer;white-space:nowrap}.bmOnlineSeasonBatchActions button.primary{background:#9f5024;color:#fff}.bmOnlineSeasonBatchActions button:disabled{opacity:.45;cursor:not-allowed}.bmOnlineSeasonBatchConfirm{display:flex;gap:7px}
+.bmOnlineSeasonBatchFoot{flex:1 0 100%;display:flex;align-items:center;gap:7px 16px;flex-wrap:wrap;color:#aaa;font-size:10px;line-height:1.4}.bmOnlineSeasonBatchFoot .warning{color:#ffad83}.bmOnlineSeasonBatchFoot button{font-size:10px;padding:3px 7px}.bmOnlineSeasonBatchBar{flex:1 1 100px;height:4px;background:#333;border-radius:100px;overflow:hidden}.bmOnlineSeasonBatchBar>div{height:100%;background:#e98640;transition:width .2s ease}
+@media(max-width:900px){.bmOnlineSeasonBatchActions{width:100%}.bmOnlineSeasonBatchActions label{flex:1}.bmOnlineSeasonBatchActions input{width:100%;min-width:130px}.bmOnlineSeasonBatchPanel{gap:10px}}
+
+/* Phase 2D.2-D — one restrained, shared trade-deadline checkpoint. */
+.bmOnlineTradeCheckpoint{display:flex;align-items:center;justify-content:space-between;gap:16px;flex:none;padding:14px 16px;border:1px solid #805234;border-radius:12px;background:linear-gradient(112deg,#211914,#121418)}
+.bmOnlineTradeCheckpointInfo{min-width:0;flex:1}.bmOnlineTradeCheckpointInfo small{display:block;font-size:9px;font-weight:900;letter-spacing:.12em;color:#e6a372}.bmOnlineTradeCheckpointInfo strong{display:block;margin-top:5px;font-size:15px;font-weight:900;color:#faf4ed}.bmOnlineTradeCheckpointInfo p{max-width:710px;font-size:11px;color:#beb6b1;line-height:1.5;margin:5px 0 0}.bmOnlineTradeCheckpointInfo span{display:block;margin-top:7px;font-size:11px;color:#e5c29f}.bmOnlineTradeCheckpointInfo .bmOnlineTradeCheckpointError{color:#ffaaa1}
+.bmOnlineTradeCheckpointActions{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:7px;flex-shrink:0}.bmOnlineTradeCheckpointActions span{flex:1 1 100%;font-size:10px;color:#f6c8a5;text-align:right}.bmOnlineTradeCheckpoint button{border:1px solid #8d5430;border-radius:8px;background:#2b211b;color:#f4c2a0;font-size:11px;font-weight:800;padding:9px 12px;cursor:pointer}.bmOnlineTradeCheckpoint button.primary{background:#a45828;color:#fff}.bmOnlineTradeCheckpoint button:disabled{opacity:.5;cursor:not-allowed}.bmOnlineTradeCheckpointError button{padding:2px 7px;margin-left:7px}
+@media(max-width:920px){.bmOnlineTradeCheckpoint{align-items:stretch;flex-direction:column}.bmOnlineTradeCheckpointActions{justify-content:flex-start}.bmOnlineTradeCheckpointActions span{text-align:left}}
+
+/* 2D.2-E — official shared All-Star board; uses the original single-player player rows. */
+.bmOnlineSeasonAllStarModal{width:min(1140px,100%);max-height:89vh;overflow-y:auto;overscroll-behavior:contain;border:1px solid #574032;border-radius:13px;background:#121316;color:#fff;box-shadow:0 24px 76px #000b;padding:clamp(12px,2vw,22px)}
+.bmOnlineSeasonAllStarModal>.bmOnlineSeasonBoxHeader{border-bottom:1px solid #39312d;margin-bottom:16px;padding-bottom:13px}
+.bmOnlineSeasonAllStarModal .bmAllStarsReadableBoard{min-width:0}
+@media(max-width:750px){.bmOnlineSeasonAllStarModal{max-height:94vh}.bmOnlineSeasonAllStarModal .bmAllStarsReadableBoard{display:grid;grid-template-columns:minmax(0,1fr)}}
+/* Phase 2D.3-A — minimalist postseason results, scoped to online only. */
+.bmOnlinePlayoffs .bmOnlinePlayInNode { display:flex; flex-direction:column; gap:7px; }
+.bmOnlinePlayoffs .bmOnlinePlayInNode small { color:#9da5b0; font-size:11px; letter-spacing:.02em; }
+.bmOnlinePlayInOutcome { display:flex; align-items:center; flex-wrap:wrap; gap:8px; font-size:12px; }
+.bmOnlinePlayInOutcome strong { font-variant-numeric:tabular-nums; color:#ece9e4; }
+.bmOnlinePlayInOutcome span { color:#a8c5b4; }
+.bmOnlinePlayInOutcome button { border:1px solid rgba(255,255,255,.13); border-radius:6px; background:rgba(255,255,255,.045); color:#e7c6ab; padding:5px 9px; cursor:pointer; }
+.bmOnlinePlayInOutcome button:hover { border-color:rgba(240,156,91,.55); }
+.bmOnlinePlayInSeeding { font-size:12px; color:#a9b1bc; margin:12px 0 0; }
+@media (max-width:900px) { .bmOnlinePlayoffs .bmOnlineSeasonHostControls { flex-wrap:wrap; gap:10px; } }
+/* Phase 2D.3-B — quiet champion treatment and compact scored series history. */
+.bmOnlineSeriesStatus {float:right;color:#b4dcc7;font-size:9px;font-weight:850;letter-spacing:.1em}
+.bmOnlineSeriesGames {display:flex;gap:4px;flex-wrap:wrap;margin:7px 0 0;padding-top:7px;border-top:1px solid rgba(255,255,255,.07)}
+.bmOnlineSeriesGames button {font:inherit;font-weight:800;font-size:10px;letter-spacing:.03em;color:#e5b58d;border:1px solid rgba(231,160,102,.3);background:rgba(231,160,102,.07);border-radius:5px;padding:4px 6px;cursor:pointer;min-width:28px}
+.bmOnlineSeriesGames button:hover {background:rgba(231,160,102,.17);border-color:#e7a16b}
+.bmOnlineSeriesGames button:disabled {opacity:.35;cursor:default}
+.bmOnlineChampionPanel {padding:clamp(14px,2vw,24px);border:1px solid rgba(241,185,118,.45);border-radius:12px;background:linear-gradient(112deg,rgba(111,71,33,.22),rgba(24,22,22,.45));text-align:center}
+.bmOnlineChampionPanel small {color:#f3bd88;font-size:10px;font-weight:900;letter-spacing:.14em}
+.bmOnlineChampionPanel h2 {color:#fff8ef;font-size:clamp(22px,3.5vw,37px);font-weight:950;margin:8px 0}
+.bmOnlineChampionPanel p {margin:0;font-size:11px;line-height:1.5;color:#c8b9a8}
+.bmOnlinePlayoffNext strong {font-variant-numeric:tabular-nums}
+@media(max-width:800px){.bmOnlinePlayoffNext{flex-wrap:wrap}.bmOnlinePlayoffNext .bmOnlineSeasonHostActions{width:100%;justify-content:flex-start}}
+
+/* Phase 2E.1 — quiet draft lottery, preserving the same online season visual system. */
+.bmOnlineDraftSummary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;flex:none}
+.bmOnlineDraftSummary>div{padding:13px 16px;border:1px solid #353333;border-radius:11px;background:#161616;display:grid;gap:4px;min-width:0}
+.bmOnlineDraftSummary small{font-size:9px;letter-spacing:.12em;color:#a7a7a7;font-weight:850}
+.bmOnlineDraftSummary strong{font-size:14px;color:#f1f1f1;font-weight:850;overflow-wrap:anywhere}
+.bmOnlineDraftSummary strong.pending{color:#e9a676}
+.bmOnlineDraftSummary span{font-size:10px;color:#9e9e9e;line-height:1.5}
+.bmOnlineDraftTable{border:1px solid #333;border-radius:12px;overflow:hidden;background:#131313}
+.bmOnlineDraftTableTitle{padding:12px 16px;border-bottom:1px solid #343434;color:#e2a071;background:#1b1b1b;font-size:10px;letter-spacing:.14em;font-weight:900}
+.bmOnlineDraftPick{display:flex;align-items:center;gap:14px;padding:11px 15px;min-height:62px;border-bottom:1px solid #282828}
+.bmOnlineDraftPick:last-child{border-bottom:0}
+.bmOnlineDraftPosition{font-size:16px;font-weight:950;color:#edaa78;width:37px;flex-shrink:0;font-variant-numeric:tabular-nums}
+.bmOnlineDraftPick img{width:35px;height:35px;object-fit:contain;flex-shrink:0}
+.bmOnlineDraftTeam{flex:1;min-width:0;display:grid;gap:4px}.bmOnlineDraftTeam strong{font-size:13px;color:#f2f2f2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.bmOnlineDraftTeam span{font-size:10px;color:#aaa}
+.bmOnlineDraftPickOwnership{font-size:10px;color:#b6a393;white-space:nowrap;border:1px solid #504039;background:#241d19;padding:6px 10px;border-radius:7px}
+.bmOnlineDraftOdds{display:grid;justify-items:end;gap:2px;color:#efb180;font-weight:900;font-size:14px;font-variant-numeric:tabular-nums}
+.bmOnlineDraftOdds small{font-size:9px;color:#aaa}
+@media(max-width:720px){.bmOnlineDraftSummary{grid-template-columns:1fr}.bmOnlineDraftPick{padding:9px;gap:9px}.bmOnlineDraftPickOwnership{font-size:9px;padding:5px 6px}}
+
+.bmOnlineDraftContinue{display:inline-flex;align-items:center;justify-content:center;margin-top:15px;padding:10px 16px;border:1px solid #b76f3c;border-radius:8px;background:#3b2318;color:#ffd1ae!important;font-weight:850;font-size:11px;text-decoration:none!important}.bmOnlineDraftContinue:hover{background:#5a301d;border-color:#dd9b60}
+
+/* 2E.2 — Online NBA Draft, intentionally restrained. No single-player overrides. */
+.bmOnlineDraftHost{flex:none}.bmOnlineDraftRoom .bmOnlineDraftPick.on-clock{background:rgba(236,146,73,.09);box-shadow:inset 3px 0 #e5a16e}
+.bmOnlineDraftSearch{height:34px;min-width:190px;max-width:260px;flex:1;background:#181818;color:#f4f4f4;border:1px solid #444;border-radius:7px;padding:7px 10px;font-size:11px}
+.bmOnlineDraftProspects{border:1px solid #353535;border-radius:11px;overflow:hidden;background:#131313}
+.bmOnlineDraftProspect{display:flex;width:100%;align-items:center;text-align:left;gap:13px;padding:10px 15px;color:#e9e9e9;background:transparent;border:0;border-bottom:1px solid #282828;cursor:pointer;font:inherit}
+.bmOnlineDraftProspect:hover:not(:disabled){background:rgba(255,255,255,.035)}.bmOnlineDraftProspect.selected{background:rgba(220,131,63,.13);box-shadow:inset 3px 0 #efad70}.bmOnlineDraftProspect:disabled{cursor:default;opacity:.72}
+.bmOnlineDraftProspectRank{font-weight:900;font-size:12px;color:#e6a16e;width:34px}.bmOnlineDraftProspectInfo{min-width:0;display:grid;gap:4px;flex:1}.bmOnlineDraftProspectInfo strong{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.bmOnlineDraftProspectInfo span{font-size:10px;color:#aaa;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bmOnlineDraftProspectRatings{display:grid;justify-items:center;gap:1px;min-width:30px}.bmOnlineDraftProspectRatings b{font-size:14px;font-variant-numeric:tabular-nums}.bmOnlineDraftProspectRatings span{font-size:8px;color:#aaa;letter-spacing:.08em}.bmOnlineDraftChosen{font-size:9px;font-weight:900;color:#f0a46b;min-width:52px;text-align:right}
+.bmOnlineDraftInlineNotice{padding:15px 17px;color:#c6c2bd;font-size:11px;line-height:1.5}.bmOnlineDraftRoom .bmOnlineSeasonHostControls p{max-width:680px}
+@media(max-width:780px){.bmOnlineDraftProspect{padding:10px 9px;gap:8px}.bmOnlineDraftProspectRatings{min-width:24px}.bmOnlineDraftProspectRatings b{font-size:12px}.bmOnlineDraftChosen{display:none}.bmOnlineDraftSearch{max-width:100%;width:100%}.bmOnlineDraftRoom .bmOnlineSeasonToolbar{flex-wrap:wrap}}
+/* 2E.3A — compact roster-style rookie contracts, online-only. */
+.bmOnlineRookieGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,275px),1fr));gap:12px;overflow:auto;min-height:0;padding:3px 1px 14px}
+.bmOnlineRookieCard{border:1px solid rgba(255,255,255,.12);border-radius:14px;background:linear-gradient(165deg,rgba(255,255,255,.055),rgba(255,255,255,.015));padding:17px;min-width:0;display:flex;flex-direction:column;gap:9px}
+.bmOnlineRookieTop{display:flex;justify-content:space-between;gap:8px;align-items:center;color:#b7b7ba;font-size:11px;font-weight:800;letter-spacing:.08em}
+.bmOnlineRookiePick{color:#ffad68}.bmOnlineRookieOvr{white-space:nowrap}
+.bmOnlineRookieCard h3{font-size:19px;line-height:1.1;font-weight:850;color:#f5f5f7;margin:3px 0 0}
+.bmOnlineRookieCard p{font-size:12px;color:#a6a5ad;margin:0 0 12px}
+.bmOnlineRookieCard label{font-size:11px;text-transform:uppercase;letter-spacing:.11em;font-weight:800;color:#b8b8bd}
+.bmOnlineRookieCard select{width:100%;background:#222228;border:1px solid rgba(255,255,255,.16);border-radius:9px;color:#f5f5f7;padding:11px;font:inherit;font-size:13px;outline:none}
+.bmOnlineRookieCard select:focus-visible{border-color:#f79243;box-shadow:0 0 0 2px rgba(247,146,67,.16)}
+.bmOnlineRookieCard small{font-size:11px;color:#95959f}.bmOnlineRookieEmpty{color:#bbb;padding:22px;border:1px dashed rgba(255,255,255,.12);border-radius:12px}
+.bmOnlineRookieCpu{border-color:rgba(255,165,83,.17)}
+@media(max-width:768px){.bmOnlineRookieGrid{grid-template-columns:1fr}}
+/* Phase 2E.3-B · Retirements: minimal shared-event presentation */
+.bmOnlineRetirementPage .bmOnlineSeasonScroll{overflow:auto}
+.bmOnlineRetirementList{min-height:0;overflow:auto;border:1px solid rgba(255,255,255,.1);border-radius:12px;background:#121213;flex:1;scrollbar-width:thin;scrollbar-color:#a45f31 #171717}
+.bmOnlineRetirementListHeader{position:sticky;top:0;z-index:1;display:flex;justify-content:space-between;align-items:center;gap:12px;padding:14px 17px;background:#1a1a1d;border-bottom:1px solid rgba(255,255,255,.1)}
+.bmOnlineRetirementListHeader strong{font-size:12px;color:#f2f2f2}.bmOnlineRetirementListHeader span{font-size:10px;color:#888}
+.bmOnlineRetirementRow{display:flex;align-items:center;gap:14px;padding:12px 17px;border-bottom:1px solid rgba(255,255,255,.065);min-width:0}
+.bmOnlineRetirementRow>div{display:grid;min-width:0;gap:4px;flex:1}.bmOnlineRetirementRow strong{font-size:12px;color:#f0f0f2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.bmOnlineRetirementRow small{font-size:10px;color:#999;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bmOnlineRetirementIndex{font-size:10px;font-weight:850;color:#727274;width:27px}.bmOnlineRetirementOdds{font-weight:900;color:#f49d53;font-size:13px;white-space:nowrap}
+@media(max-width:740px){.bmOnlineRetirementListHeader{align-items:flex-start;flex-direction:column}.bmOnlineRetirementRow{padding:11px 12px}}

@@ -1,0 +1,36 @@
+// Static Online-only integration boundaries; actual simulation is covered by
+// backend/tests/onlineSimulation.phase2d2.test.mjs using the original Python engine.
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+const read=p=>fs.readFileSync(new URL(`../../${p}`,import.meta.url),'utf8');
+const app=read('backend/app.js');
+const api=read('backend/onlineSimulation.js');
+const core=read('backend/onlineSimulationCore.js');
+const gameplan=read('backend/onlineGameplanCore.js');
+const sql=read('supabase/bm_online_simulate_day_phase2d2.sql');
+const calendar=read('frontend/src/online/OnlineSeasonSchedule.jsx');
+const controls=read('frontend/src/online/OnlineSimulationBatchPanel.jsx');
+const franchise=read('frontend/src/online/OnlineFranchise.jsx');
+const context=read('frontend/src/online/onlineReadOnlyContext.jsx');
+assert.match(app,/\/api\/online\/calendar\/simulate-next-day/);
+assert.match(api,/only the active franchise host/i);
+assert.match(api,/bm_online_franchise_events/);
+assert.match(api,/bm_online_simulate_day_phase2d2/);
+assert.match(api,/simulatePythonBatch/);
+assert.match(core,/selectOnlineGameplan/);
+assert.match(gameplan,/buildAvailabilityGameplanPayload/);
+assert.match(core,/processGameInjuries/);
+assert.match(core,/recoverPlayersForDate/);
+assert.match(core,/onlinePlayerStats/);
+assert.match(controls,/Simulate next day/);
+assert.match(calendar,/Box score/);
+assert.match(controls,/Confirm next day/);
+assert.match(calendar,/role="dialog"/);
+assert.match(calendar,/isHost&&/);
+assert.match(controls,/supabase\.auth\.getSession/);
+assert.match(franchise,/OnlineSeasonSchedule/);
+assert.match(context,/OnlineReadOnlyProvider/);
+assert.ok(!/\b(?:localStorage|setLeagueData|saveSchedule|navigate\('\/calendar')\b/.test(calendar));
+assert.ok(!/\b(?:localStorage|window\.localStorage|navigate\('\/calendar')\b/.test(api));
+assert.ok(!/grant execute[^;]+to authenticated/i.test(sql));
+console.log('PASS: Online host-only game-day simulation, original Python engine, injury/stats, dialog, state isolation, private SQL.');

@@ -1,0 +1,164 @@
+.trade-context-modal-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(249, 115, 22, 0.82) rgba(18, 18, 18, 0.35);
+}
+
+.trade-context-modal-scroll::-webkit-scrollbar {
+  width: 7px;
+}
+
+.trade-context-modal-scroll::-webkit-scrollbar-track {
+  background: rgba(18, 18, 18, 0.35);
+  border-radius: 999px;
+}
+
+.trade-context-modal-scroll::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(251, 146, 60, 0.9), rgba(234, 88, 12, 0.9));
+  border: 1px solid rgba(18, 18, 18, 0.8);
+  border-radius: 999px;
+}
+
+.trade-context-modal-scroll::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, #fb923c, #f97316);
+}
+
+/* Position-detail player rows: portrait/rating visuals stay clean and minimal. */
+.trade-context-player-row {
+  min-height: 72px;
+  overflow: visible;
+}
+
+
+/* Fixed visual viewport: text tuning never changes modal/row geometry. */
+.trade-context-player-copy {
+  position: relative;
+  height: 58px;
+  overflow: hidden;
+  line-height: 1.15;
+}
+
+.trade-context-player-name {
+  position: absolute;
+  left: 0;
+  top: 20px;
+  max-width: 100%;
+  white-space: nowrap;
+}
+
+.trade-context-player-age {
+  position: absolute;
+  left: 0;
+  top: 39px;
+  max-width: 100%;
+  white-space: nowrap;
+}
+
+/* Never create a horizontal scrollbar from visual-only transforms. */
+.trade-context-modal-scroll {
+  overflow-x: hidden;
+}
+
+/* TRADE CENTER PLAYER SEARCH — scoped visual polish, no changes to search
+   data, player-card navigation, or player contracts. Keep 56px result height. */
+.trade-search-results-panel .trade-search-player-row {
+  position: relative;
+  isolation: isolate;
+  box-sizing: border-box;
+  height: 56px;
+  min-height: 56px;
+  width: 100%;
+  padding: 7px 9px;
+  gap: 10px;
+  overflow: hidden;
+  border: 1px solid rgba(203, 203, 203, .20);
+  border-radius: 9px;
+  background: linear-gradient(110deg, rgba(32, 33, 36, .80), rgba(19, 21, 25, .86));
+  transition: border-color .15s ease, background-color .15s ease;
+}
+/* Deliberate small gaps: six distinct cards, not one continuous list. */
+.trade-search-results-panel .trade-search-player-row + .trade-search-player-row {
+  margin-top: 4px;
+}
+.trade-search-results-panel .trade-search-player-row:hover,
+.trade-search-results-panel .trade-search-player-row:focus-visible {
+  border-color: rgba(251,146,60,.55);
+  background-color: rgba(249,115,22,.05);
+}
+.trade-search-player-row > :not(.trade-search-team-logo-bg) {
+  position: relative;
+  z-index: 1;
+}
+/* Entire watermark lies INSIDE the rounded row and never receives clicks. */
+.trade-search-team-logo-bg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  pointer-events: none;
+  overflow: hidden;
+  border-radius: inherit;
+}
+.trade-search-team-logo-bg img {
+  display: block;
+  flex: none;
+  height: 94px;
+  width: 120px;
+  max-width: none;
+  max-height: none;
+  object-fit: contain;
+  opacity: .10;
+  filter: saturate(.85);
+}
+/* Do not crop ESPN sources horizontally. Widen the transparent portrait
+   viewport without increasing the outer result-row height. */
+.trade-search-results-panel .trade-search-headshot {
+  width: 49px;
+  height: 40px;
+  flex: 0 0 49px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
+}
+.trade-search-results-panel .trade-search-headshot img {
+  display: block;
+  height: 100%;
+  width: 100%;
+  object-fit: contain;
+  object-position: center bottom;
+}
+.trade-search-results-panel .trade-search-player-copy {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 2px;
+  justify-content: center;
+}
+.trade-search-player-name { line-height: 1.05; }
+.trade-search-player-meta {
+  line-height: 1.1;
+  white-space: nowrap;
+}
+/* Only average scheduled annual pay is highlighted; no wide salary ticker. */
+.trade-search-contract-average {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  font-weight: 850;
+  line-height: 1.2;
+  color: #ffb454;
+}
+.trade-search-rating-shell {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  margin-left: auto;
+}
+.trade-search-rating { transform: scale(.82); transform-origin: center; }

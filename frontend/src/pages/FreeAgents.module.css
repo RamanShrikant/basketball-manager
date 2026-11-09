@@ -73,3 +73,43 @@
     display: flex !important;
   }
 }
+
+/* BM_WIDE_MONITOR_TABLE_FIT_V1_START */
+/* Free Agency, single-player AND Online. The existing wide table with w-max
+   and 88px minimums overflows even at high screen resolutions. At desktop
+   widths we fit all stats into the available table region when space allows,
+   while retaining a readable 1590px minimum and native horizontal scrolling
+   on smaller windows. No player-data or signing changes. */
+@media (min-width: 1500px) {
+  .tableViewport > div {
+    box-sizing: border-box;
+    width: 100% !important;
+    min-width: max(100%, 1590px) !important;
+  }
+  .tableViewport > div > table {
+    box-sizing: border-box;
+    width: 100% !important;
+    table-layout: fixed;
+  }
+  .tableViewport > div > table thead th {
+    min-width: 0 !important;
+    padding-left: 4px !important;
+    padding-right: 4px !important;
+    white-space: nowrap;
+  }
+  .tableViewport > div > table thead th.text-left {
+    width: clamp(175px, 10.25vw, 210px) !important;
+    text-align: left;
+  }
+  .tableViewport > div > table tbody td {
+    padding-left: 4px !important;
+    padding-right: 4px !important;
+  }
+  .tableViewport > div > table tbody td:first-child {
+    padding-left: 11px !important;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+/* BM_WIDE_MONITOR_TABLE_FIT_V1_END */

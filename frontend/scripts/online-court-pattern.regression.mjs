@@ -1,18 +1,23 @@
+// Regression for the *effective* Online CSS rather than an obsolete design pass.
+// The shared court SVG still exists, but the later Online diagonal-grid pass
+// deliberately overrides the original curved-court background.
 import assert from 'node:assert/strict';
-import {readFileSync, existsSync} from 'node:fs';
+import {readFileSync,existsSync} from 'node:fs';
 const css=readFileSync(new URL('../src/online/online.css',import.meta.url),'utf8');
 const shared=readFileSync(new URL('../src/styles/BMPageBackground.css',import.meta.url),'utf8');
 const svgPath=new URL('../src/assets/basketball-pattern.svg',import.meta.url);
-assert(existsSync(svgPath),'shared basketball-pattern.svg asset must exist');
+assert(existsSync(svgPath),'Original shared basketball-pattern.svg must remain available');
 const svg=readFileSync(svgPath,'utf8');
-assert(svg.includes('<circle')&&svg.includes('<path'),'asset contains curved basketball seams');
-const marker='/* BM ONLINE — exact curved court pattern from BMPageBackground.css */';
-assert(css.includes(marker),'Online court style override exists');
-const block=css.slice(css.indexOf(marker));
-const sharedLayer=shared.slice(shared.indexOf('  background-image:'),shared.indexOf('  background-blend-mode:')+'  background-blend-mode: soft-light, normal, normal, normal;'.length);
-assert(block.includes(sharedLayer),'Online root background uses exact BM court composition');
-assert(block.includes('.on-root .on-panel,'),'Online panels receive curved court surface');
-assert(block.includes('.on-drawer,'),'Friends & Profile drawer receives curved court surface');
-assert(block.includes('.on-profile-box {'),'Profile card receives curved court surface');
-assert(block.includes('url("../assets/basketball-pattern.svg")'),'Online uses original shared asset');
-console.log('PASS: Online reuses exact curved basketball pattern and account surfaces, no square-grid replacement');
+assert(svg.includes('<circle')&&svg.includes('<path'),'Original asset retains basketball seams');
+assert(shared.includes('url("../assets/basketball-pattern.svg")'),'Single-player court asset reference must stay intact');
+const original='/* BM ONLINE — exact curved court pattern from BMPageBackground.css */';
+const active='/* Online diagonal-only pass: remove court-shape overlays and use the clean BM diagonal grid everywhere. */';
+const originalAt=css.indexOf(original),activeAt=css.indexOf(active);
+assert(originalAt>=0,'Original online curved-court style must remain present');
+assert(activeAt>originalAt,'Active diagonal-only design pass must override the earlier online background');
+const activeRules=css.slice(activeAt);
+assert.match(activeRules,/\.on-root\s*\{\s*background-color:\s*#060606;\s*background-image:\s*linear-gradient\(/,'Diagonal grid remains the effective online root background');
+assert.match(activeRules,/repeating-linear-gradient\(45deg/,'Diagonal grid has the ascending lines');
+assert.match(activeRules,/repeating-linear-gradient\(-45deg/,'Diagonal grid has the descending lines');
+assert.match(activeRules,/\.on-online-home \.on-panel,[\s\S]*?\.on-profile-box\s*\{\s*background-image:/,'Online panels and profile surfaces share the later background override');
+console.log('PASS: current diagonal-only Online background, shared basketball SVG preserved for single-player');

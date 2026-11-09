@@ -1,5 +1,6 @@
 // Online-only Supabase data access. Never imports GameContext, IndexedDB or single-player saves.
 import { supabase } from "../auth/supabaseClient.js";
+import { validateOnlineStartingSeed } from "./onlineSeedIntegrity.mjs";
 
 export const ONLINE_BUCKET = "bm-online-rosters";
 const err = (error) => { if (error) throw new Error(error.message || String(error)); };
@@ -67,25 +68,27 @@ export function extractTeams(json) {
     ...(json?.conferences?.East || []), ...(json?.conferences?.West || [])
   ];
   const names = source.map(t => typeof t?.name === "string" ? t.name.trim() : "");
-  if (names.length < 2 || names.length > 64 || names.some(n=> n.length<2 || n.length>80) || new Set(names).size!==names.length) {
-    throw new Error("Roster JSON must contain 2–64 unique teams with valid names (teams or conferences). ");
+  if (names.length !== 30 || names.some(n=> n.length<2 || n.length>80) || new Set(names).size!==names.length) {
+    throw new Error("Online NBA franchises require exactly 30 unique teams with valid names (teams or conferences). ");
   }
   return names;
 }
 export async function defaultTeams() {
   const res = await fetch("/defaults/default_roster.json", { cache:"no-cache" });
   if(!res.ok) throw new Error("Could not read the bundled NBA roster.");
-  return extractTeams(await res.json());
+  return extractTeams(validateOnlineStartingSeed(await res.json()));
 }
 export async function uploadCustomRoster(file, userId) {
   if (!file || file.size > 10_000_000) throw new Error("Roster JSON must be under 10 MB.");
   const text = await file.text();
   let roster;
   try { roster = JSON.parse(text); } catch { throw new Error("The selected file isn't valid JSON."); }
-  const teams = extractTeams(roster);
+  const canonical = validateOnlineStartingSeed(roster);
+  const teams = extractTeams(canonical);
+  const canonicalText = JSON.stringify(canonical);
   const path = `${userId}/${crypto.randomUUID()}.json`;
   const { error } = await supabase.storage.from(ONLINE_BUCKET).upload(path,
-    new Blob([text],{type:"application/json"}), { contentType:"application/json",upsert:false });
+    new Blob([canonicalText],{type:"application/json"}), { contentType:"application/json",upsert:false });
   err(error);
   return {teams, path};
 }

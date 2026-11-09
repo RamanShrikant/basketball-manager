@@ -1,0 +1,20 @@
+/* G3B-A · Online-only transaction wire. Never overlaps sidebar interactions. */
+.bmOnlineActivityStack{position:fixed;right:18px;bottom:20px;z-index:82;width:min(352px,calc(100vw - 28px));display:flex;flex-direction:column;gap:9px;pointer-events:none;max-height:min(65dvh,490px);overflow:hidden}
+.bmOnlineGameShell:has(.bmOnlineGmPanelOpen) .bmOnlineActivityStack{right:calc(var(--bm-online-panel-width) + 18px)}
+.bmOnlineActivityCard{position:relative;display:flex;align-items:flex-start;gap:10px;overflow:hidden;pointer-events:auto;color:#efefed;background:linear-gradient(145deg,rgba(28,27,27,.98),rgba(11,11,13,.99));border:1px solid rgba(248,157,79,.30);border-radius:12px;box-shadow:0 12px 28px rgba(0,0,0,.47),inset 0 1px 0 rgba(255,255,255,.045);padding:14px 40px 13px 16px;animation:bmOnlineActivityEnter .24s ease both}
+.bmOnlineActivityAccent{position:absolute;left:0;top:0;bottom:0;width:3px;background:#eb9758}
+.bmOnlineActivity-trade .bmOnlineActivityAccent{background:#83acd4}
+.bmOnlineActivity-release .bmOnlineActivityAccent{background:#c89777}
+.bmOnlineActivity-draft .bmOnlineActivityAccent{background:#a9b98b}
+.bmOnlineActivityContent{min-width:0;flex:1}
+.bmOnlineActivityEyebrow{color:#e7a778;font-size:9px;letter-spacing:.12em;font-weight:850;display:flex;gap:8px;align-items:center;text-transform:uppercase;margin-bottom:7px}
+.bmOnlineActivityType{font-size:9px;font-weight:700;color:#88868b;letter-spacing:.07em}
+.bmOnlineActivityPulse{width:5px;height:5px;border-radius:50%;background:#f8ad74;box-shadow:0 0 0 3px rgba(246,161,94,.09)}
+.bmOnlineActivityHeadline{display:block;font-size:13px;line-height:1.42;font-weight:750;color:#f7f6f4;overflow-wrap:anywhere}
+.bmOnlineActivityDetails{font-size:11px;color:#c4c1c2;line-height:1.45;margin-top:5px;overflow-wrap:anywhere;max-height:65px;overflow:hidden}
+.bmOnlineActivityBy{font-size:10px;color:#88858b;margin-top:7px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.bmOnlineActivityClose{position:absolute;right:8px;top:7px;display:grid;place-items:center;width:28px;height:28px;border:1px solid transparent;border-radius:7px;background:transparent;color:#b7b3b5;font:20px/1 Arial,sans-serif;cursor:pointer}
+.bmOnlineActivityClose:hover,.bmOnlineActivityClose:focus-visible{background:rgba(255,255,255,.07);border-color:rgba(255,255,255,.18);color:#fff;outline:0}
+@keyframes bmOnlineActivityEnter{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@media(max-width:800px){.bmOnlineActivityStack,.bmOnlineGameShell:has(.bmOnlineGmPanelOpen) .bmOnlineActivityStack{right:12px;bottom:12px;width:min(318px,calc(100vw - 24px))}.bmOnlineActivityCard{padding:11px 38px 11px 12px}.bmOnlineActivityHeadline{font-size:12px}}
+@media(prefers-reduced-motion:reduce){.bmOnlineActivityCard{animation:none}}

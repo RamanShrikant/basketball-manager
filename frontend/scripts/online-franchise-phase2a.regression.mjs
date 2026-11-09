@@ -14,8 +14,8 @@ assert(lobby.includes('launchSharedFranchise(lobby)'),'host can launch Online fr
 assert(lobby.includes('!isHost||!allReady'),'Start League guarded to host and all-ready lobby');
 assert(lobby.includes('lobby?.status==="started"'),'joined members follow started lobby');
 assert(lobby.includes('bm_set_online_team')&&lobby.includes('bm_set_online_ready'),'team and ready RPCs preserved');
-assert(franchise.includes('franchiseForLobby(id)'),'viewer loads authoritative Supabase snapshot');
-assert(!franchise.includes('setInterval('),'do not repeatedly download full immutable roster');
+assert(franchise.includes('readOnlineRuntime(id)'),'viewer loads authoritative Supabase runtime');
+assert(franchise.includes('readOnlineRuntimeRevision(id)'),'only revision metadata is polled; the full roster is loaded on change');
 assert(franchise.includes('room?.members?.find'),'viewer scopes to signed-in human GM');
 assert(!/from\s+[\"'][^\"']*(GameContext|GameProvider|saveLeagueData|accountLocalVault|cloudSaveClient|simEnginePy)/.test(franchise+api),'no single-player runtime imports');
 assert(sql.includes('for update'),'lobby launched under transactional row lock');

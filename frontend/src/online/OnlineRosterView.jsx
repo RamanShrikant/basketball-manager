@@ -1,9 +1,9 @@
 // ONLINE READ-ONLY MIRROR generated from original RosterView.jsx; never modify original single-player page.
 import {onlineInertStorage} from "./onlineInertStorage.js";
 import { createPlayerResolver } from "../utils/playerResolver.js";
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import {useGame, useOnlineRouteNav} from "./onlineReadOnlyContext.jsx";
-const releasePlayerToFreeAgency = async () => { throw new Error("Online roster transactions are not available"); };
+import {releaseOnlineStandardPlayer} from "./onlineRuntimeClient.js";
 import { playSound, primeSound, SOUND_KEYS } from "../audio/soundManager.js";
 import OnlinePlayerQuickView from "./OnlinePlayerQuickView.jsx";
 import styles from "../pages/RosterView.module.css";
@@ -96,7 +96,7 @@ function isOffseasonRosterRelaxed() {
 }
 
 export default function RosterView() {
-  const { leagueData, selectedTeam, setSelectedTeam, setLeagueData } = useGame();
+  const { leagueData, selectedTeam, setSelectedTeam, setLeagueData, revision, lobbyId, onAccepted } = useGame();
   const [workingLeagueData, setWorkingLeagueData] = useState(leagueData || null);
   const [selectedPlayer, setSelectedPlayer] = useState(null);
   const [sortConfig, setSortConfig] = useState({ key: "overall", direction: "desc" });
@@ -105,10 +105,29 @@ export default function RosterView() {
   );
   const [releaseModalOpen, setReleaseModalOpen] = useState(false);
   const [releaseTargetPlayer, setReleaseTargetPlayer] = useState(null);
+  const [releaseBusy, setReleaseBusy] = useState(false);
+  const [releaseError, setReleaseError] = useState("");
+  const [releaseSuccess, setReleaseSuccess] = useState("");
+  const releaseRetry = useRef(null);
   const [playerCardOpen, setPlayerCardOpen] = useState(false);
   const [cardTargetPlayer, setCardTargetPlayer] = useState(null);
   const [viewTeamName, setViewTeamName] = useState(null);
   const navigate = useOnlineRouteNav();
+
+  // Match the ORIGINAL single-player Roster page's desktop density rules.
+  // BMResponsiveDensity.css is loaded by main.jsx, but its roster rules use
+  // html[data-bm-route="roster-view"]. Online has a separate router, so it
+  // must enable that same exact rule while this one page is mounted.
+  // Restore the previous attribute on exit; do not activate SP GameContext.
+  useLayoutEffect(() => {
+    const html = document.documentElement;
+    const before = html.getAttribute("data-bm-route");
+    html.setAttribute("data-bm-route", "roster-view");
+    return () => {
+      if (before === null) html.removeAttribute("data-bm-route");
+      else html.setAttribute("data-bm-route", before);
+    };
+  }, []);
 
   useEffect(() => {
     setWorkingLeagueData(leagueData || null);
@@ -662,6 +681,13 @@ export default function RosterView() {
       activeRosterTeam.name === selectedTeam.name
   );
 
+  // Releasing a standard player is the ONLY writable roster action currently
+  // enabled. Two-way conversion and other single-player mutations stay disabled.
+  const canReleaseCurrentRoster = Boolean(
+    lobbyId && revision && !isAllView && activeRosterTeam?.name &&
+    selectedTeam?.name && activeRosterTeam.name === selectedTeam.name
+  );
+
   const handleTeamSwitch = (dir) => {
     if (!totalSlots) return;
     setViewIndex((prev) => {
@@ -1175,63 +1201,62 @@ export default function RosterView() {
   };
 
   const openReleaseForPlayer = (player) => {
-    if (!player || isAllView || !canManageCurrentRoster) return;
+    if (!player || !canReleaseCurrentRoster || player.isTwoWay || player.isStash) return;
     setReleaseTargetPlayer(player);
+    setReleaseError("");
+    setReleaseSuccess("");
+    releaseRetry.current = null;
     setReleaseModalOpen(true);
   };
 
   const closeReleaseModal = () => {
+    if (releaseBusy) return;
     setReleaseModalOpen(false);
     setReleaseTargetPlayer(null);
+    setReleaseError("");
+    releaseRetry.current = null;
   };
 
   const handleReleaseToFreeAgency = async () => {
-    if (!releaseTargetPlayer || !canManageCurrentRoster || !selectedTeam || !workingLeagueData?.conferences) return;
-
-    primeSound(SOUND_KEYS.PLAYER_RELEASE_SUCCESS);
-
+    if (!releaseTargetPlayer || !canReleaseCurrentRoster || releaseBusy) return;
+    const playerId = releaseTargetPlayer?.id ?? releaseTargetPlayer?.playerId;
+    if (playerId === undefined || playerId === null || !String(playerId).trim()) {
+      setReleaseError("This player has no stable ID and cannot be released safely.");
+      return;
+    }
+    const id = String(playerId);
+    const attempt = releaseRetry.current && releaseRetry.current.playerId === id &&
+      releaseRetry.current.revision === revision
+      ? releaseRetry.current
+      : {requestId:crypto.randomUUID(),playerId:id,revision};
+    releaseRetry.current = attempt;
+    setReleaseBusy(true);
+    setReleaseError("");
     try {
-      const res = await releasePlayerToFreeAgency(
-        workingLeagueData,
-        selectedTeam.name,
-        releaseTargetPlayer.id || null,
-        releaseTargetPlayer.name || null
-      );
-
-      if (!res?.ok || !res?.leagueData) {
-        console.error("[RosterView] release failed:", res?.reason || res);
-        return;
-      }
-
-      const updated = res.leagueData;
-      setWorkingLeagueData(updated);
-
-      if (typeof setLeagueData === "function") {
-        setLeagueData(updated);
-      }
-
-      let updatedTeam = null;
-      for (const confKey of Object.keys(updated.conferences || {})) {
-        const team = (updated.conferences[confKey] || []).find(
-          (t) => t.name === selectedTeam.name
-        );
-        if (team) {
-          updatedTeam = team;
-          break;
+      primeSound(SOUND_KEYS.PLAYER_RELEASE_SUCCESS);
+      const result = await releaseOnlineStandardPlayer({
+        lobbyId,requestId:attempt.requestId,
+        expectedRevision:attempt.revision,playerId:id,
+      });
+      releaseRetry.current = null;
+      setReleaseModalOpen(false);
+      setReleaseTargetPlayer(null);
+      setSelectedPlayer(null);
+      setReleaseSuccess(`${releaseTargetPlayer.name} released. Shared league revision ${result.revision}.`);
+      playSound(SOUND_KEYS.PLAYER_RELEASE_SUCCESS);
+      // Commit is complete before refreshing. Do not write browser league state.
+      if (typeof onAccepted === "function") {
+        try { await onAccepted(); } catch (refreshError) {
+          setReleaseSuccess(`Release committed, but the refresh failed: ${refreshError?.message || refreshError}. Use Refresh shared state.`);
         }
       }
-
-      if (updatedTeam) {
-        setSelectedTeam(updatedTeam);
-        onlineInertStorage.setItem("selectedTeam", JSON.stringify(updatedTeam.name));
+    } catch(error) {
+      setReleaseError(`${error?.message || String(error)} Refresh the shared roster if it changed.`);
+      if (typeof onAccepted === "function") {
+        try { await onAccepted(); } catch { /* Preserve the original release error */ }
       }
-
-      saveLeagueDataInBackground(updated);
-
-      closeReleaseModal();
-      playSound(SOUND_KEYS.PLAYER_RELEASE_SUCCESS);
-    } catch (err) {
-      console.error("[RosterView] release worker error:", err);
+    } finally {
+      setReleaseBusy(false);
     }
   };
 
@@ -1387,13 +1412,13 @@ export default function RosterView() {
                 team={selectedPlayerPortraitTeam}
                 teamName={selectedPlayerPortraitTeam?.name || selectedPlayerPortraitTeam?.teamName || ""}
                 alt={player?.name || "Player"}
-                className={styles.selectedPlayerPortrait}
+                className={`${styles.selectedPlayerPortrait} bmOnlineRosterPortraitOffset`}
                 fallback={(
                   <div className="flex h-full w-full items-center justify-center rounded-t-lg bg-neutral-800 text-neutral-400">No Image</div>
                 )}
               />
 
-              <div className={styles.selectedPlayerInfo}>
+              <div className={`${styles.selectedPlayerInfo} bmOnlineRosterNameOffset`}>
                 <div className={styles.selectedPlayerNameRow}>
                   <h2>{player?.name || "-"}</h2>
                   {player?.isTwoWay && <span className={styles.twoWayBadge}>2W</span>}
@@ -1426,14 +1451,29 @@ export default function RosterView() {
                     Player Card
                   </button>
 
-                  {canManageCurrentRoster && !isAllView && (
-                    <button
-                      type="button"
-                      onClick={() => navigate("/coach-gameplan")}
-                      className={styles.gameplanButton}
-                    >
-                      Coach Gameplan
-                    </button>
+                  {/* Same visible actions as the real single-player roster.
+                      Coach navigation is safe; roster mutations must wait for
+                      an authoritative multiplayer RPC. */}
+                  {!isAllView && activeRosterTeam?.name === selectedTeam?.name && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => navigate("/coach-gameplan")}
+                        className={styles.gameplanButton}
+                      >
+                        Coach Gameplan
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => openReleaseForPlayer(player)}
+                        disabled={!canReleaseCurrentRoster || releaseBusy || player?.isTwoWay || player?.isStash ||
+                          !(player?.id != null && String(player.id).trim() || player?.playerId != null && String(player.playerId).trim())}
+                        title={canReleaseCurrentRoster ? "Release through the authoritative Online server" : "Only your assigned team can release standard players"}
+                        className={styles.releasePlayerButton}
+                      >
+                        Release Player
+                      </button>
+                    </>
                   )}
 
                   {canManageCurrentRoster &&
@@ -1621,6 +1661,7 @@ export default function RosterView() {
         onClose={closePlayerCard}
       />
 
+      {releaseSuccess && <div role="status" className="fixed right-6 top-6 z-[9999] max-w-xl rounded-xl border border-emerald-700 bg-neutral-900 px-4 py-3 text-emerald-300 text-sm font-semibold shadow-2xl">{releaseSuccess}</div>}
       {releaseModalOpen && releaseTargetPlayer && !isAllView && (
         <div className={`${styles.modalLayer} fixed inset-0 bg-black/60 flex items-center justify-center z-50 px-4`}>
           <div className="w-full max-w-xl bg-neutral-800 rounded-2xl border border-neutral-700 shadow-2xl p-6">
@@ -1683,8 +1724,10 @@ export default function RosterView() {
               </div>
             )}
 
+            {releaseError && <p className="text-red-300 font-semibold mb-3" role="alert">{releaseError}</p>}
             <div className="flex justify-end gap-3">
               <button
+                disabled={releaseBusy}
                 onClick={closeReleaseModal}
                 className="px-5 py-2 rounded-lg bg-gray-600 hover:bg-gray-500 text-white font-semibold transition"
               >
@@ -1692,9 +1735,10 @@ export default function RosterView() {
               </button>
               <button
                 onClick={handleReleaseToFreeAgency}
-                className="px-5 py-2 rounded-lg bg-red-600 hover:bg-red-500 text-white font-semibold transition"
+                disabled={releaseBusy}
+                className="px-5 py-2 rounded-lg bg-red-600 hover:bg-red-500 text-white font-semibold transition disabled:opacity-50"
               >
-                Release to Free Agency
+                {releaseBusy ? "Releasing…" : "Release to Free Agency"}
               </button>
             </div>
           </div>

@@ -64,6 +64,7 @@ function Gate({ children }) {
     {error&&<p role="alert" className="on-error">{error}</p>}
     <button className="on-primary" type="submit" disabled={busy}>Create online profile</button>
     <button className="on-text-btn" type="button" onClick={()=>supabase.auth.signOut()}>Sign out</button>
+    <a href="/game-modes" className="on-link">← Game Modes</a>
   </form></main>;
   return children({user,onlineProfile, setOnlineProfile});
 }
